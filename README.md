@@ -110,6 +110,9 @@ A native Windows desktop client for WhatsApp, written in Rust. It links to your 
 - View-once messages are shown as a placeholder asking you to open them on your phone.
 - Recovery from an app-state version mismatch, so pin / archive / mute keep syncing.
 - Clickable links in messages (only `http`, `https` and `mailto` are opened).
+- Right-to-left text: bubbles, the group description and all inputs align by direction, and a
+  message that mixes Persian/Arabic and English lines aligns each line by its own direction
+  (code blocks stay left to right).
 - WhatsApp text formatting: `*bold*`, `_italic_`, `~strike~`, `` `code` ``, ```` ```monospace``` ````,
   `> quote` lines (bar), bullet and numbered lists. Shown in incoming and outgoing bubbles by
   WhatsApp's rules (`2*3*4` stays plain; links and phone numbers still work inside); chat-list
@@ -166,6 +169,10 @@ A native Windows desktop client for WhatsApp, written in Rust. It links to your 
   "Proxy settings couldn't be read. WaClient didn't connect, so your IP isn't exposed." with
   "Open proxy settings" (fix, save, then "Restart now") and "Connect without proxy" (this run
   only; the file is not changed).
+  The proxy can also be set on the login (QR) screen, for first runs and added profiles where
+  WhatsApp cannot be reached: "Connection problems? Set up a proxy" opens the same form, and after
+  15 seconds without a QR code (and no proxy set) the screen suggests it. Saving there restarts
+  WaClient at once and the QR screen returns with the proxy active.
 - Logout (unlinks the device and wipes the local session).
 - Post statuses: text (up to 700 characters, background colour and font), photo (JPEG, PNG, WebP)
   or video (MP4, MOV, 3GP, up to 60 seconds). Audience: My contacts (contacts synced from the
@@ -189,8 +196,9 @@ A native Windows desktop client for WhatsApp, written in Rust. It links to your 
   colours, and chat wallpapers (presets or your own image) for all chats or per chat (chat menu >
   Wallpaper...).
 - Open a chat in its own window (row menu or chat header menu > Open in new window): up to four
-  pop-out chats with live messages, composer, reply and reactions while the main window keeps
-  working. The pop-outs close when the app locks.
+  pop-out chats with live messages, composer, reply, reactions, @mentions, stickers, wallpaper,
+  drafts shared with the main window and the typing indicator while the main window keeps
+  working. The pop-outs close when the app locks and come back after you unlock.
 - Send later: right-click the Send button (or click the small chevron on it) > "Send later...",
   then pick In 1 hour / Tonight 21:00 / Tomorrow 09:00 or type a local date and time (in the future,
   at most one year ahead). Text only (formatting, mentions and the reply target are kept). **WhatsApp

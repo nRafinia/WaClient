@@ -675,7 +675,7 @@ component Bubble inherits Rectangle {
                 clicked => { root.open-link(root.m.link-url); }
             }
         }
-        if root.m.text != "" && !root.m.revoked && !root.m.poll && !root.m.has-links && !root.m.contact: Text {
+        if root.m.text != "" && root.m.paras.length == 0 && !root.m.revoked && !root.m.poll && !root.m.has-links && !root.m.contact: Text {
             text: root.m.text;
             horizontal-alignment: TextDir.is-rtl(root.m.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
             color: Theme.text;
@@ -685,7 +685,7 @@ component Bubble inherits Rectangle {
         // Messages with links: StyledText renders them as clickable links. It
         // takes every mouse event over the text, so the right-click menu is
         // reachable from the rest of the bubble and from the footer arrow.
-        if root.m.has-links && !root.m.revoked && !root.m.poll: StyledText {
+        if root.m.has-links && root.m.paras.length == 0 && !root.m.revoked && !root.m.poll: StyledText {
             text: root.m.styled;
             // The markup is not plain text: the direction comes from the source text.
             horizontal-alignment: TextDir.is-rtl(root.m.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
@@ -699,6 +699,39 @@ component Bubble inherits Rectangle {
                     root.open-phone-menu();
                 } else {
                     root.open-link(url);
+                }
+            }
+        }
+        // Lines that mix directions: every paragraph is aligned by its own first
+        // strong character (Slint cannot align per line inside one Text).
+        if root.m.paras.length > 0 && !root.m.revoked && !root.m.poll && !root.m.contact: VerticalLayout {
+            spacing: 0px;
+            for para in root.m.paras: VerticalLayout {
+                if para.blank: Rectangle {
+                    height: 14.5px * Theme.font-scale * 1.2;
+                }
+                if !para.blank && !para.formatted: Text {
+                    text: para.text;
+                    horizontal-alignment: para.rtl ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+                    color: Theme.text;
+                    font-size: 14.5px * Theme.font-scale;
+                    wrap: word-wrap;
+                }
+                if !para.blank && para.formatted: StyledText {
+                    text: para.styled;
+                    horizontal-alignment: para.rtl ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+                    default-color: Theme.text;
+                    default-font-size: 14.5px * Theme.font-scale;
+                    link-color: Theme.tick-read;
+                    selectable: true;
+                    link-clicked(url) => {
+                        root.phone = PhoneLinks.phone-of(url);
+                        if (root.phone != "") {
+                            root.open-phone-menu();
+                        } else {
+                            root.open-link(url);
+                        }
+                    }
                 }
             }
         }
@@ -1149,21 +1182,43 @@ component MsgRow inherits VerticalLayout {
     in property <bool> jumping;
     property <bool> targeted: root.highlight-id != "" && root.m.id == root.highlight-id;
 
+    // The row that was first before older rows were put in front keeps its
+    // place on screen while the heights above it settle.
+    callback anchor-here(length);
+    in property <int> row-index;
+    in property <int> anchor-idx;
+    in property <bool> anchoring;
+    property <bool> anchored: root.anchoring && root.row-index == root.anchor-idx;
+    changed anchored => {
+        if (root.anchored) {
+            root.anchor-here(root.y);
+        }
+    }
+
     // Rows far from the viewport are created lazily; once the target row
     // exists (and whenever its position or size changes) the view re-centres.
     init => {
         if (root.targeted && root.jumping) {
             root.jump-here(root.y, root.height);
         }
+        if (root.anchored) {
+            root.anchor-here(root.y);
+        }
     }
     changed y => {
         if (root.targeted && root.jumping) {
             root.jump-here(root.y, root.height);
         }
+        if (root.anchored) {
+            root.anchor-here(root.y);
+        }
     }
     changed height => {
         if (root.targeted && root.jumping) {
             root.jump-here(root.y, root.height);
+        }
+        if (root.anchored) {
+            root.anchor-here(root.y);
         }
     }
     changed jump-seq => {
@@ -1427,6 +1482,23 @@ export component ChatView inherits Rectangle {
     public function restore-scroll(y: length, h: length) {
         list.content-y = min(0px, y - (list.content-height - h));
     }
+    // After older rows were put in front: row `idx` of `total` was at screen
+    // offset `off` before. Scroll near it (so the list creates it), then the
+    // row pins itself there while its position settles (see MsgRow.anchor-here).
+    public function anchor-begin(idx: int, total: int, off: length) {
+        root.anchor-idx = idx;
+        root.anchor-off = off;
+        root.anchor-total = total;
+        root.anchor-coarse = true;
+        root.anchoring = true;
+    }
+    public function anchor-end() { root.anchoring = false; }
+    property <int> anchor-idx: -1;
+    property <length> anchor-off;
+    property <bool> anchoring;
+    property <int> anchor-total;
+    // The first scroll waits for the list to lay out the inserted rows (its height is stale until then).
+    property <bool> anchor-coarse;
     public function show-delete(id: string, everyone: bool) {
         root.delete-id = id;
         root.delete-everyone-ok = everyone;
@@ -1777,8 +1849,14 @@ export component ChatView inherits Rectangle {
         list := ListView {
             y: 60px + search-bar.height + root.pin-h;
             height: parent.height - 60px - search-bar.height - root.pin-h - composer.height - root.edit-h;
-            for m in root.messages: MsgRow {
+            for m[row-i] in root.messages: MsgRow {
                 m: m;
+                row-index: row-i;
+                anchoring: root.anchoring;
+                anchor-idx: root.anchor-idx;
+                anchor-here(y) => {
+                    list.content-y = min(0px, max(list.visible-height - list.content-height, root.anchor-off - y));
+                }
                 compact: root.compact;
                 list-w: list.visible-width - 96px;
                 view-x: root.absolute-position.x;
@@ -1809,6 +1887,14 @@ export component ChatView inherits Rectangle {
                 more-reactions(id) => {
                     root.react-target = id;
                     root.open-picker(1);
+                }
+            }
+            // A scroll by the user ends the pinning at once.
+            scrolled => { root.anchoring = false; }
+            changed content-height => {
+                if (root.anchoring && root.anchor-coarse) {
+                    root.anchor-coarse = false;
+                    self.content-y = min(0px, max(self.visible-height - self.content-height, root.anchor-off - root.anchor-idx / max(root.anchor-total, 1) * self.content-height));
                 }
             }
             changed content-y => {

@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.11.0
+
+### Added
+
+- The proxy can be set on the login (QR) screen, so pairing works where WhatsApp is blocked:
+  "Connection problems? Set up a proxy" opens the proxy form in a dialog (first run and when adding
+  a profile), and a hint appears when no QR code arrives within 15 seconds and no proxy is set.
+  Saving a changed proxy there relaunches WaClient at once with the proxy active, back on the same QR screen (the profile being
+  added), not on another profile.
+- Pop-out chat windows are closer to the main window: @mention suggestions in groups, the Stickers
+  tab of the emoji picker, the chat's wallpaper (own or default, with dim and blur; follows changes),
+  full-size inline pictures (the newest rows, memory-capped), the "typing..." indicator (same
+  privacy setting) and drafts. A draft is shared per chat with the main window: text and reply
+  typed in one show in the other when you switch back to the chat, and nothing is saved twice.
+- After the app lock is released with the passcode, the pop-outs that were open when it locked
+  come back (same chats, same size and place when known). They are never shown before a
+  successful unlock, and a normal close or quit is not restored.
+
+### Fixed
+
+- Scrolling up to older messages no longer makes the chat flicker and stop loading: a page is now put in front of the list without rebuilding it, the message at the top stays where it was (pinned to its row, not to a pixel guess that the list's changing height estimates threw off), only one page loads at a time, and loading carries on until the real start of the chat; the pop-out windows load history the same way.
+- Chats from business accounts (templates, buttons, lists, products, order and reply messages) and any
+  message type WaClient cannot show yet no longer go missing: they are shown as text with their buttons,
+  or as "This message type isn't supported in WaClient yet.". Messages already dropped are not recovered;
+  the chat appears with its next message.
+- Auto-lock counts activity in pop-out chat windows (and "lock on tray" waits until no window is
+  shown); duplicate "asked to join" notices that arrive out of order fold into one row.
+- The tray tooltip and badge no longer show the unread count while the passcode lock is on.
+- The forward picker now checks groups you have not opened this session (up to 20, paced), so
+  admins-only and left groups are greyed out up front.
+- "Asked to join" notices fold duplicates by requester set within a 5-minute sliding window, with an
+  id that is stable across Rust versions.
+- Messages (and the group description) that mix Persian/Arabic and English lines now align every line by
+  its own direction, like WhatsApp, instead of one alignment for the whole message.
+
 ## 0.10.0
 
 ### Added

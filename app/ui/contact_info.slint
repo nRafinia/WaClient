@@ -6,6 +6,7 @@ import { TimerState } from "timer_dialog.slint";
 import { ShareState } from "share_contact.slint";
 import { GroupAdmin } from "group_admin.slint";
 import { TextDir } from "chat_search.slint";
+import { ParaItem } from "msg.slint";
 
 export struct ContactInfoModel {
     jid: string,
@@ -31,6 +32,8 @@ export struct ContactInfoModel {
     description: string,
     // Description exceeds the collapsed height, so "Read more" is offered.
     description-long: bool,
+    // Per-paragraph description, only when its lines mix directions (else empty).
+    description-paras: [ParaItem],
     created-label: string,
     members-total: int,
     // Group administration: what the viewer may do (all false for people and
@@ -1291,7 +1294,26 @@ export component ContactInfoPanel inherits Rectangle {
                                 vertical-alignment: center;
                             }
                         }
-                        if root.model.description != "": Text {
+                        if root.model.description != "" && root.model.description-paras.length > 0: Rectangle {
+                            clip: true;
+                            max-height: root.description-expanded ? 100000px : 88px;
+                            VerticalLayout {
+                                alignment: start;
+                                for para in root.model.description-paras: VerticalLayout {
+                                    if para.blank: Rectangle {
+                                        height: 15px * 1.2;
+                                    }
+                                    if !para.blank: Text {
+                                        text: para.text;
+                                        color: Theme.text;
+                                        font-size: 15px;
+                                        wrap: word-wrap;
+                                        horizontal-alignment: para.rtl ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+                                    }
+                                }
+                            }
+                        }
+                        if root.model.description != "" && root.model.description-paras.length == 0: Text {
                             text: root.model.description;
                             color: Theme.text;
                             font-size: 15px;

@@ -11,6 +11,7 @@ use slint::{ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
 use wa_engine::{Command, ReceiptEntry, STATUS_JID};
 use wa_store::{ChatKind, ChatRow, ContactRow, MessageRow, MessageStatus};
 
+use super::composer::SendGate;
 use super::{App, with_app};
 use crate::{MainWindow, MsgItem, MsgOps, PickItem, ReceiptRow, StarredRow, models};
 
@@ -137,15 +138,13 @@ pub fn shareable_ids(msgs: &[MessageRow], selected: &[String]) -> Vec<String> {
     msgs.iter().filter(|m| selected.contains(&m.id) && models::can_share(m)).map(|m| m.id.clone()).collect()
 }
 
-/// Short reason shown under a chat in the forward picker when the composer's
-/// send gate (`composer::send_gate` notice, empty when open) forbids sending.
-pub fn gate_label(notice: &str) -> &'static str {
-    if notice.is_empty() {
-        ""
-    } else if notice.starts_with("Only admins") {
-        "Only admins can send"
-    } else {
-        "You're no longer a participant"
+/// Short reason shown under a chat in the forward picker when its send gate
+/// forbids sending.
+pub fn gate_label(gate: SendGate) -> &'static str {
+    match gate {
+        SendGate::Open => "",
+        SendGate::AdminsOnly => "Only admins can send",
+        SendGate::NotParticipant => "You're no longer a participant",
     }
 }
 
@@ -543,10 +542,16 @@ impl App {
         g.set_forward_msgs(msgs);
         g.set_forward_open(true);
         self.refresh_picker();
+        let groups: Vec<String> = pickable_chats(&self.p().st.borrow().chats, "")
+            .into_iter()
+            .filter(|r| r.kind == ChatKind::Group)
+            .map(|r| r.jid)
+            .collect();
+        self.ensure_picker_gates(&groups);
     }
 
     /// Rebuilds the picker rows for the current search text, most recent chat first.
-    fn refresh_picker(&self) {
+    pub(super) fn refresh_picker(&self) {
         let Some(win) = self.win() else { return };
         let (query, picked, model) = OPS.with(|o| {
             let o = o.borrow();
@@ -575,7 +580,7 @@ impl App {
                     has_avatar: avatar.is_some(),
                     avatar: avatar.unwrap_or_default(),
                     selected: picked.contains(&r.jid),
-                    note: gate_label(self.gate_notice(&profile, &r.jid)).into(),
+                    note: gate_label(self.gate_of(&profile, &r.jid)).into(),
                 });
             }
         }
@@ -609,8 +614,8 @@ impl App {
 
     fn forward_toggle(&self, jid: &str) {
         let Some(win) = self.win() else { return };
-        let gated = self.gate_notice(&self.p().id, jid);
-        if !gated.is_empty() {
+        let gated = self.gate_of(&self.p().id, jid);
+        if gated != SendGate::Open {
             self.show_toast(gate_label(gated));
             return;
         }
@@ -1480,9 +1485,9 @@ mod tests {
 
     #[test]
     fn gate_labels_name_the_reason() {
-        assert_eq!(gate_label(""), "");
-        assert_eq!(gate_label("Only admins can send messages"), "Only admins can send");
-        assert_eq!(gate_label("You can't send messages to this group because you're no longer a participant."), "You're no longer a participant");
+        assert_eq!(gate_label(SendGate::Open), "");
+        assert_eq!(gate_label(SendGate::AdminsOnly), "Only admins can send");
+        assert_eq!(gate_label(SendGate::NotParticipant), "You're no longer a participant");
     }
 
     #[test]

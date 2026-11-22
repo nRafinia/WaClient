@@ -63,6 +63,7 @@ export component MainWindow inherits Window {
     in property <string> login-status;
     in property <bool> show-retry-qr;
     in property <string> login-profile;
+    in property <bool> show-proxy-hint;
 
     // Profile rail
     in property <[ProfileItem]> profiles;
@@ -276,6 +277,8 @@ export component MainWindow inherits Window {
     public pure function scroll-y() -> length { return view.scroll-y(); }
     public pure function content-h() -> length { return view.content-h(); }
     public function restore-scroll(y: length, h: length) { view.restore-scroll(y, h); }
+    public function anchor-begin(idx: int, total: int, off: length) { view.anchor-begin(idx, total, off); }
+    public function anchor-end() { view.anchor-end(); }
     public function show-delete(id: string, everyone: bool) { view.show-delete(id, everyone); }
     public function focus-composer() { view.focus-composer(); }
     public function show-emoji-picker() { view.show-emoji-picker(); }
@@ -375,6 +378,7 @@ export component MainWindow inherits Window {
                 has-qr: root.has-qr;
                 status: root.login-status;
                 show-retry: root.show-retry-qr;
+                show-proxy-hint: root.show-proxy-hint;
                 profile-name: root.login-profile;
                 retry => { root.retry-qr(); }
             }

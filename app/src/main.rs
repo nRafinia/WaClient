@@ -24,6 +24,7 @@ mod settings;
 mod shell;
 mod single_instance;
 mod status_view;
+mod textdir;
 mod thumbs;
 #[cfg(test)]
 mod ui_check;
@@ -144,7 +145,8 @@ fn relaunch() {
         }
     };
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
-    let args = handoff::successor_args(&args, settings::MINIMIZED_FLAG, std::process::id());
+    let open = location::relaunch_profile();
+    let args = handoff::successor_args(&args, settings::MINIMIZED_FLAG, std::process::id(), open.as_deref());
     if let Err(e) = std::process::Command::new(exe).args(args).spawn() {
         log::error!("could not relaunch: {e}");
     }

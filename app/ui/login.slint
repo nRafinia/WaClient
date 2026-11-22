@@ -1,11 +1,14 @@
 import { Button } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { ProxyState, ProxyModal } from "proxy.slint";
 
 export component LoginView inherits Rectangle {
     in property <image> qr;
     in property <bool> has-qr;
     in property <string> status;
     in property <bool> show-retry;
+    // No QR code for a while and no proxy set: WhatsApp may be blocked here.
+    in property <bool> show-proxy-hint;
     // Shown only when several profiles exist.
     in property <string> profile-name;
     callback retry();
@@ -72,5 +75,64 @@ export component LoginView inherits Rectangle {
                 clicked => { root.retry(); }
             }
         }
+        if root.show-proxy-hint: Text {
+            text: "Can't reach WhatsApp. If WhatsApp is blocked where you are, set up a proxy.";
+            color: Theme.danger;
+            font-size: 14px;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                height: 34px;
+                width: label.preferred-width + 54px;
+                border-radius: 17px;
+                border-width: root.show-proxy-hint ? 1px : 0px;
+                border-color: Theme.accent;
+                background: proxy-ta.has-hover ? Theme.hover : transparent;
+                proxy-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { ProxyState.login-open = true; }
+                }
+                // A small globe: circle, meridian and equator.
+                Rectangle {
+                    x: 14px;
+                    y: (parent.height - self.height) / 2;
+                    width: 16px;
+                    height: 16px;
+                    border-radius: 8px;
+                    border-width: 1.5px;
+                    border-color: Theme.accent;
+                    Rectangle {
+                        width: 6px;
+                        height: parent.height;
+                        x: (parent.width - self.width) / 2;
+                        border-radius: 3px;
+                        border-width: 1px;
+                        border-color: Theme.accent;
+                    }
+                    Rectangle {
+                        width: parent.width;
+                        height: 1px;
+                        y: (parent.height - self.height) / 2;
+                        background: Theme.accent;
+                    }
+                }
+                label := Text {
+                    x: 40px;
+                    text: "Connection problems? Set up a proxy";
+                    color: Theme.accent;
+                    font-size: 14px;
+                    vertical-alignment: center;
+                    height: parent.height;
+                }
+            }
+        }
+    }
+
+    if ProxyState.login-open: ProxyModal {
+        width: parent.width;
+        height: parent.height;
     }
 }

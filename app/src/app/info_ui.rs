@@ -491,6 +491,7 @@ impl App {
             initials: view.initials.as_str().into(),
             tint: models::tint_for(&view.tint_key),
             description: view.description.as_str().into(),
+            description_paras: models::plain_paras(&view.description),
             description_long: view.description_long,
             created_label: view.created_label.as_str().into(),
             members_total: i32::try_from(view.members.len()).unwrap_or(i32::MAX),

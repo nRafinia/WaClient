@@ -1,4 +1,4 @@
-# WaClient — handoff notes (state as of 2026-11-22, v0.10.0)
+# WaClient — handoff notes (state as of 2026-11-22, v0.11.0)
 
 Read this first in a new session. It records what exists, what was decided and why,
 what is untested, and how to work on the project safely. README.md is the user-facing
@@ -12,7 +12,7 @@ client to look as much like the official one as possible.
 
 - Workspace: `crates/store` (`wa_store`, rusqlite 0.39 bundled), `crates/engine`
   (`wa_engine`, whatsapp-rust 0.7, `default-features=false` minus `simd`), `app` (`waclient`,
-  Slint 1.19 UI). Version lives in root `Cargo.toml` (`version = "0.10.0"`).
+  Slint 1.19 UI). Version lives in root `Cargo.toml` (`version = "0.11.0"`).
 - Latest local package: `dist/WaClient-0.6.0-win-x64.zip` (keep only the latest release in `dist/`).
 - Identity: `ClientProfile::web()` (the Windows profile was rejected by the server as
   "outdated"), DevicePropsOverride os "Windows", PlatformType UWP, require_full_sync,
@@ -23,7 +23,7 @@ client to look as much like the official one as possible.
 | What | Command |
 |---|---|
 | Build (debug) | `cargo build -p waclient` |
-| Test all | `cargo test --workspace` (1158 passing at v0.10.0, 3 ignored) |
+| Test all | `cargo test --workspace` (1205 passing at v0.11.0, 3 ignored) |
 | Test one area | `cargo test -p wa_engine <filter>` / `cargo test -p waclient <filter>` |
 | Engine+store only | `cargo build -p wa_engine -p wa_store` |
 | Store perf smoke | `cargo test -p wa_store --test perf -- --ignored` |
@@ -129,15 +129,27 @@ client to look as much like the official one as possible.
   hard-coded surface colours in .slint files.
 - RTL: every text input and every displayed user text aligns by its first strong character via the
   Slint global `TextDir.is-rtl` (app/ui/chat_search.slint, wired to `undo::paragraph_is_rtl`). New
-  text fields/labels must use the same binding (one alignment per Text — Slint can't align per line).
+  text fields/labels must use the same binding. Mixed-direction messages/descriptions are split into
+  per-paragraph Texts (`format::paragraphs` / `MsgItem.paras`); single-direction text keeps one Text.
+  The single RTL rule lives in `app/src/textdir.rs` (`is_rtl_char`, `strong_direction`, `text_is_rtl`);
+  `undo::paragraph_is_rtl` and `format::paragraphs` both call it — never re-implement it.
 - Store migrations now 14 (13 = polls.correct_option for quizzes, 14 = sticker_favs).
 - Pop-out chat windows (`app/src/app/chat_window.rs`, `app/ui/chat_window.slint`, ChatView
-  `compact` mode): own model per window, max 4, closed on lock (not restored), send/reply only,
-  respects composer gates; Slint globals are per window (pop-outs get their own).
+  `compact` mode): own model per window, max 4; closed on lock and reopened only after a successful
+  unlock (`popouts_lock` / `popouts_reopen`); drafts shared with the main window (last writer wins on
+  switch), typing, mentions, stickers, wallpaper, own 1-thread decode pool (64 MiB cache); respects
+  composer gates; Slint globals are per window (pop-outs get their own).
 - Stickers: `Command::SendSticker` reuses the stored upload only while `media_key_timestamp` (upload
   time, not message time) is < 14 days old; else re-uploads the cached webp. Same rule for forwards.
 - Group membership requests: Fetch/AnswerMembershipRequests; listed requests have no "method" (the
   library only gives jid + time).
+- History paging (`app/src/app/paging.rs` Pager + anchor): older pages are inserted at the front
+  (VecModel::insert, no rebuild) and the previously-first row pins itself to its old on-screen offset
+  until 600 ms after layout settles (Slint `anchor-begin/anchor-end`); a user scroll cancels the pin.
+  Never go back to pixel-delta scroll restores — ListView heights are estimates and it oscillates.
+- Message conversion never drops a message: business types (template/interactive/buttons/list/
+  product/order) render as text (`convert.rs` mod business); unknown types become an
+  "unsupported" row; only protocol/reaction/etc. stay hidden. Store `list_chats` hides empty chats.
 - Live-location SENDING is deliberately not built (decided 2026-11-21): whatsapp-rust 0.7 has
   no protocol-correct way to send position updates or stop a share (only the initial
   LiveLocationMessage), and the official Windows/Web clients can't share live location either,

@@ -148,19 +148,9 @@ impl UndoStack {
 
 // ---- RTL Home / End ----------------------------------------------------------------
 
-/// A character of a right-to-left script (Hebrew, Arabic incl. Persian, Syriac,
-/// Thaana, N'Ko and their presentation forms).
-fn is_rtl_char(c: char) -> bool {
-    matches!(c as u32,
-        0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF)
-        && c.is_alphabetic()
-}
-
-/// Whether the paragraph starts right to left: its first strong character
-/// decides, like Slint's own paragraph direction. Digits, punctuation, emoji
-/// and spaces are neutral.
+/// Whether the paragraph starts right to left (see [`crate::textdir`]).
 pub(crate) fn paragraph_is_rtl(par: &str) -> bool {
-    par.chars().find(|c| c.is_alphabetic()).is_some_and(is_rtl_char)
+    crate::textdir::text_is_rtl(par)
 }
 
 fn floor_boundary(text: &str, mut at: usize) -> usize {
@@ -331,12 +321,15 @@ mod tests {
     }
 
     #[test]
-    fn text_direction_follows_the_first_strong_character() {
-        for rtl in ["سلام", "مرحبا بالعالم", "שלום", "اردو زبان", "123 😀 سلام", "... @98912 سلام", "سلام hello"] {
-            assert!(paragraph_is_rtl(rtl), "{rtl}");
-        }
-        for ltr in ["hello", "hello سلام", "1) 😀 hello", "", "   ", "123 !?", "😀"] {
-            assert!(!paragraph_is_rtl(ltr), "{ltr}");
+    fn both_direction_paths_agree() {
+        let samples = ["سلام", "שלום", "hello", "hello سلام", "سلام hello", "123 😀 سلام", "1) 😀 hello",
+            "... @98912 سلام", "اردو زبان", "ܐܒܓ", "ހަނދު", "ߊߋ", "ﭐﻻ", "😀", "123 !?", "x"];
+        for s in samples {
+            let paras = crate::format::paragraphs(s);
+            assert_eq!(paras.len(), 1, "{s}");
+            let expected = crate::textdir::strong_direction(s).unwrap_or(false);
+            assert_eq!(paragraph_is_rtl(s), expected, "{s}");
+            assert_eq!(paras[0].rtl, expected, "{s}");
         }
     }
 

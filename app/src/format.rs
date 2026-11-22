@@ -308,6 +308,90 @@ pub fn styled_text(text: &str) -> Option<StyledText> {
     }
 }
 
+// ---- paragraphs ----------------------------------------------------------------------
+
+/// More paragraphs than this are not split further: the rest becomes one last
+/// paragraph, so a huge message cannot create thousands of bubble children.
+pub const MAX_PARAGRAPHS: usize = 200;
+
+/// One display paragraph of a message: a line, or a ``` block (with the line it
+/// sits on), with its own text direction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Para {
+    /// Source text (formatting markers included), without its line break.
+    pub text: String,
+    pub rtl: bool,
+    /// Nothing but whitespace: only keeps the vertical spacing.
+    pub blank: bool,
+}
+
+/// Byte ranges of the complete ``` blocks of `text`, found like [`parse`] does.
+fn mono_ranges(text: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some((before, _, after)) = mono_block(&text[from..]) {
+        let start = from + before.len();
+        let end = text.len() - after.len();
+        out.push((start, end));
+        from = end;
+    }
+    out
+}
+
+/// Splits a message into paragraphs on line breaks (CRLF, CR and LF); a ``` block
+/// stays in one paragraph. A paragraph without a letter (digits, emoji, ...)
+/// takes the direction of the one before it (the first one: of the next).
+pub fn paragraphs(text: &str) -> Vec<Para> {
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let text = text.trim_end_matches('\n');
+    let blocks = mono_ranges(text);
+    let mut texts: Vec<&str> = Vec::new();
+    let mut line_start = 0;
+    let mut block = 0;
+    for (i, c) in text.char_indices() {
+        if texts.len() + 1 >= MAX_PARAGRAPHS {
+            break;
+        }
+        while blocks.get(block).is_some_and(|&(_, end)| end <= i) {
+            block += 1;
+        }
+        let inside = blocks.get(block).is_some_and(|&(start, _)| start <= i);
+        if c == '\n' && !inside {
+            texts.push(&text[line_start..i]);
+            line_start = i + 1;
+        }
+    }
+    texts.push(&text[line_start..]);
+
+    let mut dirs: Vec<Option<bool>> = texts
+        .iter()
+        .map(|t| {
+            let t = t.trim_start();
+            if t.starts_with("```") {
+                return Some(false);
+            }
+            crate::textdir::strong_direction(t)
+        })
+        .collect();
+    let mut last = dirs.iter().flatten().next().copied().unwrap_or(false);
+    for d in &mut dirs {
+        last = d.unwrap_or(last);
+        *d = Some(last);
+    }
+    texts
+        .into_iter()
+        .zip(dirs)
+        .map(|(t, d)| Para { text: t.to_string(), rtl: d.unwrap_or(false), blank: t.trim().is_empty() })
+        .collect()
+}
+
+/// Whether the paragraphs of a message need their own alignment: at least two
+/// text paragraphs differ in direction.
+pub fn mixed_direction(paras: &[Para]) -> bool {
+    let mut seen = paras.iter().filter(|p| !p.blank).map(|p| p.rtl);
+    seen.next().is_some_and(|first| seen.any(|d| d != first))
+}
+
 // ---- composer editing --------------------------------------------------------------
 
 /// What a composer shortcut or toolbar button applies.
@@ -432,6 +516,79 @@ fn apply_quote(text: &str, start: usize, end: usize) -> Edit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn paras(s: &str) -> Vec<(String, bool, bool)> {
+        paragraphs(s).into_iter().map(|p| (p.text, p.rtl, p.blank)).collect()
+    }
+
+    #[test]
+    fn paragraphs_split_by_direction() {
+        let p = paras("سلام\nHello world\nخداحافظ");
+        assert_eq!(
+            p,
+            [("سلام".into(), true, false), ("Hello world".into(), false, false), ("خداحافظ".into(), true, false)]
+        );
+        assert!(mixed_direction(&paragraphs("سلام\nHello")));
+        assert!(!mixed_direction(&paragraphs("سلام\nدوست")));
+        assert!(!mixed_direction(&paragraphs("one\n\ntwo")));
+    }
+
+    #[test]
+    fn paragraphs_keep_blank_lines_and_crlf() {
+        let p = paras("a\r\n\r\nب\rc\n\n");
+        assert_eq!(
+            p,
+            [
+                ("a".into(), false, false),
+                ("".into(), false, true),
+                ("ب".into(), true, false),
+                ("c".into(), false, false)
+            ]
+        );
+        assert_eq!(paragraphs("").len(), 1);
+    }
+
+    #[test]
+    fn paragraphs_neutral_lines_inherit_direction() {
+        let p = paras("123\nسلام\n456\nhello\n:)");
+        let dirs: Vec<bool> = p.iter().map(|x| x.1).collect();
+        assert_eq!(dirs, [true, true, true, false, false]);
+    }
+
+    #[test]
+    fn paragraphs_keep_code_blocks_whole() {
+        let p = paras("سلام\n```\nfn a() {\n\n  b\n}\n```\nخداحافظ");
+        assert_eq!(p.len(), 3);
+        assert_eq!(p[1], ("```\nfn a() {\n\n  b\n}\n```".into(), false, false));
+        assert!(p[2].1);
+        // An unclosed or blank fence is plain text: split like any other lines.
+        assert_eq!(paras("```a\nb").len(), 2);
+        assert_eq!(paras("``` ```\nx").len(), 2);
+        // A block inside a line stays with its line.
+        assert_eq!(paras("a ```b\nc``` d\ne").len(), 2);
+    }
+
+    #[test]
+    fn paragraphs_format_and_link_per_line() {
+        let p = paragraphs("*bold*\nplain\nsee https://a.com");
+        assert_eq!(p.len(), 3);
+        assert!(styled_text(&p[0].text).is_some());
+        assert!(styled_text(&p[1].text).is_none());
+        assert!(styled_text(&p[2].text).is_some());
+        // Markers do not pair across lines.
+        let p = paragraphs("*a\nb*");
+        assert!(styled_text(&p[0].text).is_none() && styled_text(&p[1].text).is_none());
+    }
+
+    #[test]
+    fn paragraphs_are_capped() {
+        let text = "x\n".repeat(MAX_PARAGRAPHS * 5);
+        let p = paragraphs(&text);
+        assert_eq!(p.len(), MAX_PARAGRAPHS);
+        assert!(p.last().is_some_and(|l| l.text.contains('\n')));
+        let total: usize = p.iter().map(|x| x.text.len()).sum();
+        assert!(total > MAX_PARAGRAPHS * 5);
+    }
 
     fn t(s: &str) -> Item {
         Item::Text(s.to_string())

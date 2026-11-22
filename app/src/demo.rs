@@ -413,6 +413,11 @@ mono *verbatim*
     rq.quoted_id = Some("r1".into());
     rq.quoted_preview = Some("سلام، حالت چطوره؟ امروز هوا خیلی خوبه".into());
     store.insert_message(&rq, false)?;
+    // Lines in different directions inside one message: each line aligns on its own.
+    store.insert_message(&msg(rtl, "r8", rtl, now - 110, "سلام\nHello world\nخداحافظ"), false)?;
+    store.insert_message(&msg(rtl, "r9", ME, now - 100, "*سلام* دوست من\nI am _fine_, thanks\n\nمرسی از `کمکت`"), false)?;
+    store.insert_message(&msg(rtl, "r10", rtl, now - 90, "لینک مفید:\nhttps://example.com/docs\nمنبع: Docs"), false)?;
+    store.insert_message(&msg(rtl, "r11", ME, now - 80, "کد من:\n```\nlet x = 1;\nprintln!(x);\n```\nممنون"), false)?;
     // Emoji-only messages (`WACLIENT_DEMO_UI=emoji-big`): 1, 2 and 3 emoji, and text with an emoji.
     store.insert_message(&msg(fmt, "em1", fmt, now - 25, "\u{1F602}"), false)?;
     store.insert_message(&msg(fmt, "em2", ME, now - 20, "\u{1F44D}\u{1F3FD}\u{2764}\u{FE0F}"), false)?;
