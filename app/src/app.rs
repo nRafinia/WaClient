@@ -22,11 +22,13 @@ mod account_ui;
 mod attach_ui;
 mod call_ui;
 mod chat_search;
+mod compose_translate;
 mod composer;
 mod contact_info;
 mod emoji_ui;
 mod esc;
 mod folders_ui;
+mod global_search;
 mod group_admin_ui;
 mod group_new_ui;
 mod info_ui;
@@ -46,7 +48,9 @@ mod share_ui;
 mod shortcuts;
 mod status;
 mod status_post_ui;
+mod storage_ui;
 mod timer_ui;
+mod translate_ui;
 
 use crate::audio::{PlayState, Player, PlayerEvent, Recorder};
 use crate::decode::{DecodeDone, DecodeJob, DecodePool};
@@ -56,7 +60,7 @@ use crate::models::{self, MsgImages, OpenPolicy, PlayView, RowUi};
 use crate::profiles::{self, Profile, Registry};
 use crate::settings::{self, AppSettings};
 use crate::status_view::{PollViewModel, poll_view_model};
-use crate::{ChatItem, MainWindow, MsgItem, ProfileItem, bridge, qr, shell};
+use crate::{ChatItem, MainWindow, MsgItem, ProfileItem, VoiceSpeed, audio, bridge, qr, shell};
 
 const PAGE: usize = 50;
 const TYPING_TTL: Duration = Duration::from_secs(6);
@@ -576,15 +580,20 @@ impl App {
         app.emoji.attach(win);
         app.staged.attach(win);
         composer::wire(win);
+        compose_translate::wire(win);
         msgops_ui::wire(win);
         share_ui::wire(win);
         group_admin_ui::wire(win);
         group_new_ui::wire(win);
         folders_ui::wire(win);
         timer_ui::wire(win);
+        storage_ui::wire(win);
+        translate_ui::wire(win);
         phone_ui::wire(win);
         call_ui::wire(win);
         lock_ui::wire(win);
+        search_ui::wire(win);
+        global_search::wire(win);
         proxy_ui::wire(win);
 
         win.on_search(|q| with_app(|a| a.search(q.as_str())));
@@ -608,6 +617,14 @@ impl App {
         win.on_open(|id| with_app(|a| a.open_item(id.as_str())));
         win.on_show_in_folder(|id| with_app(|a| a.show_in_folder(id.as_str())));
         win.on_toggle_play(|id| with_app(|a| a.toggle_play(id.as_str())));
+        win.global::<VoiceSpeed>().on_cycle(|| {
+            let label = audio::speed_label_at(audio::cycle_speed());
+            with_app(|a| {
+                if let Some(w) = a.win() {
+                    w.global::<VoiceSpeed>().set_label(label.into());
+                }
+            });
+        });
         win.on_start_record(|| with_app(App::start_record));
         win.on_cancel_record(|| with_app(App::cancel_record));
         win.on_send_record(|| with_app(App::send_record));
@@ -797,6 +814,7 @@ impl App {
         self.share_profile_changed();
         self.group_new_profile_changed();
         self.folders_profile_changed();
+        self.translate_profile_changed();
         self.p().st.borrow_mut().query.clear();
         *self.active.borrow_mut() = next.clone();
         self.registry.borrow_mut().last_active = Some(next.id.clone());
@@ -816,6 +834,7 @@ impl App {
         self.refresh_privacy_ui();
         p.st.borrow_mut().query.clear();
         win.invoke_clear_search();
+        self.gsearch_reset();
         // The archive view belongs to the profile that opened it.
         win.set_archived_mode(false);
         self.ops_profile_changed();
@@ -1751,6 +1770,14 @@ impl App {
             UiEvent::GroupJoined { group_jid, pending } => self.on_group_joined(&p, active, &group_jid, pending),
             UiEvent::GroupCreateFailed { message } => self.on_group_create_failed(&p, active, &message),
             UiEvent::GroupJoinFailed { link, message } => self.on_group_join_failed(&p, active, &link, &message),
+            // ---- TRANSLATION ----
+            UiEvent::TextTranslated { request_id, result } => {
+                self.on_text_translated(&p, active, request_id, result);
+            }
+            UiEvent::Translations { chat_jid, items } => self.on_translations(&p.id, active, &chat_jid, &items),
+            UiEvent::TranslationFailed { chat_jid, id, error } => {
+                self.on_translation_failed(&p.id, active, &chat_jid, &id, &error);
+            }
             UiEvent::IncomingCall { call_id, chat_jid, caller_name, is_video, is_group } => {
                 self.on_incoming_call(&p, call_id, chat_jid, caller_name, is_video, is_group);
             }
@@ -2013,6 +2040,7 @@ impl App {
 
     fn search(&self, q: &str) {
         self.p().st.borrow_mut().query = q.trim().to_string();
+        self.gsearch_text_changed(q);
         self.refresh_chats();
     }
 
@@ -2331,6 +2359,7 @@ impl App {
             st.guard_until = Instant::now() + LAYOUT_GUARD;
         }
         self.ops_decorate(&mut items);
+        self.translate_decorate(&mut items);
         self.msgs_model.set_vec(items);
     }
 
@@ -2365,6 +2394,7 @@ impl App {
         };
         if let Some(mut item) = item {
             self.ops_decorate_one(&mut item);
+            self.translate_decorate_one(&mut item);
             self.msgs_model.set_row_data(idx, item);
         }
     }
@@ -3056,11 +3086,33 @@ impl App {
                     });
                 });
             }
+            "emoji-big" => {
+                self.select_chat("666@s.whatsapp.net");
+                Timer::single_shot(Duration::from_millis(1500), || {
+                    with_app(|a| {
+                        if let Some(w) = a.win() {
+                            w.invoke_scroll_to_bottom();
+                        }
+                    });
+                });
+            }
             "group-announce" => self.demo_group_announce(),
+            "compose-translate" | "compose-translate-error" | "compose-translate-busy" => {
+                self.demo_compose_translate(what);
+            }
             "call-incoming" | "call-incoming-video-group" => self.demo_call(what),
             "locked" => self.demo_lock(),
             "lock-damaged" => self.demo_lock_damaged(),
             "proxy-blocked" => self.demo_proxy_blocked(),
+            "settings-storage" | "settings-storage-dialog" => {
+                self.demo_storage();
+                self.open_settings();
+                win.set_settings_start_category(4);
+                win.set_show_settings(true);
+                if what == "settings-storage-dialog" {
+                    self.storage_open_dialog();
+                }
+            }
             "settings-proxy" => {
                 self.open_settings();
                 win.set_settings_start_category(6);
@@ -3091,6 +3143,7 @@ impl App {
                 self.open_status(-1);
             }
             w if w.starts_with("v04-") => self.demo_v04(w),
+            w if w.starts_with("translate-") => self.demo_translate(w),
             w if w.starts_with("info") => self.demo_info(w),
             "folders" | "folders-form" => self.demo_folders(what == "folders-form"),
             "archived" => {
@@ -3105,6 +3158,8 @@ impl App {
                     Err(e) => log::warn!("demo: clipboard read failed: {e}"),
                 }
             }
+            "jump-date" => self.demo_jump_date(),
+            w if w.starts_with("search-filters") => self.demo_search_filters(w),
             "poll-create" => self.demo_poll_create(),
             "new-group" => self.demo_new_group(),
             "join-preview" => self.demo_join_preview(),
@@ -3180,6 +3235,9 @@ impl App {
                 self.search_input(q);
             }
             "esc" => self.demo_esc(),
+            "jump-date" => self.demo_jump_date(),
+            "jump-pick" => self.demo_jump_pick(),
+            a if a.starts_with("search-filters") => self.demo_search_filters(a),
             a if a.starts_with("block:") => {
                 self.set_blocked(&format!("{}@s.whatsapp.net", a.trim_start_matches("block:")), true);
             }

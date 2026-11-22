@@ -1,14 +1,21 @@
 //! In-chat search: debounced queries on a worker thread, next/previous hit
 //! navigation, and jumping to a hit (loading a window of messages around it
-//! when it is older than what the chat view holds).
+//! when it is older than what the chat view holds), plus the "jump to date"
+//! calendar of the search bar.
 
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
-use slint::{Model, Timer, TimerMode};
+use chrono::{Datelike, Local, NaiveDate};
+use slint::{ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
 
-use super::chat_search::{Debouncer, ResultNav, SearchAction};
+use super::chat_search::{
+    Debouncer, ResultNav, SearchAction, clamp_month, day_start, days_in_month, days_with_messages, local_date,
+    month_bounds, month_cells, month_title, shift_month,
+};
 use super::{App, LayoutFix, PAGE, with_app};
+use crate::{CalendarCell, CalendarState, MainWindow};
 
 /// Most hits one query returns.
 const SEARCH_LIMIT: u32 = 500;
@@ -314,5 +321,244 @@ impl App {
         };
         self.p().st.borrow_mut().guard_until = Instant::now() + JUMP_GUARD;
         win.invoke_jump_to((idx as f32 + 0.5) / count.max(1) as f32);
+    }
+}
+
+// ---- jump to date ---------------------------------------------------------------------
+
+/// How long the first message of a picked day stays highlighted.
+const DATE_HIGHLIGHT: Duration = Duration::from_millis(2500);
+
+/// What a pick in the open calendar does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CalPurpose {
+    /// Scroll the open chat to the first message of the day.
+    Jump,
+    /// First day of a custom range for the global search.
+    RangeFrom,
+    /// Last day of the custom range that starts on this day.
+    RangeTo(NaiveDate),
+}
+
+struct CalState {
+    purpose: CalPurpose,
+    chat: String,
+    /// Month on show and the first and last month that can be reached.
+    shown: (i32, u32),
+    first: (i32, u32),
+    last: (i32, u32),
+}
+
+thread_local! {
+    static CAL: RefCell<Option<CalState>> = const { RefCell::new(None) };
+    static DATE_HL: Timer = Timer::default();
+}
+
+fn month_of(ts: i64) -> Option<(i32, u32)> {
+    local_date(&Local, ts).map(|d| (d.year(), d.month()))
+}
+
+pub(super) fn wire(win: &MainWindow) {
+    let g = win.global::<CalendarState>();
+    g.on_open_jump(|| with_app(App::calendar_open_jump));
+    g.on_prev(|| with_app(|a| a.calendar_move(-1)));
+    g.on_next(|| with_app(|a| a.calendar_move(1)));
+    g.on_pick(|day| with_app(|a| a.calendar_pick(u32::try_from(day).unwrap_or(0))));
+    g.on_close(|| with_app(App::calendar_close));
+}
+
+impl App {
+    /// The calendar button of the chat search: days with messages are enabled.
+    pub(super) fn calendar_open_jump(&self) {
+        let p = self.p();
+        let Some(chat) = p.st.borrow().selected.clone() else { return };
+        let span = self.ok("read chat dates", p.store.chat_time_span(&chat)).flatten();
+        let Some((first, last)) = span.and_then(|(a, b)| Some((month_of(a)?, month_of(b)?))) else {
+            self.show_toast("No messages to jump to");
+            return;
+        };
+        self.calendar_show(CalState { purpose: CalPurpose::Jump, chat, shown: last, first, last });
+    }
+
+    /// The custom date range of the global search: any day up to today.
+    pub(super) fn calendar_open_range(&self, purpose: CalPurpose) {
+        let p = self.p();
+        let now = Local::now();
+        let today = (now.year(), now.month());
+        let first = self
+            .ok("read message dates", p.store.message_time_span())
+            .flatten()
+            .and_then(|(a, _)| month_of(a))
+            .map_or(today, |m| m.min(today));
+        self.calendar_show(CalState { purpose, chat: String::new(), shown: today, first, last: today });
+    }
+
+    fn calendar_show(&self, state: CalState) {
+        CAL.with(|c| *c.borrow_mut() = Some(state));
+        self.calendar_render();
+        if let Some(win) = self.win() {
+            win.global::<CalendarState>().set_open(true);
+        }
+    }
+
+    pub(super) fn calendar_close(&self) {
+        CAL.with(|c| *c.borrow_mut() = None);
+        if let Some(win) = self.win() {
+            win.global::<CalendarState>().set_open(false);
+        }
+    }
+
+    pub(super) fn calendar_is_open(&self) -> bool {
+        CAL.with(|c| c.borrow().is_some())
+    }
+
+    fn calendar_move(&self, delta: i32) {
+        CAL.with(|c| {
+            if let Some(s) = c.borrow_mut().as_mut() {
+                let (y, m) = shift_month(s.shown.0, s.shown.1, delta);
+                s.shown = clamp_month((y, m), s.first, s.last);
+            }
+        });
+        self.calendar_render();
+    }
+
+    fn calendar_render(&self) {
+        let Some(win) = self.win() else { return };
+        let Some((purpose, chat, shown, first, last)) =
+            CAL.with(|c| c.borrow().as_ref().map(|s| (s.purpose, s.chat.clone(), s.shown, s.first, s.last)))
+        else {
+            return;
+        };
+        let (year, month) = shown;
+        let enabled_days: BTreeSet<u32> = match purpose {
+            CalPurpose::Jump => {
+                let times = month_bounds(&Local, year, month)
+                    .and_then(|(from, to)| self.ok("read chat dates", self.p().store.chat_message_times(&chat, from, to)))
+                    .unwrap_or_default();
+                days_with_messages(&Local, year, month, &times)
+            }
+            CalPurpose::RangeFrom | CalPurpose::RangeTo(_) => {
+                let today = Local::now().date_naive();
+                let not_before = match purpose {
+                    CalPurpose::RangeTo(from) => Some(from),
+                    _ => None,
+                };
+                (1..=days_in_month(year, month))
+                    .filter(|d| {
+                        NaiveDate::from_ymd_opt(year, month, *d)
+                            .is_some_and(|date| date <= today && not_before.is_none_or(|f| date >= f))
+                    })
+                    .collect()
+            }
+        };
+        let picked = match purpose {
+            CalPurpose::RangeTo(from) if (from.year(), from.month()) == shown => Some(from.day()),
+            _ => None,
+        };
+        let cells: Vec<CalendarCell> = month_cells(year, month, |d| enabled_days.contains(&d))
+            .into_iter()
+            .map(|c| CalendarCell {
+                day: i32::try_from(c.day).unwrap_or(0),
+                enabled: c.enabled,
+                selected: c.day != 0 && Some(c.day) == picked,
+            })
+            .collect();
+        let g = win.global::<CalendarState>();
+        g.set_heading(
+            match purpose {
+                CalPurpose::Jump => "Jump to date",
+                CalPurpose::RangeFrom => "Select the first day",
+                CalPurpose::RangeTo(_) => "Select the last day",
+            }
+            .into(),
+        );
+        g.set_title(month_title(year, month).into());
+        g.set_cells(ModelRc::new(VecModel::from(cells)));
+        g.set_can_prev(shown > first);
+        g.set_can_next(shown < last);
+    }
+
+    fn calendar_pick(&self, day: u32) {
+        let Some((purpose, chat, (year, month))) =
+            CAL.with(|c| c.borrow().as_ref().map(|s| (s.purpose, s.chat.clone(), s.shown)))
+        else {
+            return;
+        };
+        let Some(date) = NaiveDate::from_ymd_opt(year, month, day) else { return };
+        match purpose {
+            CalPurpose::Jump => self.calendar_jump(&chat, date),
+            CalPurpose::RangeFrom => {
+                CAL.with(|c| {
+                    if let Some(s) = c.borrow_mut().as_mut() {
+                        s.purpose = CalPurpose::RangeTo(date);
+                    }
+                });
+                self.calendar_render();
+            }
+            CalPurpose::RangeTo(from) => {
+                self.calendar_close();
+                self.gsearch_range_picked(from, date);
+            }
+        }
+    }
+
+    /// Scrolls `chat` to the first message of `date`, loading older history around it when needed.
+    fn calendar_jump(&self, chat: &str, date: NaiveDate) {
+        let next = date.succ_opt().unwrap_or(date);
+        let (from, to) = (day_start(&Local, date), day_start(&Local, next));
+        let p = self.p();
+        if p.st.borrow().selected.as_deref() != Some(chat) {
+            self.calendar_close();
+            return;
+        }
+        let Some(first) = self.ok("find the first message of the day", p.store.first_message_between(chat, from, to))
+        else {
+            return;
+        };
+        self.calendar_close();
+        let Some(id) = first else {
+            self.show_toast("No messages on that day");
+            return;
+        };
+        self.search_jump(&id);
+        DATE_HL.with(|t| {
+            t.start(TimerMode::SingleShot, DATE_HIGHLIGHT, || {
+                with_app(|a| a.search_highlight(""));
+            });
+        });
+    }
+
+    /// `WACLIENT_DEMO_UI=jump-date`: the open chat's search bar with the calendar on top.
+    pub(super) fn demo_jump_date(&self) {
+        self.select_chat("111@s.whatsapp.net");
+        if let Some(win) = self.win() {
+            win.set_search_open(true);
+        }
+        self.calendar_open_jump();
+    }
+
+    /// `WACLIENT_DEMO_UI=seq:` step `jump-pick`: picks the newest enabled day.
+    pub(super) fn demo_jump_pick(&self) {
+        let day = self
+            .win()
+            .map(|w| w.global::<CalendarState>().get_cells())
+            .and_then(|cells| cells.iter().filter(|c| c.enabled).map(|c| c.day).last());
+        if let Some(day) = day {
+            self.calendar_pick(u32::try_from(day).unwrap_or(0));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn month_of_follows_the_local_calendar() {
+        let ts = Local.with_ymd_and_hms(2026, 3, 31, 23, 30, 0).unwrap().timestamp();
+        assert_eq!(month_of(ts), Some((2026, 3)));
+        let ts = Local.with_ymd_and_hms(2026, 4, 1, 0, 30, 0).unwrap().timestamp();
+        assert_eq!(month_of(ts), Some((2026, 4)));
     }
 }

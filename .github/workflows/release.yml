@@ -1,0 +1,109 @@
+# Builds, tests and publishes a GitHub release on every push (merge) to main.
+#
+# Tagging: the version comes from [workspace.package] in Cargo.toml.
+#   - If tag v<version> does not exist yet  -> full release v<version>.
+#   - If it already exists (version not bumped) -> pre-release v<version>-build.<run number>,
+#     so every merge still produces a downloadable build.
+# Release notes come from the matching "## <version>" section of CHANGELOG.md
+# (or "## Unreleased" for build pre-releases).
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      # .cargo/config.toml points CMAKE at a local Visual Studio install; on the
+      # runner use the cmake on PATH instead (an env var wins over [env]).
+      CMAKE: cmake
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        shell: pwsh
+        run: cargo test --workspace --locked
+
+      - name: Install Inno Setup (for the installer)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          if (-not (Get-Command iscc.exe -ErrorAction SilentlyContinue) -and
+              -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+
+      - name: Package
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package.ps1 -Installer
+
+      - name: Decide tag and notes
+        id: meta
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -Raw Cargo.toml
+          $section = [regex]::Match($manifest, '(?ms)^\[workspace\.package\]\s*(.*?)(?=^\[|\z)')
+          $version = [regex]::Match($section.Groups[1].Value, '(?m)^\s*version\s*=\s*"([^"]+)"').Groups[1].Value
+          if (-not $version) { throw 'Could not read the version from Cargo.toml' }
+
+          git fetch --tags --force | Out-Null
+          $base = "v$version"
+          $exists = git tag --list $base
+          if ($exists) {
+            $tag = "$base-build.${{ github.run_number }}"
+            $prerelease = 'true'
+            $heading = 'Unreleased'
+          } else {
+            $tag = $base
+            $prerelease = 'false'
+            $heading = [regex]::Escape($version)
+          }
+
+          $changelog = Get-Content -Raw CHANGELOG.md
+          $m = [regex]::Match($changelog, "(?ms)^## $heading\s*\r?\n(.*?)(?=^## |\z)")
+          $notes = if ($m.Success -and $m.Groups[1].Value.Trim()) { $m.Groups[1].Value.Trim() } else { "Build of $version from commit ${{ github.sha }}." }
+          if ($prerelease -eq 'true') {
+            $notes = "Automatic build of main at ${{ github.sha }} (version $version was already released).`n`n$notes"
+          }
+          $notes | Out-File -Encoding utf8 release-notes.md
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "prerelease=$prerelease" >> $env:GITHUB_OUTPUT
+
+      - name: Create GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = '${{ steps.meta.outputs.version }}'
+          $tag = '${{ steps.meta.outputs.tag }}'
+          $assets = @("dist\WaClient-$version-win-x64.zip")
+          $setup = "dist\WaClient-$version-setup.exe"
+          if (Test-Path $setup) { $assets += $setup }
+          $ghArgs = @('release', 'create', $tag) + $assets + @(
+            '--target', '${{ github.sha }}',
+            '--title', "WaClient $tag",
+            '--notes-file', 'release-notes.md')
+          if ('${{ steps.meta.outputs.prerelease }}' -eq 'true') { $ghArgs += '--prerelease' }
+          gh @ghArgs
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed ($LASTEXITCODE)" }

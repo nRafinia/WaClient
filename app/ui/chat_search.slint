@@ -1,6 +1,7 @@
 import { Theme } from "theme.slint";
 import { ListView } from "std-widgets.slint";
 import { IconArrowUp, IconArrowDown, IconClose } from "icons.slint";
+import { CalendarState } from "calendar.slint";
 
 // One row of the optional result list. The snippet is pre-split by the glue
 // code so the match can be drawn in a different colour.
@@ -39,7 +40,7 @@ export component ChatSearchBar inherits Rectangle {
     Rectangle {
         x: 12px;
         y: 8px;
-        width: parent.width - 24px - 148px;
+        width: parent.width - 24px - 176px;
         height: 32px;
         border-radius: 16px;
         background: Theme.input-bg;
@@ -82,7 +83,7 @@ export component ChatSearchBar inherits Rectangle {
     }
 
     Text {
-        x: parent.width - 148px;
+        x: parent.width - 176px;
         y: 0px;
         width: 56px;
         height: parent.height;
@@ -95,25 +96,40 @@ export component ChatSearchBar inherits Rectangle {
         overflow: elide;
     }
 
-    for i in 3: Rectangle {
-        x: parent.width - 88px + i * 28px;
+    for i in 4: Rectangle {
+        x: parent.width - 116px + i * 28px;
         y: 10px;
         width: 28px;
         height: 28px;
         border-radius: 14px;
         background: ta.has-hover ? Theme.hover : transparent;
-        opacity: (i < 2 && root.total == 0) ? 0.4 : 1.0;
-        if i == 0: IconArrowUp {
+        opacity: ((i == 1 || i == 2) && root.total == 0) ? 0.4 : 1.0;
+        // Jump to date: a small calendar.
+        if i == 0: Path {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 18px;
+            height: 18px;
+            viewbox-width: 24;
+            viewbox-height: 24;
+            stroke: Theme.text;
+            stroke-width: 1.8px;
+            stroke-line-cap: round;
+            stroke-line-join: round;
+            fill: transparent;
+            commands: "M 4 6 L 20 6 L 20 20 L 4 20 Z M 4 11 L 20 11 M 8 3 L 8 8 M 16 3 L 16 8";
+        }
+        if i == 1: IconArrowUp {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             size: 18px;
         }
-        if i == 1: IconArrowDown {
+        if i == 2: IconArrowDown {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             size: 18px;
         }
-        if i == 2: IconClose {
+        if i == 3: IconClose {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             size: 18px;
@@ -122,8 +138,10 @@ export component ChatSearchBar inherits Rectangle {
             mouse-cursor: pointer;
             clicked => {
                 if (i == 0) {
-                    root.prev();
+                    CalendarState.open-jump();
                 } else if (i == 1) {
+                    root.prev();
+                } else if (i == 2) {
                     root.next();
                 } else {
                     root.close();

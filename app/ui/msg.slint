@@ -52,6 +52,8 @@ export struct MsgItem {
     // Text with clickable links (only when the text has links).
     styled: styled-text,
     has-links: bool,
+    // 1..3 when the message is only that many emoji (shown large, no bubble); 0 otherwise.
+    big-emoji: int,
     can-copy: bool,
     can-delete-everyone: bool,
     // Shared contact card (first contact; `contacts` lists all of them).
@@ -85,6 +87,14 @@ export struct MsgItem {
     expires: bool,
     // A system notice row (disappearing messages turned on/off): drawn like a date separator.
     is-notice: bool,
+    // Translation (app/translate_ui.rs). can-translate: the row has text that can be
+    // translated. tr-state: 0 none, 1 translating, 2 translation shown, 3 failed,
+    // 4 translated but the original is shown.
+    can-translate: bool,
+    tr-state: int,
+    tr-text: string,
+    // Footer of the translation ("Translated from French") or the error text.
+    tr-note: string,
 }
 
 // Quick reactions offered by the bubble popup (set from emoji::QUICK_REACTIONS).
@@ -94,6 +104,12 @@ export global ReactionConfig {
 
 // Phone numbers in message text are links; the controller says which link
 // targets are phone numbers.
+// Voice-note playback speed pill (audio.rs cycles 1x / 1.5x / 2x for the session).
+export global VoiceSpeed {
+    in-out property <string> label: "1×";
+    callback cycle();
+}
+
 export global PhoneLinks {
     // The number (ASCII digits, country code applied when known) behind a
     // phone link target; empty for every other link.

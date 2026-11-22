@@ -1,6 +1,6 @@
 import { Palette, Button } from "std-widgets.slint";
 import { PopupState, Theme, ChatItem, ProfileItem } from "theme.slint";
-import { MsgItem, ReactionConfig, ContactEntry, PhoneLinks } from "msg.slint";
+import { MsgItem, ReactionConfig, ContactEntry, PhoneLinks, VoiceSpeed } from "msg.slint";
 import { PollOptionItem, PollActions } from "poll_bubble.slint";
 import { PollState, PollField, CreatePollDialog } from "poll_create.slint";
 import { ReactionChipItem } from "reactions.slint";
@@ -15,7 +15,7 @@ import { ProfileRail, ProfileDialog } from "profile_rail.slint";
 import { IconClose } from "icons.slint";
 import { LoginView } from "login.slint";
 import { ChatList } from "chat_list.slint";
-import { ChatView, MentionItem, Mentions, AttachActions } from "chat_view.slint";
+import { ChatView, MentionItem, Mentions, ComposeLang, ComposeTranslate, AttachActions } from "chat_view.slint";
 import { Toast } from "msg_menu.slint";
 import { MsgOps, PickItem, ReceiptRow, StarredRow } from "msgops.slint";
 import { MessageInfoPanel } from "message_info.slint";
@@ -23,6 +23,10 @@ import { StarredPanel } from "starred.slint";
 import { AttachItem, AttachPreview, AttachOptions, DropOverlay } from "attach_preview.slint";
 import { ShareState, ShareRow, SharePicker } from "share_contact.slint";
 import { TimerState, TimerOption, TimerDialog } from "timer_dialog.slint";
+import { CalendarState, CalendarCell, CalendarOverlay } from "calendar.slint";
+import { SearchFilters, SearchHitItem, SenderItem } from "search_filters.slint";
+import { StorageUsage, StorageChat, StorageSegment, StorageType, StorageDialog } from "storage.slint";
+import { TranslateState, LangItem, TranslateDialog } from "translate.slint";
 import { ContactInfoPanel, ContactInfoModel, GroupMemberItem, GalleryThumb, GalleryDoc, GalleryLink, InfoGallery } from "contact_info.slint";
 import { GroupAdmin, GroupDialogs, MemberFailure } from "group_admin.slint";
 import { GroupNew, GroupNewDialogs } from "group_new.slint";
@@ -31,7 +35,7 @@ import { LockState, LockScreen } from "lock.slint";
 import { ProxyState, ProxyBlockedView } from "proxy.slint";
 import { FolderState, FolderTab, FolderPickRow, FolderMenuRow, FolderDialogs } from "folders.slint";
 
-export { ProxyState, FolderState, FolderTab, FolderPickRow, FolderMenuRow, CallState, CallBannerItem, GroupAdmin, GroupNew, MemberFailure, LockState, PollActions, PollState, PollField, StatusPost, LocationState, LocationActions, MsgOps, PickItem, ReceiptRow, StarredRow, AccountState, ChatActions, ContactRowItem, StorageState, StorageFolder, MovingWindow, Theme, ChatItem, MsgItem, ProfileItem, ReactionConfig, PollOptionItem, ReactionChipItem, EmojiRow, EmojiTab, SettingsModel, StatusEntry, StatusSlideItem, ContactInfoModel, GroupMemberItem, ContactEntry, GalleryThumb, GalleryDoc, GalleryLink, InfoGallery, AttachItem, AttachOptions, ShareState, ShareRow, TimerState, TimerOption, MentionItem, Mentions, PhoneLinks, AttachActions }
+export { CalendarState, CalendarCell, SearchFilters, SearchHitItem, SenderItem, StorageUsage, StorageChat, StorageSegment, StorageType, ProxyState,FolderState, FolderTab, FolderPickRow, FolderMenuRow, CallState, CallBannerItem, GroupAdmin, GroupNew, MemberFailure, LockState, PollActions, PollState, PollField, StatusPost, LocationState, LocationActions, MsgOps, PickItem, ReceiptRow, StarredRow, AccountState, ChatActions, ContactRowItem, StorageState, StorageFolder, MovingWindow, Theme, ChatItem, MsgItem, ProfileItem, ReactionConfig, PollOptionItem, ReactionChipItem, EmojiRow, EmojiTab, SettingsModel, StatusEntry, StatusSlideItem, ContactInfoModel, GroupMemberItem, ContactEntry, GalleryThumb, GalleryDoc, GalleryLink, InfoGallery, AttachItem, AttachOptions, ShareState, ShareRow, TimerState, TimerOption, TranslateState, LangItem, MentionItem, Mentions, ComposeLang, ComposeTranslate, PhoneLinks, VoiceSpeed, AttachActions }
 
 export component MainWindow inherits Window {
     in property <string> window-title: "WaClient";
@@ -569,6 +573,18 @@ export component MainWindow inherits Window {
                     height: parent.height;
                 }
                 if TimerState.dialog-open: TimerDialog {
+                    width: parent.width;
+                    height: parent.height;
+                }
+                if StorageUsage.dialog != 0: StorageDialog {
+                    width: parent.width;
+                    height: parent.height;
+                }
+                if TranslateState.dialog-open: TranslateDialog {
+                    width: parent.width;
+                    height: parent.height;
+                }
+                if CalendarState.open: CalendarOverlay {
                     width: parent.width;
                     height: parent.height;
                 }

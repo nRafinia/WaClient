@@ -174,6 +174,12 @@ pub async fn run(sh: Shared, client: Arc<Client>, cmd: Command) {
             cache::download(sh, client, chat_jid, id, None).await
         }
         Command::FetchAvatar { jid } => avatar::fetch(sh, client, jid).await,
+        // ---- TRANSLATION ----
+        Command::TranslateMessage { chat_jid, id } => crate::translate::translate_message(&sh, &client, &chat_jid, &id).await,
+        Command::FetchTranslations { chat_jid, ids } => crate::translate::fetch_cached(&sh, &chat_jid, &ids),
+        Command::TranslateText { request_id, text, target } => {
+            crate::translate::translate_text(&sh, &client, request_id, &text, &target).await
+        }
         // ---- CALLS ----
         Command::RejectCall { call_id } => crate::calls::reject(&sh, &client, &call_id).await,
         // ---- POLLS ----

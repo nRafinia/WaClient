@@ -15,6 +15,8 @@ A native Windows desktop client for WhatsApp, written in Rust. It links to your 
 - Chat list with search, unread counters, profile pictures, group support.
 - Send and receive text, with replies (quoting).
 - Send and receive media: images, video, documents, audio; download, open, show in folder.
+- Emoji-only messages (1-3 emoji) are shown large, without a bubble.
+- Voice playback speed 1x / 1.5x / 2x (pill on the bubble; pitch rises with speed).
 - Voice notes: record (Ogg/Opus) and play back. Buffer underruns/overruns (xruns) are ignored. If
   the microphone stops delivering audio (switched or unplugged), the recording ends early but is
   kept.
@@ -98,7 +100,10 @@ A native Windows desktop client for WhatsApp, written in Rust. It links to your 
 - WhatsApp Business details in the info panel (category, description, address, email, websites,
   opening hours) and "Media, links and docs" tabs.
 - Shared contact cards (vCard) with Message and Copy number.
-- Search inside a chat (Ctrl+F).
+- Search inside a chat (Ctrl+F), with a calendar button to jump to the first message of a day.
+- Search across all chats with filters: click the search box in the chat list for chips (All, Photos &
+  videos, Links, Documents, Voice), a "From" picker and a date range (any time, today, last 7 / 30 days
+  or a custom range from a calendar). Filters work without typing and list the newest matches first.
 - Link previews: incoming previews are shown; outgoing previews are optional (Settings > Account).
 - Paste images or files with Ctrl+V, or drag and drop them, with a preview before sending.
 - Windows toast notifications and a system-tray icon (with "close to tray" on, closing the window
@@ -142,6 +147,10 @@ A native Windows desktop client for WhatsApp, written in Rust. It links to your 
 - Send photos and videos as view once.
 - Phone numbers in messages are clickable: Chat on WhatsApp, Copy number, Look up profile. Local
   numbers starting with 0 use your account's country code.
+- Message translation: "Translate" in the message menu shows the translation under the bubble
+  ("Show original" switches back). Settings > Chats > Translation sets the target language and the mode:
+  Manual (default; asked for the language on first use) or Automatic, which translates every incoming
+  message that isn't in your language. Message text is sent to Google Translate; results are cached locally.
 
 ## Known limitations
 
@@ -314,8 +323,10 @@ back into `%APPDATA%\WaClient`, then delete `location.json`; without it the app 
 with no profiles.
 
 **Reset one profile:** use "Log out & remove" on it in the app (unlinks the device and deletes
-`profiles/<id>`). To only free disk space, use "Clear media cache" in Settings; it deletes
-downloaded media but keeps avatars and files staged for sending.
+`profiles/<id>`). To only free disk space, use Settings > Storage: it shows what uses the space and
+clears downloaded media per chat, by type, by age, or all at once ("Clear all media cache").
+Starred messages' media, files still being sent, avatars and the messages themselves are kept;
+cleared media can be downloaded again while it is still on WhatsApp's servers.
 
 **Reset everything:** quit the app (also from the tray) and delete `%APPDATA%\WaClient`. You will
 have to link every device again. Prefer the in-app logout when possible so the phone drops the

@@ -1,0 +1,418 @@
+import { ListView, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { IconCheck, IconClose, IconFile, IconLink, IconPlay, IconCamera, IconChat } from "icons.slint";
+
+// One message found by the global search.
+export struct SearchHitItem {
+    chat-jid: string,
+    id: string,
+    chat-name: string,
+    // Who wrote it ("" in a direct chat, where the chat name says it).
+    sender: string,
+    time: string,
+    // The text line, split around the first match so the match can be coloured.
+    before: string,
+    matched: string,
+    after: string,
+    // 0 text, 1 photo, 2 video, 3 link, 4 document, 5 voice.
+    kind: int,
+    has-thumb: bool,
+    thumb: image,
+}
+
+export struct SenderItem {
+    // "@me" is the own account.
+    jid: string,
+    label: string,
+}
+
+// Filters of the chat-list search, driven from Rust (app/global_search.rs).
+export global SearchFilters {
+    // The chip rows are shown (the box has been focused or a filter is set).
+    in-out property <bool> open;
+    // 0 all, 1 photos & videos, 2 links, 3 documents, 4 voice.
+    in-out property <int> kind;
+    in property <string> from-label;
+    in property <string> range-label;
+    in property <bool> range-set;
+    // The inline menu under the chips: 0 none, 1 date range, 2 sender.
+    in-out property <int> menu;
+    // 0 the plain chat list, 1 chats whose name matches above the messages, 2 messages only.
+    in property <int> mode;
+    in property <[SearchHitItem]> hits;
+    in property <bool> loading;
+    in property <bool> more;
+    in property <string> empty-text;
+    in property <[SenderItem]> senders;
+    // Selected row of the date menu (0 any time ... 3 last 30 days, 4 custom).
+    in property <int> range-index;
+    callback kind-selected(int);
+    callback range-selected(int);
+    callback sender-query(string);
+    // A sender's jid, "@me", or "" for anyone.
+    callback sender-picked(string, string);
+    callback hit-clicked(string, string);
+    callback load-more();
+    callback menu-opened(int);
+    // The "x" of the box: empties it, drops the filters and closes the chip rows.
+    callback bar-closed();
+}
+
+component Chip inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    // A small chevron or cross after the text: 0 none, 1 chevron, 2 cross.
+    in property <int> tail: 0;
+    callback clicked();
+    callback tail-clicked();
+
+    height: 28px;
+    width: label.preferred-width + 24px + (root.tail > 0 ? 18px : 0px);
+    border-radius: 14px;
+    background: root.selected ? Theme.accent : (ta.has-hover ? Theme.selected : Theme.input-bg);
+
+    label := Text {
+        x: 12px;
+        text: root.text;
+        color: root.selected ? #111b21 : Theme.text;
+        font-size: 13px;
+        font-weight: root.selected ? 600 : 400;
+        vertical-alignment: center;
+        height: parent.height;
+    }
+    if root.tail == 1: Path {
+        x: parent.width - 22px;
+        y: (parent.height - self.height) / 2;
+        width: 12px;
+        height: 12px;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        stroke: root.selected ? #111b21 : Theme.secondary;
+        stroke-width: 2.4px;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+        fill: transparent;
+        commands: "M 5 9 L 12 16 L 19 9";
+    }
+    if root.tail == 2: IconClose {
+        x: parent.width - 24px;
+        y: (parent.height - self.height) / 2;
+        size: 14px;
+        color: #111b21;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    if root.tail == 2: TouchArea {
+        x: parent.width - 28px;
+        width: 28px;
+        mouse-cursor: pointer;
+        clicked => { root.tail-clicked(); }
+    }
+}
+
+// The chip rows under the search box.
+export component SearchFilterBar inherits Rectangle {
+    height: 80px;
+    background: Theme.bg;
+
+    strip := Flickable {
+        x: 12px;
+        y: 4px;
+        width: parent.width - 24px;
+        height: 32px;
+        content-width: kinds.preferred-width;
+        kinds := HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            for name[i] in ["All", "Photos & videos", "Links", "Documents", "Voice"]: Chip {
+                y: 2px;
+                text: name;
+                selected: SearchFilters.kind == i;
+                clicked => {
+                    SearchFilters.menu = 0;
+                    SearchFilters.kind-selected(i);
+                }
+            }
+        }
+    }
+    HorizontalLayout {
+        x: 12px;
+        y: 40px;
+        width: parent.width - 24px;
+        height: 32px;
+        spacing: 6px;
+        alignment: start;
+        Chip {
+            y: 2px;
+            text: SearchFilters.from-label == "" ? "From: anyone" : "From: " + SearchFilters.from-label;
+            selected: SearchFilters.from-label != "";
+            tail: SearchFilters.from-label == "" ? 1 : 2;
+            clicked => { SearchFilters.menu-opened(SearchFilters.menu == 2 ? 0 : 2); }
+            tail-clicked => { SearchFilters.sender-picked("", ""); }
+        }
+        Chip {
+            y: 2px;
+            text: SearchFilters.range-label;
+            selected: SearchFilters.range-set;
+            tail: 1;
+            clicked => { SearchFilters.menu-opened(SearchFilters.menu == 1 ? 0 : 1); }
+        }
+    }
+}
+
+component MenuRow inherits Rectangle {
+    in property <string> text;
+    in property <bool> checked;
+    callback clicked();
+    height: 44px;
+    background: ta.has-hover ? Theme.hover : transparent;
+    Text {
+        x: 16px;
+        width: parent.width - 60px;
+        height: parent.height;
+        text: root.text;
+        color: Theme.text;
+        font-size: 14px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    if root.checked: IconCheck {
+        x: parent.width - 36px;
+        y: (parent.height - self.height) / 2;
+        size: 18px;
+        color: Theme.accent;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component HitRow inherits Rectangle {
+    in property <SearchHitItem> hit;
+    callback clicked();
+    height: 68px;
+    background: ta.has-hover ? Theme.hover : transparent;
+
+    Rectangle {
+        x: 12px;
+        y: 10px;
+        width: 48px;
+        height: 48px;
+        border-radius: root.hit.kind == 0 ? 24px : 6px;
+        background: Theme.input-bg;
+        clip: true;
+        if root.hit.has-thumb: Image {
+            source: root.hit.thumb;
+            width: parent.width;
+            height: parent.height;
+            image-fit: cover;
+        }
+        if root.hit.has-thumb && (root.hit.kind == 2 || root.hit.kind == 5): Rectangle {
+            width: 20px;
+            height: 20px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 10px;
+            background: #00000099;
+            IconPlay {
+                x: (parent.width - self.width) / 2 + 1px;
+                y: (parent.height - self.height) / 2;
+                size: 12px;
+                color: white;
+            }
+        }
+        if !root.hit.has-thumb && root.hit.kind == 0: IconChat {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            size: 22px;
+            color: Theme.secondary;
+        }
+        if !root.hit.has-thumb && root.hit.kind == 3: IconLink {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            size: 22px;
+            color: Theme.secondary;
+        }
+        if !root.hit.has-thumb && root.hit.kind == 4: IconFile {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            size: 22px;
+            color: Theme.secondary;
+        }
+        if !root.hit.has-thumb && (root.hit.kind == 1 || root.hit.kind == 2): IconCamera {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            size: 22px;
+            color: Theme.secondary;
+        }
+        if !root.hit.has-thumb && root.hit.kind == 5: IconPlay {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            size: 22px;
+            color: Theme.accent;
+        }
+    }
+    Text {
+        x: 72px;
+        y: 11px;
+        width: parent.width - 72px - 12px - 128px;
+        height: 20px;
+        text: root.hit.chat-name;
+        color: Theme.text;
+        font-size: 15px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Text {
+        x: parent.width - 12px - 128px;
+        y: 11px;
+        width: 128px;
+        height: 20px;
+        text: root.hit.time;
+        color: Theme.secondary;
+        font-size: 12px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Rectangle {
+        x: 72px;
+        y: 34px;
+        width: parent.width - 72px - 12px;
+        height: 22px;
+        clip: true;
+        HorizontalLayout {
+            alignment: start;
+            if root.hit.sender != "": Text {
+                text: root.hit.sender + ": ";
+                color: Theme.text;
+                font-size: 13px;
+                vertical-alignment: center;
+            }
+            Text {
+                text: root.hit.before;
+                color: Theme.secondary;
+                font-size: 13px;
+                vertical-alignment: center;
+            }
+            Text {
+                text: root.hit.matched;
+                color: Theme.accent;
+                font-size: 13px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+            Text {
+                text: root.hit.after;
+                color: Theme.secondary;
+                font-size: 13px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+    Rectangle {
+        y: parent.height - 1px;
+        x: 72px;
+        height: 1px;
+        background: Theme.divider;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { SearchFilters.hit-clicked(root.hit.chat-jid, root.hit.id); }
+    }
+}
+
+// The message results (and, over them, the date and sender menus).
+export component SearchResultsPanel inherits Rectangle {
+    background: Theme.bg;
+
+    if SearchFilters.menu == 0: Rectangle {
+        if SearchFilters.hits.length == 0: Text {
+            width: parent.width - 32px;
+            x: 16px;
+            height: min(parent.height, 90px);
+            text: SearchFilters.loading ? "Searching…" : SearchFilters.empty-text;
+            color: Theme.secondary;
+            font-size: 14px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            wrap: word-wrap;
+        }
+        ListView {
+            height: parent.height - (SearchFilters.more ? 40px : 0px);
+            for hit in SearchFilters.hits: HitRow {
+                hit: hit;
+            }
+        }
+        if SearchFilters.more: Rectangle {
+            y: parent.height - 40px;
+            height: 40px;
+            background: more-ta.has-hover ? Theme.hover : Theme.panel;
+            Text {
+                text: SearchFilters.loading ? "Searching…" : "Load more";
+                color: Theme.accent;
+                font-size: 14px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            more-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { SearchFilters.load-more(); }
+            }
+        }
+    }
+
+    if SearchFilters.menu == 1: Rectangle {
+        background: Theme.bg;
+        VerticalLayout {
+            alignment: start;
+            for name[i] in ["Any time", "Today", "Last 7 days", "Last 30 days", "Custom range…"]: MenuRow {
+                text: name;
+                checked: SearchFilters.range-index == i;
+                clicked => { SearchFilters.range-selected(i); }
+            }
+        }
+    }
+
+    if SearchFilters.menu == 2: Rectangle {
+        background: Theme.bg;
+        Rectangle {
+            x: 12px;
+            y: 8px;
+            width: parent.width - 24px;
+            height: 34px;
+            border-radius: 17px;
+            background: Theme.input-bg;
+            if sender-input.text == "": Text {
+                x: 14px;
+                text: "Search people";
+                color: Theme.secondary;
+                font-size: 14px;
+                vertical-alignment: center;
+            }
+            sender-input := TextInput {
+                x: 14px;
+                width: parent.width - 28px;
+                height: parent.height;
+                color: Theme.text;
+                font-size: 14px;
+                single-line: true;
+                vertical-alignment: center;
+                edited => { SearchFilters.sender-query(self.text); }
+            }
+        }
+        ListView {
+            y: 50px;
+            height: parent.height - 50px;
+            for s in SearchFilters.senders: MenuRow {
+                text: s.label;
+                checked: s.jid == "" ? SearchFilters.from-label == "" : SearchFilters.from-label == s.label;
+                clicked => { SearchFilters.sender-picked(s.jid, s.label); }
+            }
+        }
+    }
+}

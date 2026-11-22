@@ -75,11 +75,6 @@ fn apply_model(base: &AppSettings, m: &SettingsModel) -> AppSettings {
     s
 }
 
-fn fmt_freed(bytes: u64) -> String {
-    let mb = bytes as f64 / (1024.0 * 1024.0);
-    if mb < 0.05 { "Freed 0 MB".to_string() } else { format!("Freed {mb:.1} MB") }
-}
-
 impl App {
     /// Whether the app currently starts with Windows. The demo has no registry
     /// access, so it just remembers the toggle.
@@ -165,69 +160,11 @@ impl App {
         win.global::<Theme>().set_font_scale(s.font_scale);
         win.set_enter_sends(s.enter_sends);
         self.close_to_tray.set(s.close_to_tray);
+        self.translate_sync(&s.engine);
     }
 
     pub(super) fn profile_dir(&self, p: &ProfileState) -> PathBuf {
         settings_dir(&self.root, self.persist, &p.meta.borrow())
-    }
-
-    pub(super) fn clear_cache(&self) {
-        if self.cache_busy.replace(true) {
-            return;
-        }
-        let p = self.p();
-        let dir = self.profile_dir(&p);
-        if let Some(win) = self.win() {
-            win.set_cache_status("Clearing…".into());
-        }
-        if let Some(player) = &self.player {
-            // A playing voice note keeps its file open.
-            player.stop();
-        }
-        let id = p.id.clone();
-        let spawned = std::thread::Builder::new().name("clear-cache".into()).spawn(move || {
-            let result = settings::clear_media_cache(&dir).map_err(|e| format!("{e:#}"));
-            let queued = slint::invoke_from_event_loop(move || {
-                with_app(|a| a.cache_cleared(&id, result));
-            });
-            if let Err(e) = queued {
-                log::error!("could not deliver the cache result to the UI: {e}");
-            }
-        });
-        if let Err(e) = spawned {
-            self.cache_busy.set(false);
-            self.show_banner(1, &format!("Could not clear the cache: {e}"));
-        }
-    }
-
-    fn cache_cleared(&self, id: &str, result: Result<u64, String>) {
-        self.cache_busy.set(false);
-        let Some(p) = self.find(id) else { return };
-        let text = match &result {
-            Ok(bytes) => fmt_freed(*bytes),
-            Err(e) => {
-                log::error!("clearing the media cache of {id} failed: {e}");
-                self.show_banner(1, &format!("Could not clear the media cache: {e}"));
-                "Clearing failed".to_string()
-            }
-        };
-        {
-            let mut st = p.st.borrow_mut();
-            st.media.clear();
-            st.decoding.clear();
-            st.seen_paths.clear();
-        }
-        if self.is_active(&p) {
-            // An open status viewer holds decoded images of the deleted files.
-            self.status_close();
-            if let Some(win) = self.win() {
-                win.set_cache_status(text.as_str().into());
-            }
-            // Rows of deleted files go back to "tap to download".
-            if p.st.borrow().selected.is_some() {
-                self.rebuild_rows();
-            }
-        }
     }
 
     pub(super) fn settings_logout(&self) {
@@ -430,12 +367,6 @@ mod tests {
         assert!(!next.notification_preview);
         assert_eq!(next.engine.auto_download_max_mb, 100);
         assert_eq!(next.font_scale, settings::FONT_SCALES[0]);
-    }
-
-    #[test]
-    fn freed_text() {
-        assert_eq!(fmt_freed(0), "Freed 0 MB");
-        assert_eq!(fmt_freed(3 * 1024 * 1024 + 512 * 1024), "Freed 3.5 MB");
     }
 
     #[test]

@@ -35,6 +35,8 @@ pub struct EngineSettingsDto {
     pub send_presence: bool,
     pub notifications: bool,
     pub send_link_previews: bool,
+    pub translate_target: Option<String>,
+    pub translate_auto: bool,
 }
 
 impl Default for EngineSettingsDto {
@@ -51,6 +53,8 @@ impl Default for EngineSettingsDto {
             send_presence: true,
             notifications: e.notifications,
             send_link_previews: e.send_link_previews,
+            translate_target: e.translate_target,
+            translate_auto: e.translate_auto,
         }
     }
 }
@@ -68,7 +72,8 @@ impl EngineSettingsDto {
             send_presence: self.send_presence,
             notifications: self.notifications,
             send_link_previews: self.send_link_previews,
-            ..Default::default()
+            translate_target: self.translate_target.clone(),
+            translate_auto: self.translate_auto,
         }
     }
 
@@ -85,6 +90,8 @@ impl EngineSettingsDto {
             send_presence: e.send_presence,
             notifications: e.notifications,
             send_link_previews: e.send_link_previews,
+            translate_target: e.translate_target.clone(),
+            translate_auto: e.translate_auto,
         }
     }
 }
@@ -252,44 +259,6 @@ pub fn set_autostart(_enabled: bool, _exe: &Path) -> anyhow::Result<()> {
     anyhow::bail!("autostart is only supported on Windows")
 }
 
-/// Deletes downloaded media under `<profile_dir>/media` and returns the bytes
-/// freed. `avatars/` (profile and chat pictures) and `outgoing/` (files staged
-/// for sending) are kept, and nothing outside `media/` is touched.
-pub fn clear_media_cache(profile_dir: &Path) -> anyhow::Result<u64> {
-    let media = profile_dir.join("media");
-    let entries = match fs::read_dir(&media) {
-        Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(e) => return Err(e).context("reading media dir"),
-    };
-    let mut freed = 0;
-    for entry in entries {
-        let entry = entry.context("reading media entry")?;
-        let name = entry.file_name();
-        if name == "avatars" || name == "outgoing" {
-            continue;
-        }
-        freed += remove_tree(&entry.path())?;
-    }
-    Ok(freed)
-}
-
-/// Removes a file or directory tree (without following symlinks); returns bytes freed.
-fn remove_tree(path: &Path) -> anyhow::Result<u64> {
-    let meta = fs::symlink_metadata(path).with_context(|| format!("stat {}", path.display()))?;
-    if meta.is_dir() {
-        let mut freed = 0;
-        for entry in fs::read_dir(path).with_context(|| format!("reading {}", path.display()))? {
-            freed += remove_tree(&entry?.path())?;
-        }
-        fs::remove_dir(path).with_context(|| format!("removing {}", path.display()))?;
-        Ok(freed)
-    } else {
-        fs::remove_file(path).with_context(|| format!("removing {}", path.display()))?;
-        Ok(meta.len())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,34 +420,6 @@ mod tests {
     fn autostart_command_matches_installer() {
         let cmd = autostart_command(Path::new(r"C:\Program Files\WaClient\WaClient.exe"));
         assert_eq!(cmd, r#""C:\Program Files\WaClient\WaClient.exe" --minimized"#);
-    }
-
-    #[test]
-    fn cache_clear_keeps_avatars_and_db() {
-        let t = TempDir::new();
-        let media = t.0.join("media");
-        fs::create_dir_all(media.join("avatars")).expect("dir");
-        fs::create_dir_all(media.join("outgoing")).expect("dir");
-        fs::create_dir_all(media.join("chat1")).expect("dir");
-        fs::write(media.join("avatars").join("a.jpg"), b"avatar").expect("w");
-        fs::write(media.join("outgoing").join("o.bin"), b"out").expect("w");
-        fs::write(media.join("pic.jpg"), b"12345").expect("w");
-        fs::write(media.join("chat1").join("doc.pdf"), b"1234567890").expect("w");
-        fs::write(t.0.join("store.db"), b"db").expect("w");
-
-        assert_eq!(clear_media_cache(&t.0).expect("clear"), 15);
-        assert!(!media.join("pic.jpg").exists());
-        assert!(!media.join("chat1").exists());
-        assert!(media.join("avatars").join("a.jpg").exists());
-        assert!(media.join("outgoing").join("o.bin").exists());
-        assert!(t.0.join("store.db").exists());
-        assert_eq!(clear_media_cache(&t.0).expect("again"), 0);
-    }
-
-    #[test]
-    fn cache_clear_without_media_dir() {
-        let t = TempDir::new();
-        assert_eq!(clear_media_cache(&t.0).expect("clear"), 0);
     }
 
     #[test]

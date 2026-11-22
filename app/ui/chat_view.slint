@@ -1,6 +1,6 @@
 import { ListView, Spinner, Button } from "std-widgets.slint";
 import { PopupState, Theme, Avatar } from "theme.slint";
-import { MsgItem, ReactionConfig, PhoneLinks } from "msg.slint";
+import { MsgItem, ReactionConfig, PhoneLinks, VoiceSpeed } from "msg.slint";
 import { PollBubble } from "poll_bubble.slint";
 import { ContactCard } from "contact_card.slint";
 import { LocationCard } from "location_card.slint";
@@ -10,14 +10,35 @@ import { EmojiPicker, EmojiRow, EmojiTab } from "emoji_picker.slint";
 import { ChatSearchBar } from "chat_search.slint";
 import { MsgOps, SelectionBar, EditBar, PinnedBar, PinDialog, StarIcon } from "msgops.slint";
 import { ForwardPicker } from "forward_picker.slint";
+import { TranslateState } from "translate.slint";
 import { TimerState } from "timer_dialog.slint";
-import { IconClose, IconCheck, IconCheckDouble, IconClock, IconPlay, IconArrowDown, IconSearch, IconTimer, IconContact, IconPin, IconFile, IconPoll } from "icons.slint";
+import { IconClose, IconCheck, IconCheckDouble, IconClock, IconPlay, IconArrowDown, IconSearch, IconTimer, IconContact, IconPin, IconFile, IconPoll, IconTranslate } from "icons.slint";
 
 export struct MentionItem {
     name: string,
     phone: string,
     initials: string,
     tint: color,
+}
+
+export struct ComposeLang {
+    code: string,
+    name: string,
+}
+
+// "Translate before sending" of the composer (compose_translate.rs).
+export global ComposeTranslate {
+    in-out property <[ComposeLang]> languages;
+    // A translation request is running: the composer is read-only.
+    in-out property <bool> busy;
+    // Strip above the composer: 0 none, 1 translated (Undo offered), 2 error.
+    in-out property <int> strip-kind;
+    in-out property <string> strip-text;
+    // Returns true when the chat's language is unknown and must be picked.
+    callback click() -> bool;
+    callback pick(string);
+    callback undo();
+    callback dismiss();
 }
 
 // The @mention suggestions of the composer; driven by the controller.
@@ -166,8 +187,9 @@ component Bubble inherits Rectangle {
     property <bool> can-save: root.m.media-kind > 0 && !root.m.revoked;
     property <bool> can-reveal: (root.m.media-kind == 3 || root.m.media-kind == 4) && root.m.has-local && !root.m.revoked;
     property <length> menu-w: 190px;
+    property <string> translate-label: root.m.revoked || !root.m.can-translate ? "" : (root.m.tr-state == 2 ? "Show original" : (root.m.tr-state == 4 ? "Show translation" : "Translate"));
     property <bool> can-info: root.m.mine && !root.m.revoked && root.m.status > 1;
-    property <length> menu-h: 12px + 34px * ((root.m.revoked ? 0 : 4) + (root.m.can-copy ? 1 : 0) + (root.can-download ? 1 : 0) + (root.can-open ? 1 : 0) + (root.can-save ? 1 : 0) + (root.can-reveal ? 1 : 0) + (root.m.can-share ? 1 : 0) + (root.m.can-edit ? 1 : 0) + (root.can-info ? 1 : 0) + 2);
+    property <length> menu-h: 12px + 34px * ((root.m.revoked ? 0 : 4) + (root.m.can-copy ? 1 : 0) + (root.translate-label != "" ? 1 : 0) + (root.can-download ? 1 : 0) + (root.can-open ? 1 : 0) + (root.can-save ? 1 : 0) + (root.can-reveal ? 1 : 0) + (root.m.can-share ? 1 : 0) + (root.m.can-edit ? 1 : 0) + (root.can-info ? 1 : 0) + 2);
 
     // Opens the context menu with its corner at (px, py) of this bubble.
     function open-menu(px: length, py: length) {
@@ -190,8 +212,10 @@ component Bubble inherits Rectangle {
     }
 
     property <length> media-w: min(330px, root.max-w - 20px);
+    // Emoji-only message: large emoji, no bubble fill (time sits in a small pill).
+    property <bool> big: root.m.big-emoji > 0 && root.m.tr-state == 0 && !root.m.revoked;
 
-    background: root.m.media-kind == 2 ? transparent : (root.m.mine ? Theme.my-bubble : Theme.their-bubble);
+    background: root.m.media-kind == 2 || root.big ? transparent : (root.m.mine ? Theme.my-bubble : Theme.their-bubble);
     border-radius: 8px;
     border-width: root.highlighted ? 2px : 0px;
     border-color: Theme.warn;
@@ -504,10 +528,30 @@ component Bubble inherits Rectangle {
                     background: root.m.mine ? white : Theme.accent;
                 }
             }
+            if root.m.play-state > 0: Rectangle {
+                x: parent.width - self.width;
+                y: 23px;
+                width: 36px;
+                height: 18px;
+                border-radius: 9px;
+                background: speed-ta.has-hover ? #ffffff40 : #ffffff26;
+                Text {
+                    text: VoiceSpeed.label;
+                    color: Theme.text;
+                    font-size: 11px;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                speed-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { VoiceSpeed.cycle(); }
+                }
+            }
             Text {
                 x: 46px;
                 y: 24px;
-                width: parent.width - 46px;
+                width: parent.width - 46px - (root.m.play-state > 0 ? 42px : 0px);
                 text: root.m.downloading ? "Downloading…" : (root.m.failed ? "Download failed — tap to retry" : root.m.play-text);
                 color: root.m.failed ? Theme.danger : Theme.secondary;
                 font-size: 12px;
@@ -608,7 +652,7 @@ component Bubble inherits Rectangle {
         if root.m.text != "" && !root.m.revoked && !root.m.poll && !root.m.has-links && !root.m.contact: Text {
             text: root.m.text;
             color: Theme.text;
-            font-size: 14.5px * Theme.font-scale;
+            font-size: root.big ? (root.m.big-emoji == 1 ? 48px : (root.m.big-emoji == 2 ? 40px : 32px)) : 14.5px * Theme.font-scale;
             wrap: word-wrap;
         }
         // Messages with links: StyledText renders them as clickable links. It
@@ -629,6 +673,68 @@ component Bubble inherits Rectangle {
                 }
             }
         }
+        // ---- translation under the text ----
+        if root.m.tr-state != 0 && !root.m.revoked: Rectangle {
+            height: 1px;
+            background: root.m.mine ? #ffffff30 : Theme.divider;
+        }
+        if root.m.tr-state == 1 && !root.m.revoked: Text {
+            text: "Translating\u{2026}";
+            color: Theme.secondary;
+            font-size: 12.5px;
+            font-italic: true;
+        }
+        if root.m.tr-state == 2 && !root.m.revoked: Text {
+            text: root.m.tr-text;
+            color: Theme.text;
+            font-size: 14.5px * Theme.font-scale;
+            wrap: word-wrap;
+        }
+        if (root.m.tr-state == 2 || root.m.tr-state == 4) && !root.m.revoked: HorizontalLayout {
+            spacing: 0px;
+            Text {
+                text: root.m.tr-state == 2 ? root.m.tr-note + " \u{00b7} " : "";
+                color: Theme.secondary;
+                font-size: 11.5px;
+                overflow: elide;
+            }
+            Text {
+                text: root.m.tr-state == 2 ? "Show original" : "Show translation";
+                color: Theme.tick-read;
+                font-size: 11.5px;
+                font-weight: 600;
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { TranslateState.toggle(root.m.id); }
+                }
+            }
+            Rectangle { }
+        }
+        if root.m.tr-state == 3 && !root.m.revoked: HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.m.tr-note;
+                color: Theme.danger;
+                font-size: 11.5px;
+                wrap: word-wrap;
+            }
+            Text {
+                text: "Retry";
+                color: Theme.tick-read;
+                font-size: 11.5px;
+                font-weight: 600;
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { TranslateState.retry(root.m.id); }
+                }
+            }
+        }
+        if root.m.tr-state == 5 && !root.m.revoked: Text {
+            text: root.m.tr-note;
+            color: Theme.secondary;
+            font-size: 11.5px;
+        }
+        // ---- end translation ----
         // ---- location card (location_card.slint) ----
         if root.m.geo != "" && !root.m.revoked: LocationCard {
             geo: root.m.geo;
@@ -639,8 +745,17 @@ component Bubble inherits Rectangle {
         }
         // ---- end location card ----
         HorizontalLayout {
+          alignment: end;
+          Rectangle {
+            background: root.big ? #0000008c : transparent;
+            border-radius: 9px;
+            preferred-width: footer.preferred-width;
+            preferred-height: footer.preferred-height;
+            footer := HorizontalLayout {
             alignment: end;
             spacing: 4px;
+            padding-left: root.big ? 6px : 0px;
+            padding-right: root.big ? 6px : 0px;
             if root.m.edited && !root.m.revoked: Text {
                 text: "Edited";
                 color: Theme.secondary;
@@ -709,6 +824,8 @@ component Bubble inherits Rectangle {
                     color: root.m.status == 4 ? Theme.tick-read : Theme.secondary;
                 }
             }
+            }
+          }
         }
         if root.m.reactions.length > 0 && !root.m.revoked: ReactionBar {
             chips: root.m.reactions;
@@ -790,6 +907,7 @@ component Bubble inherits Rectangle {
             can-reply: !root.m.revoked;
             can-react: !root.m.revoked;
             can-copy: root.m.can-copy;
+            translate-label: root.translate-label;
             can-download: root.can-download;
             can-open: root.can-open;
             can-reveal: root.can-reveal;
@@ -839,6 +957,14 @@ component Bubble inherits Rectangle {
             }
             copy => {
                 root.copy();
+                menu.close();
+            }
+            translate => {
+                if (root.m.tr-state == 2 || root.m.tr-state == 4) {
+                    TranslateState.toggle(root.m.id);
+                } else {
+                    TranslateState.translate(root.m.id);
+                }
                 menu.close();
             }
             download => {
@@ -1304,7 +1430,7 @@ export component ChatView inherits Rectangle {
         picker.show();
     }
     function do-send() {
-        if (root.gated) {
+        if (root.gated || ComposeTranslate.busy) {
             return;
         }
         root.send-message(input.text);
@@ -1530,14 +1656,65 @@ export component ChatView inherits Rectangle {
 
         composer := Rectangle {
             y: parent.height - self.height;
-            height: (root.has-reply ? 58px : 0px) + input-h + 20px;
+            height: (root.has-reply ? 58px : 0px) + strip-h + input-h + 20px;
             background: Theme.panel;
 
             property <length> input-h: clamp(input.preferred-height + 20px, 42px, 148px);
+            property <length> strip-h: ComposeTranslate.strip-kind != 0 ? 28px : 0px;
+
+            // Result of "translate before sending": what happened, and Undo.
+            if ComposeTranslate.strip-kind != 0: Rectangle {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: composer.strip-h;
+                background: #1a262d;
+                Text {
+                    x: 14px;
+                    width: parent.width - 28px - 80px;
+                    height: parent.height;
+                    text: ComposeTranslate.strip-text;
+                    color: ComposeTranslate.strip-kind == 2 ? #f15c6d : Theme.secondary;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                if ComposeTranslate.strip-kind == 1: Rectangle {
+                    x: parent.width - 80px;
+                    width: 48px;
+                    Text {
+                        height: parent.height;
+                        text: "Undo";
+                        horizontal-alignment: center;
+                        color: Theme.accent;
+                        font-size: 12px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { ComposeTranslate.undo(); }
+                    }
+                }
+                Rectangle {
+                    x: parent.width - 32px;
+                    width: 24px;
+                    IconClose {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        size: 12px;
+                        color: Theme.secondary;
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { ComposeTranslate.dismiss(); }
+                    }
+                }
+            }
 
             if root.has-reply: Rectangle {
                 x: 10px;
-                y: 8px;
+                y: 8px + composer.strip-h;
                 width: parent.width - 20px;
                 height: 50px;
                 background: #1a262d;
@@ -1749,6 +1926,7 @@ export component ChatView inherits Rectangle {
                             content-height: input.preferred-height;
                             input := TextInput {
                                 enabled: !root.gated;
+                                read-only: ComposeTranslate.busy;
                                 width: parent.width;
                                 color: Theme.text;
                                 font-size: 15px * Theme.font-scale;
@@ -1757,6 +1935,115 @@ export component ChatView inherits Rectangle {
                                 edited => {
                                     root.composing(self.text);
                                     Mentions.edited(self.text, self.cursor-position-byte-offset);
+                                }
+                            }
+                        }
+                    }
+                }
+                // Translate the typed text into the chat's language. The chevron
+                // (or a right-click) picks the target language instead.
+                if input.text != "" && !root.gated && !root.recording && !MsgOps.editing: Rectangle {
+                    width: 52px;
+                    property <bool> menu-shown: lang-menu.is-open;
+                    changed menu-shown => { PopupState.open = max(0, PopupState.open + (self.menu-shown ? 1 : -1)); }
+                    if ComposeTranslate.busy: Spinner {
+                        x: 8px;
+                        y: (parent.height - self.height) / 2;
+                        width: 22px;
+                        height: 22px;
+                        indeterminate: true;
+                    }
+                    if !ComposeTranslate.busy: IconTranslate {
+                        x: 8px;
+                        y: (parent.height - self.height) / 2;
+                        size: 22px;
+                        color: Theme.secondary;
+                    }
+                    TouchArea {
+                        x: 0px;
+                        width: 38px;
+                        mouse-cursor: pointer;
+                        enabled: !ComposeTranslate.busy;
+                        pointer-event(e) => {
+                            if (e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
+                                lang-menu.show();
+                            }
+                        }
+                        clicked => {
+                            if (ComposeTranslate.click()) {
+                                lang-menu.show();
+                            }
+                        }
+                    }
+                    Path {
+                        x: 38px;
+                        y: (parent.height - self.height) / 2;
+                        width: 9px;
+                        height: 5px;
+                        viewbox-width: 9;
+                        viewbox-height: 5;
+                        stroke: Theme.secondary;
+                        stroke-width: 1.5px;
+                        stroke-line-cap: round;
+                        stroke-line-join: round;
+                        commands: "M 0.5 0.5 L 4.5 4.5 L 8.5 0.5";
+                    }
+                    TouchArea {
+                        x: 34px;
+                        width: 18px;
+                        mouse-cursor: pointer;
+                        enabled: !ComposeTranslate.busy;
+                        clicked => { lang-menu.show(); }
+                    }
+                    // Opens upwards. The pick runs before the popup closes.
+                    lang-menu := PopupWindow {
+                        x: parent.width - 200px;
+                        y: -300px - 6px;
+                        width: 200px;
+                        height: 300px;
+                        close-policy: close-on-click-outside;
+                        Rectangle {
+                            width: parent.width;
+                            height: parent.height;
+                            background: Theme.panel;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: Theme.divider;
+                            Text {
+                                x: 12px;
+                                height: 34px;
+                                text: "Translate to…";
+                                color: Theme.secondary;
+                                font-size: 12px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                            Flickable {
+                                y: 34px;
+                                width: parent.width;
+                                height: parent.height - 40px;
+                                content-height: ComposeTranslate.languages.length * 32px;
+                                for l[i] in ComposeTranslate.languages: Rectangle {
+                                    y: i * 32px;
+                                    width: parent.width;
+                                    height: 32px;
+                                    background: lang-touch.has-hover ? Theme.input-bg : transparent;
+                                    Text {
+                                        x: 12px;
+                                        width: parent.width - 24px;
+                                        text: l.name;
+                                        color: Theme.text;
+                                        font-size: 14px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                    lang-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            ComposeTranslate.pick(l.code);
+                                            lang-menu.close();
+                                        }
+                                    }
                                 }
                             }
                         }

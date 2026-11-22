@@ -103,6 +103,13 @@ pub struct EngineSettings {
     /// reveals the user's IP address to that site. The fetch is capped at 3 s;
     /// on any failure the text is sent plain.
     pub send_link_previews: bool,
+    /// Translation target language (ISO 639-1 code such as "fa" or "en");
+    /// `None` = not chosen yet (the UI asks on first use).
+    pub translate_target: Option<String>,
+    /// Translate every incoming text message whose detected language differs
+    /// from `translate_target` automatically (each one is sent to Google).
+    /// Off by default: translation then only happens on request.
+    pub translate_auto: bool,
 }
 
 impl Default for EngineSettings {
@@ -118,6 +125,8 @@ impl Default for EngineSettings {
             notifications: true,
             send_presence: true,
             send_link_previews: false,
+            translate_target: None,
+            translate_auto: false,
         }
     }
 }
@@ -360,6 +369,17 @@ pub enum Command {
     /// Load our own profile (name, about, picture, phone). Answered with
     /// [`UiEvent::OwnProfile`].
     FetchOwnProfile,
+    // ---- TRANSLATION ----
+    /// Translate one stored message into `EngineSettings::translate_target`.
+    /// Served from the local cache when possible, else sent to Google.
+    /// Answered with [`UiEvent::Translations`] or [`UiEvent::TranslationFailed`].
+    TranslateMessage { chat_jid: String, id: String },
+    /// Cached translations only (no network) for these messages, e.g. when a
+    /// chat is opened. Answered with [`UiEvent::Translations`] (possibly empty).
+    FetchTranslations { chat_jid: String, ids: Vec<String> },
+    /// Translate free text (the composer, "translate before sending") into
+    /// `target` (ISO 639-1). Answered with [`UiEvent::TextTranslated`].
+    TranslateText { request_id: u64, text: String, target: String },
     // ---- CALLS ----
     /// Decline a ringing incoming call (from [`UiEvent::IncomingCall`]). The
     /// caller sees it as declined; unknown or already-ended calls are ignored.
@@ -455,6 +475,9 @@ impl Command {
             Command::SetOwnPicture { .. } => ("SetOwnPicture", None),
             Command::FetchOwnProfile => ("FetchOwnProfile", None),
             Command::RejectCall { .. } => ("RejectCall", None),
+            Command::TranslateMessage { chat_jid, .. } => ("TranslateMessage", Some(chat_jid)),
+            Command::FetchTranslations { chat_jid, .. } => ("FetchTranslations", Some(chat_jid)),
+            Command::TranslateText { .. } => ("TranslateText", None),
             Command::VotePoll { chat_jid, .. } => ("VotePoll", Some(chat_jid)),
             Command::CreatePoll { chat_jid, .. } => ("CreatePoll", Some(chat_jid)),
             Command::CreateGroup { .. } => ("CreateGroup", None),
@@ -569,6 +592,13 @@ pub enum UiEvent {
     /// Our own profile (reply to [`Command::FetchOwnProfile`] and after a
     /// successful SetOwn* change).
     OwnProfile(OwnProfile),
+    /// Translations of messages in one chat (reply to TranslateMessage /
+    /// FetchTranslations, and pushed by auto-translate).
+    Translations { chat_jid: String, items: Vec<Translation> },
+    /// Translating one message failed (network, rate limit, no target set).
+    TranslationFailed { chat_jid: String, id: String, error: String },
+    /// Reply to [`Command::TranslateText`]: `Ok((text, source_lang))` or an error.
+    TextTranslated { request_id: u64, result: Result<(String, String), String> },
     /// Someone is calling us (voice or video). Calls can't be answered in
     /// this app: show "answer on your phone" with a Decline button
     /// ([`Command::RejectCall`]). Followed by [`UiEvent::CallEnded`].
@@ -703,6 +733,17 @@ pub struct GroupInfo {
     pub i_am_admin: bool,
     /// We are still a participant (false after leaving or being removed).
     pub i_am_member: bool,
+}
+
+/// A translated message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Translation {
+    pub id: String,
+    pub text: String,
+    /// Detected source language (ISO 639-1), e.g. "es".
+    pub source_lang: String,
+    /// Language it was translated into.
+    pub target_lang: String,
 }
 
 /// Why a ringing call stopped ringing.

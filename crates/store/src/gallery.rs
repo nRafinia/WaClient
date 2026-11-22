@@ -12,7 +12,7 @@ const DOC_KINDS: &str = "('document')";
 /// Prefilter shared by the list and the count, so the badge matches what the
 /// list returns. The app still extracts exact links from the text and may drop
 /// a row that has none; `www.` only counts at the start of a word.
-const HAS_LINK: &str = "(m.text LIKE '%http://%' OR m.text LIKE '%https://%' \
+pub(crate) const HAS_LINK: &str = "(m.text LIKE '%http://%' OR m.text LIKE '%https://%' \
     OR m.text LIKE '% www.%' OR m.text LIKE 'www.%')";
 
 impl Store {

@@ -32,9 +32,11 @@ mod share;
 mod status;
 mod status_post;
 mod tasks;
+mod translate;
 
 pub use api::*;
 pub use proxy::test_proxy_blocking;
+pub use translate::detect_language;
 
 /// Like [`start_with_settings`] with [`EngineSettings::default`]. The UI should
 /// prefer [`start_with_settings`] with its persisted settings: messages that

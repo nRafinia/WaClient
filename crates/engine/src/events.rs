@@ -795,6 +795,7 @@ async fn store_live(sh: &Shared, client: &Arc<Client>, m: &InboundMessage) -> Op
     if !new_msg.from_me {
         let current = sh.settings();
         notify(sh, &new_msg, &push_name);
+        crate::translate::auto_translate(sh, client, &new_msg, &current);
         if settings::should_auto_download(new_msg.kind, new_msg.media_size, &current) {
             sh.tasks.spawn(media::download(
                 sh.clone(),

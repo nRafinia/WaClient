@@ -504,3 +504,18 @@ export component IconHelp inherits Path {
     stroke-line-join: round;
     commands: "M 3 12 A 9 9 0 1 0 21 12 A 9 9 0 1 0 3 12 M 9.5 9.5 A 2.5 2.5 0 1 1 12.8 11.9 C 12.2 12.3 12 12.8 12 13.5 M 12 16.5 L 12 17";
 }
+
+// Two glyphs, one over the other: translate.
+export component IconTranslate inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 3 5 L 13 5 M 8 3 L 8 5 M 5 5 C 5.5 9 8 12 12 13.5 M 11 5 C 10.5 9 7.5 12 3.5 13.5 M 13 21 L 17 11 L 21 21 M 14.5 17.5 L 19.5 17.5";
+}

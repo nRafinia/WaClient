@@ -18,6 +18,8 @@ log.workspace = true
 image.workspace = true
 sha2.workspace = true
 wa_store.workspace = true
+whatlang = "0.18.0"
+serde_json.workspace = true
 
 
 [dev-dependencies]

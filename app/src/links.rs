@@ -467,6 +467,7 @@ mod tests {
 
     #[test]
     fn adversarial_input_is_handled_quickly() {
+        // Coarse safety net only; the deterministic work-counter test below covers the complexity.
         let started = std::time::Instant::now();
         let dots = format!("{}{}", "h.".repeat(30_000), ")".repeat(30_000));
         let www = format!("{}{}", "www.a".repeat(6_000), "]".repeat(30_000));
@@ -475,7 +476,7 @@ mod tests {
             let _ = find_links(t);
             let _ = markdown_with_links(t);
         }
-        assert!(started.elapsed() < std::time::Duration::from_millis(200), "{:?}", started.elapsed());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
     }
 
     #[test]

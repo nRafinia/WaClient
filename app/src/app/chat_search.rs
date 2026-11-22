@@ -2,7 +2,11 @@
 //! machine, result navigation, and snippet / highlight building. The wiring
 //! only has to feed it keystrokes and copy its output into Slint models.
 
+use std::collections::BTreeSet;
 use std::ops::Range;
+
+use chrono::{DateTime, Datelike, NaiveDate, TimeZone};
+use wa_store::{GlobalFilter, SearchKind, SenderFilter};
 
 /// Quiet period after the last keystroke before the store is queried.
 pub const DEBOUNCE_MS: u64 = 250;
@@ -255,9 +259,313 @@ pub fn build_snippet_with_radius(text: &str, query: &str, radius: usize) -> Snip
     Snippet { text: body, highlights }
 }
 
+// ---- filters, date ranges and the calendar ---------------------------------
+
+/// The "date" filter of the global search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DateRange {
+    #[default]
+    Any,
+    Today,
+    /// Today and the six days before it.
+    Last7,
+    /// Today and the 29 days before it.
+    Last30,
+    /// Both days included, in either order.
+    Custom { from: NaiveDate, to: NaiveDate },
+}
+
+impl DateRange {
+    /// The preset behind a menu row (0 any time ... 3 last 30 days); 4 (custom)
+    /// needs dates and is built by the caller.
+    pub fn preset(index: i32) -> Option<DateRange> {
+        match index {
+            0 => Some(DateRange::Any),
+            1 => Some(DateRange::Today),
+            2 => Some(DateRange::Last7),
+            3 => Some(DateRange::Last30),
+            _ => None,
+        }
+    }
+
+    /// Text of the date chip.
+    pub fn label(&self) -> String {
+        match self {
+            DateRange::Any => "Any time".to_string(),
+            DateRange::Today => "Today".to_string(),
+            DateRange::Last7 => "Last 7 days".to_string(),
+            DateRange::Last30 => "Last 30 days".to_string(),
+            DateRange::Custom { from, to } => {
+                let (a, b) = if from <= to { (from, to) } else { (to, from) };
+                if a == b {
+                    a.format("%d %b %Y").to_string()
+                } else {
+                    format!("{} - {}", a.format("%d %b %Y"), b.format("%d %b %Y"))
+                }
+            }
+        }
+    }
+}
+
+/// First second of `date` in `tz`. A midnight that does not exist (a daylight
+/// saving jump) starts the day at the first hour that does.
+pub fn day_start<Tz: TimeZone>(tz: &Tz, date: NaiveDate) -> i64 {
+    for hour in 0..4 {
+        let Some(naive) = date.and_hms_opt(hour, 0, 0) else { continue };
+        if let Some(t) = tz.from_local_datetime(&naive).earliest() {
+            return t.timestamp();
+        }
+    }
+    date.and_hms_opt(0, 0, 0).map_or(0, |n| n.and_utc().timestamp())
+}
+
+/// The calendar day `ts` falls on in `tz`.
+pub fn local_date<Tz: TimeZone>(tz: &Tz, ts: i64) -> Option<NaiveDate> {
+    tz.timestamp_opt(ts, 0).single().map(|t| t.date_naive())
+}
+
+/// `[from, to)` in unix seconds for a date filter as of `now`; `None` is open.
+pub fn range_bounds<Tz: TimeZone>(range: DateRange, now: &DateTime<Tz>) -> (Option<i64>, Option<i64>) {
+    let tz = now.timezone();
+    let today = now.date_naive();
+    let tomorrow = today.succ_opt().unwrap_or(today);
+    let days_back = |n: i64| today.checked_sub_signed(chrono::Duration::days(n)).unwrap_or(today);
+    match range {
+        DateRange::Any => (None, None),
+        DateRange::Today => (Some(day_start(&tz, today)), Some(day_start(&tz, tomorrow))),
+        DateRange::Last7 => (Some(day_start(&tz, days_back(6))), Some(day_start(&tz, tomorrow))),
+        DateRange::Last30 => (Some(day_start(&tz, days_back(29))), Some(day_start(&tz, tomorrow))),
+        DateRange::Custom { from, to } => {
+            let (a, b) = if from <= to { (from, to) } else { (to, from) };
+            let after = b.succ_opt().unwrap_or(b);
+            (Some(day_start(&tz, a)), Some(day_start(&tz, after)))
+        }
+    }
+}
+
+/// The store kind behind a chip (0 all, 1 photos & videos, 2 links, 3 documents, 4 voice).
+pub fn kind_from_index(index: i32) -> SearchKind {
+    match index {
+        1 => SearchKind::Media,
+        2 => SearchKind::Links,
+        3 => SearchKind::Documents,
+        4 => SearchKind::Voice,
+        _ => SearchKind::All,
+    }
+}
+
+/// Everything the filter row and the search box say, as one store query.
+pub fn build_filter<Tz: TimeZone>(
+    text: &str,
+    kind: i32,
+    sender: Option<SenderFilter>,
+    range: DateRange,
+    now: &DateTime<Tz>,
+) -> GlobalFilter {
+    let (from_ts, to_ts) = range_bounds(range, now);
+    GlobalFilter { text: text.trim().to_string(), kind: kind_from_index(kind), sender, from_ts, to_ts }
+}
+
+pub fn days_in_month(year: i32, month: u32) -> u32 {
+    let first = NaiveDate::from_ymd_opt(year, month, 1);
+    let next = if month == 12 { NaiveDate::from_ymd_opt(year + 1, 1, 1) } else { NaiveDate::from_ymd_opt(year, month + 1, 1) };
+    match (first, next) {
+        (Some(a), Some(b)) => u32::try_from(b.signed_duration_since(a).num_days()).unwrap_or(30),
+        _ => 30,
+    }
+}
+
+/// `(year, month)` moved by `delta` months.
+pub fn shift_month(year: i32, month: u32, delta: i32) -> (i32, u32) {
+    let index = year * 12 + month as i32 - 1 + delta;
+    (index.div_euclid(12), index.rem_euclid(12) as u32 + 1)
+}
+
+/// "March 2026".
+pub fn month_title(year: i32, month: u32) -> String {
+    NaiveDate::from_ymd_opt(year, month, 1).map(|d| d.format("%B %Y").to_string()).unwrap_or_default()
+}
+
+/// `[from, to)` of a whole calendar month in `tz`.
+pub fn month_bounds<Tz: TimeZone>(tz: &Tz, year: i32, month: u32) -> Option<(i64, i64)> {
+    let first = NaiveDate::from_ymd_opt(year, month, 1)?;
+    let (ny, nm) = shift_month(year, month, 1);
+    let next = NaiveDate::from_ymd_opt(ny, nm, 1)?;
+    Some((day_start(tz, first), day_start(tz, next)))
+}
+
+/// Day numbers of `year`-`month` that hold at least one of the timestamps.
+pub fn days_with_messages<Tz: TimeZone>(tz: &Tz, year: i32, month: u32, times: &[i64]) -> BTreeSet<u32> {
+    times
+        .iter()
+        .filter_map(|ts| local_date(tz, *ts))
+        .filter(|d| d.year() == year && d.month() == month)
+        .map(|d| d.day())
+        .collect()
+}
+
+/// One square of the month grid; `day` 0 is a filler before the 1st or after the last day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CalCell {
+    pub day: u32,
+    pub enabled: bool,
+}
+
+/// The month as six Monday-first rows of seven squares; `enabled` says which
+/// day numbers can be picked.
+pub fn month_cells(year: i32, month: u32, enabled: impl Fn(u32) -> bool) -> Vec<CalCell> {
+    let lead = NaiveDate::from_ymd_opt(year, month, 1).map_or(0, |d| d.weekday().num_days_from_monday() as usize);
+    let days = days_in_month(year, month) as usize;
+    (0usize..42)
+        .map(|i| match i.checked_sub(lead).filter(|d| *d < days) {
+            Some(d) => {
+                let day = d as u32 + 1;
+                CalCell { day, enabled: enabled(day) }
+            }
+            None => CalCell { day: 0, enabled: false },
+        })
+        .collect()
+}
+
+/// Keeps `(year, month)` between `lo` and `hi` (both inclusive, `lo <= hi`).
+pub fn clamp_month(ym: (i32, u32), lo: (i32, u32), hi: (i32, u32)) -> (i32, u32) {
+    ym.max(lo).min(hi)
+}
+
 #[cfg(test)]
 mod tests {
+    use chrono::FixedOffset;
+
     use super::*;
+
+    fn at<Tz: TimeZone>(tz: &Tz, y: i32, m: u32, d: u32, h: u32, min: u32) -> DateTime<Tz> {
+        tz.with_ymd_and_hms(y, m, d, h, min, 0).unwrap()
+    }
+
+    fn day(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn today_is_the_local_calendar_day_not_the_utc_one() {
+        // UTC+03:30: 01:00 local on the 10th is still the 9th in UTC.
+        let tz = FixedOffset::east_opt(3 * 3600 + 1800).unwrap();
+        let now = at(&tz, 2026, 3, 10, 1, 0);
+        let (from, to) = range_bounds(DateRange::Today, &now);
+        assert_eq!(from, Some(at(&tz, 2026, 3, 10, 0, 0).timestamp()));
+        assert_eq!(to, Some(at(&tz, 2026, 3, 11, 0, 0).timestamp()));
+        assert_eq!(to.unwrap() - from.unwrap(), 86_400);
+        // A message at 23:59 local is inside, one a minute later is not.
+        let late = at(&tz, 2026, 3, 10, 23, 59).timestamp();
+        assert!(late >= from.unwrap() && late < to.unwrap());
+        assert!(late + 60 >= to.unwrap());
+        // West of UTC the local day starts later than the UTC one.
+        let west = FixedOffset::west_opt(5 * 3600).unwrap();
+        let now = at(&west, 2026, 3, 10, 22, 0);
+        assert_eq!(range_bounds(DateRange::Today, &now).0, Some(at(&west, 2026, 3, 10, 0, 0).timestamp()));
+    }
+
+    #[test]
+    fn last_days_count_today_and_cross_month_ends() {
+        let tz = FixedOffset::east_opt(0).unwrap();
+        let now = at(&tz, 2026, 3, 3, 12, 0);
+        let (from, to) = range_bounds(DateRange::Last7, &now);
+        assert_eq!(from, Some(at(&tz, 2026, 2, 25, 0, 0).timestamp()));
+        assert_eq!(to, Some(at(&tz, 2026, 3, 4, 0, 0).timestamp()));
+        let (from, _) = range_bounds(DateRange::Last30, &now);
+        assert_eq!(from, Some(at(&tz, 2026, 2, 2, 0, 0).timestamp()));
+        assert_eq!(range_bounds(DateRange::Any, &now), (None, None));
+    }
+
+    #[test]
+    fn custom_range_includes_both_days_in_any_order() {
+        let tz = FixedOffset::east_opt(2 * 3600).unwrap();
+        let now = at(&tz, 2026, 3, 30, 12, 0);
+        let want = (Some(at(&tz, 2026, 3, 5, 0, 0).timestamp()), Some(at(&tz, 2026, 3, 9, 0, 0).timestamp()));
+        assert_eq!(range_bounds(DateRange::Custom { from: day(2026, 3, 5), to: day(2026, 3, 8) }, &now), want);
+        assert_eq!(range_bounds(DateRange::Custom { from: day(2026, 3, 8), to: day(2026, 3, 5) }, &now), want);
+        let single = range_bounds(DateRange::Custom { from: day(2026, 12, 31), to: day(2026, 12, 31) }, &now);
+        assert_eq!(single.1.unwrap() - single.0.unwrap(), 86_400);
+    }
+
+    #[test]
+    fn range_labels_and_presets() {
+        assert_eq!(DateRange::preset(2), Some(DateRange::Last7));
+        assert_eq!(DateRange::preset(4), None);
+        assert_eq!(DateRange::Any.label(), "Any time");
+        let r = DateRange::Custom { from: day(2026, 3, 20), to: day(2026, 3, 5) };
+        assert_eq!(r.label(), "05 Mar 2026 - 20 Mar 2026");
+        assert_eq!(DateRange::Custom { from: day(2026, 3, 5), to: day(2026, 3, 5) }.label(), "05 Mar 2026");
+    }
+
+    #[test]
+    fn filter_mapping_carries_every_part() {
+        let tz = FixedOffset::east_opt(0).unwrap();
+        let now = at(&tz, 2026, 3, 10, 12, 0);
+        let f = build_filter("  hi  ", 3, Some(SenderFilter::Me), DateRange::Today, &now);
+        assert_eq!(f.text, "hi");
+        assert_eq!(f.kind, SearchKind::Documents);
+        assert_eq!(f.sender, Some(SenderFilter::Me));
+        assert_eq!(f.from_ts, Some(at(&tz, 2026, 3, 10, 0, 0).timestamp()));
+        assert!(!f.is_empty());
+        assert!(build_filter("", 0, None, DateRange::Any, &now).is_empty());
+        let kinds: Vec<SearchKind> = (0..6).map(kind_from_index).collect();
+        assert_eq!(
+            kinds,
+            [
+                SearchKind::All,
+                SearchKind::Media,
+                SearchKind::Links,
+                SearchKind::Documents,
+                SearchKind::Voice,
+                SearchKind::All
+            ]
+        );
+    }
+
+    #[test]
+    fn month_arithmetic() {
+        assert_eq!(days_in_month(2026, 2), 28);
+        assert_eq!(days_in_month(2028, 2), 29);
+        assert_eq!(days_in_month(2026, 12), 31);
+        assert_eq!(shift_month(2026, 1, -1), (2025, 12));
+        assert_eq!(shift_month(2026, 12, 1), (2027, 1));
+        assert_eq!(shift_month(2026, 3, -15), (2024, 12));
+        assert_eq!(month_title(2026, 3), "March 2026");
+        assert_eq!(clamp_month((2026, 5), (2026, 1), (2026, 3)), (2026, 3));
+        assert_eq!(clamp_month((2024, 5), (2026, 1), (2026, 3)), (2026, 1));
+        let tz = FixedOffset::east_opt(3600).unwrap();
+        let (from, to) = month_bounds(&tz, 2026, 2).unwrap();
+        assert_eq!(from, at(&tz, 2026, 2, 1, 0, 0).timestamp());
+        assert_eq!(to, at(&tz, 2026, 3, 1, 0, 0).timestamp());
+    }
+
+    #[test]
+    fn month_grid_is_monday_first_and_marks_enabled_days() {
+        // 1 March 2026 is a Sunday: six filler squares first.
+        let cells = month_cells(2026, 3, |d| d == 1 || d == 31);
+        assert_eq!(cells.len(), 42);
+        assert!(cells[..6].iter().all(|c| c.day == 0 && !c.enabled));
+        assert_eq!(cells[6], CalCell { day: 1, enabled: true });
+        assert_eq!(cells[7], CalCell { day: 2, enabled: false });
+        assert_eq!(cells[36], CalCell { day: 31, enabled: true });
+        assert!(cells[37..].iter().all(|c| c.day == 0));
+        // 1 June 2026 is a Monday: no filler.
+        assert_eq!(month_cells(2026, 6, |_| true)[0], CalCell { day: 1, enabled: true });
+    }
+
+    #[test]
+    fn days_with_messages_use_the_local_day() {
+        let tz = FixedOffset::east_opt(3 * 3600 + 1800).unwrap();
+        let times = [
+            at(&tz, 2026, 3, 1, 0, 10).timestamp(), // 20:40 UTC on 28 Feb
+            at(&tz, 2026, 3, 1, 23, 50).timestamp(),
+            at(&tz, 2026, 3, 15, 12, 0).timestamp(),
+            at(&tz, 2026, 4, 2, 12, 0).timestamp(),
+        ];
+        let days = days_with_messages(&tz, 2026, 3, &times);
+        assert_eq!(days.into_iter().collect::<Vec<_>>(), [1, 15]);
+    }
 
     #[test]
     fn debounce_waits_for_quiet_period() {

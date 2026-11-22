@@ -4,6 +4,8 @@ import { AccountState, ChatActions, ContactRowItem } from "account.slint";
 import { TimerChips } from "timer_dialog.slint";
 import { AppLockSection } from "lock.slint";
 import { ProxySection } from "proxy.slint";
+import { TranslationSection } from "translate.slint";
+import { StorageSection } from "storage.slint";
 
 // font-scale-index: 0 small, 1 normal, 2 large.
 export struct SettingsModel {
@@ -1008,6 +1010,10 @@ export component SettingsPage inherits Rectangle {
 
                         Divider { }
 
+                        TranslationSection { }
+
+                        Divider { }
+
                         SectionHeader { text: "Media auto-download"; }
                         ToggleRow {
                             title: "Photos";
@@ -1127,12 +1133,14 @@ export component SettingsPage inherits Rectangle {
                                 VerticalLayout {
                                     alignment: center;
                                     ActionButton {
-                                        text: "Clear media cache";
+                                        text: "Clear all media cache";
                                         clicked => { root.clear-cache(); }
                                     }
                                 }
                             }
                         }
+
+                        StorageSection { }
 
                         if StorageState.data-path != "": VerticalLayout {
                             spacing: 6px;

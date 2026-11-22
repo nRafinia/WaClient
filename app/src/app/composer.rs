@@ -545,6 +545,7 @@ impl App {
             (chat, st.reply.clone())
         };
         let text = win.invoke_composer_text().to_string();
+        self.tr_edited(&text);
         let empty = text.trim().is_empty() && reply.is_none();
         let ts = chrono::Utc::now().timestamp();
         let changed = self.with_drafts(&p, |d| {
@@ -568,6 +569,7 @@ impl App {
 
     /// The message was sent: its draft is gone.
     pub(super) fn draft_sent(&self, chat: &str) {
+        self.tr_reset();
         let p = self.p();
         let removed = self.with_drafts(&p, |d| {
             let removed = d.map.remove(chat).is_some();
@@ -585,6 +587,7 @@ impl App {
     pub(super) fn draft_restore(&self, chat: &str) {
         let Some(win) = self.win() else { return };
         self.close_mentions();
+        self.tr_reset();
         let p = self.p();
         let draft = self.with_drafts(&p, |d| d.map.get(chat).cloned());
         match draft {

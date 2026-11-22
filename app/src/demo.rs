@@ -295,6 +295,11 @@ mono *verbatim*
     store.insert_message(&msg(fmt, "f2", ME, now - 30, "I *agree*, _really_ ~not~ `x = 1`
 > your quote
 * star bullet"), false)?;
+    // Emoji-only messages (`WACLIENT_DEMO_UI=emoji-big`): 1, 2 and 3 emoji, and text with an emoji.
+    store.insert_message(&msg(fmt, "em1", fmt, now - 25, "\u{1F602}"), false)?;
+    store.insert_message(&msg(fmt, "em2", ME, now - 20, "\u{1F44D}\u{1F3FD}\u{2764}\u{FE0F}"), false)?;
+    store.insert_message(&msg(fmt, "em3", fmt, now - 15, "\u{1F1EE}\u{1F1F7} \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} \u{1F525}"), false)?;
+    store.insert_message(&msg(fmt, "em4", ME, now - 10, "ok \u{1F44D}"), false)?;
 
     // Statuses: text, a photo that is on disk, a photo to download, and our own.
     let status = |id: &str, sender: &str, ts: i64, text: Option<&str>, kind: MessageKind| {
@@ -427,6 +432,9 @@ pub fn command_name(cmd: &wa_engine::Command) -> &'static str {
         Command::SetMuted { .. } => "SetMuted",
         Command::FetchContactInfo { .. } => "FetchContactInfo",
         Command::RejectCall { .. } => "RejectCall",
+        Command::TranslateMessage { .. } => "TranslateMessage",
+        Command::FetchTranslations { .. } => "FetchTranslations",
+        Command::TranslateText { .. } => "TranslateText",
         Command::VotePoll { .. } => "VotePoll",
         Command::CreatePoll { .. } => "CreatePoll",
         Command::CreateGroup { .. } => "CreateGroup",

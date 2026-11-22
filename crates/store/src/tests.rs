@@ -45,13 +45,13 @@ fn migration_sets_version_and_is_not_rerun() {
     let path = dir.path().join("db.sqlite");
     {
         let s = Store::open(&path).unwrap();
-        assert_eq!(user_version(&s), 10);
+        assert_eq!(user_version(&s), 12);
         s.insert_message(&msg(A, "1", 10, false), true).unwrap();
     }
     // Re-running migration 1 would fail with "table already exists".
     let s = Store::open(&path).unwrap();
     assert!(s.message(A, "1").unwrap().is_some());
-    assert_eq!(user_version(&s), 10);
+    assert_eq!(user_version(&s), 12);
 }
 
 #[test]
@@ -359,7 +359,7 @@ fn migration_1_to_2_upgrades_existing_file_db() {
         .unwrap();
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(user_version(&s), 10);
+    assert_eq!(user_version(&s), 12);
     let m = s.message(A, "old").unwrap().unwrap();
     assert_eq!(m.text.as_deref(), Some("legacy"));
     assert!(!m.revoked && !m.edited);
@@ -610,7 +610,7 @@ fn migration_4_upgrades_existing_v3_db() {
         .unwrap();
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(user_version(&s), 10);
+    assert_eq!(user_version(&s), 12);
     assert_eq!(s.message(A, "old").unwrap().unwrap().text.as_deref(), Some("legacy"));
     let viewed: i64 = s
         .lock()
@@ -1029,7 +1029,7 @@ fn migration_5_upgrades_existing_v4_db_and_stores_about() {
         .unwrap();
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(user_version(&s), 10);
+    assert_eq!(user_version(&s), 12);
     let c = s.contact(A).unwrap().unwrap();
     assert_eq!(c.full_name.as_deref(), Some("Ann"));
     assert_eq!((c.about, c.about_set_at), (None, None));
@@ -1064,7 +1064,7 @@ fn migration_6_upgrades_existing_v5_db_and_stores_link_preview() {
         .unwrap();
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(user_version(&s), 10);
+    assert_eq!(user_version(&s), 12);
     let old = s.message(A, "old").unwrap().unwrap();
     assert_eq!(old.text.as_deref(), Some("hi"));
     assert_eq!((old.link_url, old.link_title, old.link_desc, old.link_thumb), (None, None, None, None));
@@ -1204,7 +1204,7 @@ fn migration_7_upgrades_existing_v6_db() {
         .unwrap();
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(user_version(&s), 10);
+    assert_eq!(user_version(&s), 12);
     assert!(!chat(&s, A).receipts_off);
     assert_eq!(s.unreceipted_incoming(A, 0, 10).unwrap(), vec![("old".to_string(), A.to_string())]);
 }
@@ -1233,7 +1233,7 @@ fn migration_8_marks_incoming_of_read_chats_as_receipted() {
         }
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(user_version(&s), 10);
+    assert_eq!(user_version(&s), 12);
     assert!(s.unreceipted_incoming(read_chat, 0, 10).unwrap().is_empty());
     assert_eq!(
         s.unreceipted_incoming(unread_chat, 0, 10).unwrap(),
@@ -1309,7 +1309,7 @@ fn migration_9_upgrades_a_v8_database() {
         .unwrap();
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(user_version(&s), 10);
+    assert_eq!(user_version(&s), 12);
     let m = s.message(A, "old").unwrap().unwrap();
     assert_eq!(m.text.as_deref(), Some("legacy"));
     assert!(!m.starred && !m.mentions_me);
@@ -1591,7 +1591,7 @@ fn migration_9_keeps_rows_and_adds_pin_and_receipt_columns() {
         }
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(user_version(&s), 10);
+    assert_eq!(user_version(&s), 12);
     assert_eq!(live_ids(&s), ["a", "b"]);
     assert_eq!((chat(&s, A).unread, chat(&s, A).last_ts), (2, 7));
     // New columns/tables are usable on the migrated file.
@@ -1600,7 +1600,7 @@ fn migration_9_keeps_rows_and_adds_pin_and_receipt_columns() {
     assert_eq!(s.message_receipts(A, "a").unwrap().len(), 1);
     drop(s);
     let again = Store::open(&path).unwrap();
-    assert_eq!(user_version(&again), 10);
+    assert_eq!(user_version(&again), 12);
     assert_eq!(again.pinned_message_at(A, 0).unwrap().map(|p| p.0), Some("a".to_string()));
 }
 
@@ -1623,7 +1623,7 @@ fn migration_10_keeps_rows_and_adds_geo_expiry_and_timer_columns() {
         .unwrap();
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(user_version(&s), 10);
+    assert_eq!(user_version(&s), 12);
     assert_eq!(live_ids(&s), ["a"]);
     let c = chat(&s, A);
     assert_eq!((c.unread, c.last_ts, c.ephemeral_secs, c.ephemeral_ts), (1, 7, 0, 0));
@@ -1706,4 +1706,71 @@ fn address_book_contacts_are_those_with_a_synced_full_name() {
         s.address_book_contacts().unwrap(),
         ["1@s.whatsapp.net", "2@s.whatsapp.net"]
     );
+}
+
+fn put_tr(s: &Store, chat: &str, id: &str, target: &str, text: &str) {
+    s.put_translation(chat, id, target, text, "es", 1).unwrap();
+}
+
+fn tr_ids(s: &Store, chat: &str, ids: &[&str], target: &str) -> Vec<String> {
+    let ids: Vec<String> = ids.iter().map(|i| i.to_string()).collect();
+    let mut got: Vec<String> =
+        s.translations_for(chat, &ids, target).unwrap().into_iter().map(|t| t.msg_id).collect();
+    got.sort();
+    got
+}
+
+#[test]
+fn migration_11_creates_translations_table() {
+    let s = Store::open_in_memory().unwrap();
+    assert!(user_version(&s) >= 11);
+    assert!(s.translation_of(A, "m1", "en").unwrap().is_none());
+}
+
+#[test]
+fn translation_round_trip_per_target_and_replace() {
+    let s = Store::open_in_memory().unwrap();
+    s.insert_message(&msg(A, "m1", 10, false), true).unwrap();
+    s.put_translation(A, "m1", "en", "hello", "es", 5).unwrap();
+    put_tr(&s, A, "m1", "fa", "salam");
+    let t = s.translation_of(A, "m1", "en").unwrap().unwrap();
+    assert_eq!((t.text.as_str(), t.source_lang.as_str()), ("hello", "es"));
+    assert_eq!(s.translation_of(A, "m1", "fa").unwrap().unwrap().text, "salam");
+    put_tr(&s, A, "m1", "en", "hi");
+    assert_eq!(s.translation_of(A, "m1", "en").unwrap().unwrap().text, "hi");
+    assert_eq!(tr_ids(&s, A, &["m1", "m2"], "en"), ["m1"]);
+    assert!(tr_ids(&s, A, &[], "en").is_empty());
+}
+
+#[test]
+fn translations_follow_edit_revoke_delete_and_clear() {
+    let s = Store::open_in_memory().unwrap();
+    for id in ["a", "b", "c", "d"] {
+        s.insert_message(&msg(A, id, 10, false), true).unwrap();
+        put_tr(&s, A, id, "en", "x");
+    }
+    s.edit_message(A, "a", "new text").unwrap();
+    s.delete_message(A, "b").unwrap();
+    s.revoke_message(A, "c").unwrap();
+    assert_eq!(tr_ids(&s, A, &["a", "b", "c", "d"], "en"), ["d"]);
+    s.clear_chat(A, None).unwrap();
+    assert!(tr_ids(&s, A, &["d"], "en").is_empty());
+}
+
+#[test]
+fn translations_follow_chat_delete_merge_and_clear_all() {
+    let s = Store::open_in_memory().unwrap();
+    let lid = "999@lid";
+    s.insert_message(&msg(lid, "l1", 10, false), true).unwrap();
+    s.insert_message(&msg(A, "p1", 11, false), true).unwrap();
+    put_tr(&s, lid, "l1", "en", "x");
+    put_tr(&s, A, "p1", "en", "y");
+    assert!(s.merge_chat(lid, A).unwrap());
+    assert_eq!(tr_ids(&s, A, &["l1", "p1"], "en"), ["l1", "p1"]);
+    assert!(tr_ids(&s, lid, &["l1"], "en").is_empty());
+    s.delete_chat(A).unwrap();
+    assert!(tr_ids(&s, A, &["l1", "p1"], "en").is_empty());
+    put_tr(&s, A, "p1", "en", "y");
+    s.clear_all().unwrap();
+    assert!(tr_ids(&s, A, &["p1"], "en").is_empty());
 }

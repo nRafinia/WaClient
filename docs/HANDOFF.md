@@ -1,4 +1,4 @@
-# WaClient — handoff notes (state as of 2026-11-21, v0.7.0)
+# WaClient — handoff notes (state as of 2026-11-22, v0.8.0)
 
 Read this first in a new session. It records what exists, what was decided and why,
 what is untested, and how to work on the project safely. README.md is the user-facing
@@ -12,8 +12,8 @@ client to look as much like the official one as possible.
 
 - Workspace: `crates/store` (`wa_store`, rusqlite 0.39 bundled), `crates/engine`
   (`wa_engine`, whatsapp-rust 0.7, `default-features=false` minus `simd`), `app` (`waclient`,
-  Slint 1.19 UI). Version lives in root `Cargo.toml` (`version = "0.7.0"`).
-- Latest package: `dist/WaClient-0.6.0-win-x64.zip` (keep only the latest release in `dist/`).
+  Slint 1.19 UI). Version lives in root `Cargo.toml` (`version = "0.8.0"`).
+- Latest local package: `dist/WaClient-0.6.0-win-x64.zip` (keep only the latest release in `dist/`).
 - Identity: `ClientProfile::web()` (the Windows profile was rejected by the server as
   "outdated"), DevicePropsOverride os "Windows", PlatformType UWP, require_full_sync,
   365-day history.
@@ -23,7 +23,7 @@ client to look as much like the official one as possible.
 | What | Command |
 |---|---|
 | Build (debug) | `cargo build -p waclient` |
-| Test all | `cargo test --workspace` (906 passing at v0.7.0, 3 ignored) |
+| Test all | `cargo test --workspace` (984 passing at v0.8.0, 3 ignored) |
 | Test one area | `cargo test -p wa_engine <filter>` / `cargo test -p waclient <filter>` |
 | Engine+store only | `cargo build -p wa_engine -p wa_store` |
 | Store perf smoke | `cargo test -p wa_store --test perf -- --ignored` |
@@ -35,6 +35,17 @@ client to look as much like the official one as possible.
 - Packaging fails if the user's `WaClient.exe` is running (file lock). Ask them to quit
   from the tray first. The single-instance mutex also kills demo runs while their app is open.
 
+## 2b. Git, GitHub and releases
+
+- Repo: https://github.com/nRafinia/WaClient (PUBLIC). Scan staged files for private data before
+  every push (no *.db, applock.json, proxy.json, folders.json, emails, personal paths, tokens).
+- `.github/workflows/release.yml`: every push/merge to `main` runs `cargo test --workspace` on
+  windows-latest, packages with `scripts/package.ps1 -Installer` (Inno Setup via choco), and creates
+  a GitHub release: `v<version>` if that tag is new (notes = the matching CHANGELOG section), else a
+  pre-release `v<version>-build.<run>`. Bump `[workspace.package] version` + rename the CHANGELOG
+  "Unreleased" heading before merging a real release. CI sets `CMAKE=cmake` (the local
+  `.cargo/config.toml` path is this PC's Visual Studio).
+
 ## 3. Hard rules (privacy / safety) — keep honouring these
 
 - Never run tests/demos against the real `%APPDATA%\WaClient` data. Demo mode uses its own store.
@@ -43,7 +54,7 @@ client to look as much like the official one as possible.
 - Logs at info and above: no JIDs (use `jid::redact` / `models::redact_jid`), no phone
   numbers, no message/status text, no coordinates (debug only, rounded to 2 decimals).
 - No `unwrap`/`expect` outside tests.
-- Don't commit unless asked (the folder is not a git repo at present).
+- Don't commit or push unless asked.
 - User's email is private; never send it to external services.
 - Disk is small (drive E:, ~150 GB): after each batch of agents, delete
   `target/debug/incremental`, stale `target/debug/deps/*.exe|*.pdb`, `target/release` after

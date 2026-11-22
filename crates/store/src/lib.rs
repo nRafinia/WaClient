@@ -9,6 +9,8 @@ mod msgops;
 mod queries;
 mod search;
 mod social;
+mod storage;
+mod translations;
 
 #[cfg(test)]
 mod tests;
@@ -23,6 +25,9 @@ pub use model::{
     NewMessage, PollView, ReceiptKind, ReceiptRow, StatusGroup, StatusPurge, STATUS_JID,
     VIEW_ONCE_PREVIEW, VIEW_ONCE_TEXT,
 };
+pub use storage::{is_cache_file, plan_deletion, DeletionPlan, Doomed, MediaClass, MediaFile, MediaFilter};
+pub use search::{GlobalFilter, SearchCursor, SearchKind, SenderFilter, SenderRow};
+pub use translations::CachedTranslation;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -173,6 +178,24 @@ const MIGRATIONS: &[&str] = &[
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
     );
+    ",
+    // 11: cached message translations (one row per message and target language)
+    "
+    CREATE TABLE translations (
+        chat_jid TEXT NOT NULL,
+        msg_id TEXT NOT NULL,
+        target_lang TEXT NOT NULL,
+        text TEXT NOT NULL,
+        source_lang TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (chat_jid, msg_id, target_lang)
+    );
+    ",
+    // 12: cross-chat search (newest first by the full keyset, by sender, by kind)
+    "
+    CREATE INDEX idx_messages_ts ON messages(ts, chat_jid, id);
+    CREATE INDEX idx_messages_sender ON messages(sender_jid, from_me, ts, chat_jid, id);
+    CREATE INDEX idx_messages_kind ON messages(kind, ts, chat_jid, id);
     ",
 ];
 

@@ -17,7 +17,7 @@ effort, and whether items can run as parallel agents with disjoint files.
 | 1.5 | **Telegram shortcuts**: Up = edit last message, Ctrl+Tab / Ctrl+Shift+Tab next/prev chat, Alt+Up/Down next unread chat, double-click = reply | S | main.slint key handling, app.rs | Coordinate with 1.4 (both near key handling) — run after 1.4 or split carefully. |
 | 1.6 | **Cosmetic fixes**: admin badge height, centred "Read more", New-group Back button offset, settings category emoji → Path icons | S | contact_info.slint, group_new.slint, settings.slint, icons.slint | |
 
-## Phase 2 — v0.8 "find & manage" (2.1 proxy already shipped in 0.7.0)
+## Phase 2 — v0.8 "find & manage" — DONE in 0.8.0 (2.0–2.6; 2.1 proxy shipped in 0.7.0)
 
 | # | Item | Size | Notes |
 |---|---|---|---|

@@ -4,7 +4,7 @@
 use slint::ComponentHandle;
 
 use super::App;
-use crate::{FolderState, GroupAdmin, GroupNew, LocationState, MsgOps, PollState, ShareState, StatusPost, TimerState};
+use crate::{FolderState, GroupAdmin, GroupNew, LocationState, MsgOps, PollState, ShareState, StatusPost, TimerState, TranslateState};
 
 /// What is open right now, as far as the controller can tell. Popup menus and
 /// the emoji picker are not listed: they own the keyboard while open and
@@ -13,6 +13,8 @@ use crate::{FolderState, GroupAdmin, GroupNew, LocationState, MsgOps, PollState,
 pub struct EscState {
     /// The lock screen is up: no layer below it may receive Esc.
     pub locked: bool,
+    /// The month calendar of "jump to date" / the custom date range: modal.
+    pub calendar: bool,
     /// The folder form or its delete confirmation: modal.
     pub folder_dialog: bool,
     /// A group-admin dialog or the inline name editor: topmost.
@@ -22,6 +24,8 @@ pub struct EscState {
     /// The share-contact picker or the disappearing-timer dialog: modal.
     pub share_open: bool,
     pub timer_dialog: bool,
+    /// The first-use "Translate messages to..." dialog: modal.
+    pub translate_dialog: bool,
     /// The forward picker or the pin-duration dialog: modal, so topmost.
     pub ops_dialog: bool,
     /// The audience chooser of the status editor (on top of the editor).
@@ -60,11 +64,13 @@ pub enum EscAction {
     None,
     /// Swallow the key without closing anything.
     Ignore,
+    CloseCalendar,
     CloseFolderDialog,
     CloseGroupDialog,
     CloseGroupNew,
     CloseShare,
     CloseTimerDialog,
+    CloseTranslateDialog,
     CloseOpsDialog,
     CloseAudiencePicker,
     CloseStatusPost,
@@ -87,6 +93,8 @@ pub enum EscAction {
 pub fn esc_action(s: &EscState) -> EscAction {
     if s.locked {
         EscAction::Ignore
+    } else if s.calendar {
+        EscAction::CloseCalendar
     } else if s.folder_dialog {
         EscAction::CloseFolderDialog
     } else if s.group_dialog {
@@ -97,6 +105,8 @@ pub fn esc_action(s: &EscState) -> EscAction {
         EscAction::CloseShare
     } else if s.timer_dialog {
         EscAction::CloseTimerDialog
+    } else if s.translate_dialog {
+        EscAction::CloseTranslateDialog
     } else if s.ops_dialog {
         EscAction::CloseOpsDialog
     } else if s.audience_picker {
@@ -146,10 +156,12 @@ impl App {
         let state = EscState {
             folder_dialog: win.global::<FolderState>().get_dialog() != 0,
             locked: self.is_locked(),
+            calendar: self.calendar_is_open(),
             group_dialog: group.get_dialog() != 0 || group.get_editing_name(),
             group_new: win.global::<GroupNew>().get_dialog() != 0,
             share_open: win.global::<ShareState>().get_open(),
             timer_dialog: win.global::<TimerState>().get_dialog_open(),
+            translate_dialog: win.global::<TranslateState>().get_dialog_open(),
             ops_dialog: ops.get_forward_open() || !ops.get_pin_ask_id().is_empty(),
             audience_picker: post.get_open() && post.get_picker_open(),
             status_post: post.get_open(),
@@ -173,11 +185,13 @@ impl App {
         match action {
             EscAction::None => return false,
             EscAction::Ignore => {}
+            EscAction::CloseCalendar => self.calendar_close(),
             EscAction::CloseFolderDialog => self.folder_cancel(),
             EscAction::CloseGroupDialog => self.group_close_dialog(),
             EscAction::CloseGroupNew => self.group_new_cancel(),
             EscAction::CloseShare => self.share_close(),
             EscAction::CloseTimerDialog => self.timer_close_dialog(),
+            EscAction::CloseTranslateDialog => self.translate_dialog_cancel(),
             EscAction::CloseOpsDialog => self.ops_dialog_close(),
             EscAction::CloseAudiencePicker => self.audience_cancel(),
             EscAction::CloseStatusPost => self.status_post_cancel(),
@@ -218,12 +232,14 @@ mod tests {
     fn all() -> EscState {
         EscState {
             locked: false,
+            calendar: true,
             folder_dialog: true,
             group_dialog: true,
             group_new: true,
             group_view: true,
             share_open: true,
             timer_dialog: true,
+            translate_dialog: true,
             ops_dialog: true,
             audience_picker: true,
             status_post: true,
@@ -248,11 +264,13 @@ mod tests {
     fn layers_close_in_priority_order() {
         let mut s = all();
         let order = [
+            EscAction::CloseCalendar,
             EscAction::CloseFolderDialog,
             EscAction::CloseGroupDialog,
             EscAction::CloseGroupNew,
             EscAction::CloseShare,
             EscAction::CloseTimerDialog,
+            EscAction::CloseTranslateDialog,
             EscAction::CloseOpsDialog,
             EscAction::CloseAudiencePicker,
             EscAction::CloseStatusPost,
@@ -274,11 +292,13 @@ mod tests {
         for want in order {
             assert_eq!(esc_action(&s), want);
             match want {
+                EscAction::CloseCalendar => s.calendar = false,
                 EscAction::CloseFolderDialog => s.folder_dialog = false,
                 EscAction::CloseGroupDialog => s.group_dialog = false,
                 EscAction::CloseGroupNew => s.group_new = false,
                 EscAction::CloseShare => s.share_open = false,
                 EscAction::CloseTimerDialog => s.timer_dialog = false,
+                EscAction::CloseTranslateDialog => s.translate_dialog = false,
                 EscAction::CloseOpsDialog => s.ops_dialog = false,
                 EscAction::CloseAudiencePicker => s.audience_picker = false,
                 EscAction::CloseStatusPost => s.status_post = false,

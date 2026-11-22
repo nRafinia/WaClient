@@ -35,6 +35,41 @@ const MAX_PLAY_BYTES: u64 = 32 * 1024 * 1024;
 const PAGE_EVERY_FRAMES: u64 = 50;
 const TICK: Duration = Duration::from_millis(100);
 
+/// Playback speeds a voice note cycles through.
+const SPEEDS: [f32; 3] = [1.0, 1.5, 2.0];
+/// Index into `SPEEDS`; one global value for the whole session.
+static SPEED_IDX: AtomicUsize = AtomicUsize::new(0);
+
+/// The speed after `idx` in the 1x -> 1.5x -> 2x -> 1x cycle.
+fn next_speed_idx(idx: usize) -> usize {
+    (idx + 1) % SPEEDS.len()
+}
+
+fn speed_at(idx: usize) -> f32 {
+    SPEEDS[idx.min(SPEEDS.len() - 1)]
+}
+
+pub fn speed_label_at(idx: usize) -> &'static str {
+    match idx.min(SPEEDS.len() - 1) {
+        0 => "1\u{00d7}",
+        1 => "1.5\u{00d7}",
+        _ => "2\u{00d7}",
+    }
+}
+
+/// Advances the session-wide voice speed and returns its new index.
+pub fn cycle_speed() -> usize {
+    let next = next_speed_idx(SPEED_IDX.load(Ordering::Relaxed));
+    SPEED_IDX.store(next, Ordering::Relaxed);
+    next
+}
+
+/// Source frames consumed per output frame. Speeding up simply reads the
+/// decoded samples faster (resampling), so the pitch rises with the speed.
+fn playback_step(src_rate: u32, out_rate: u32, speed: f32) -> f64 {
+    f64::from(src_rate) / f64::from(out_rate) * f64::from(speed)
+}
+
 // ---- encoding ----------------------------------------------------------------
 
 /// Mono 48 kHz f32 -> Ogg/Opus. Independent of any device so it can be fed
@@ -409,7 +444,7 @@ fn build_output<T: SizedSample + FromSample<f32> + Send + 'static>(
     ctl: Arc<PlayCtl>,
 ) -> Result<Stream> {
     let out_ch = usize::from(config.channels).max(1);
-    let step = f64::from(RATE) / f64::from(config.sample_rate);
+    let out_rate = config.sample_rate;
     let src_ch = data.channels;
     let frames = data.frames();
     let mut pos = 0f64;
@@ -420,6 +455,7 @@ fn build_output<T: SizedSample + FromSample<f32> + Send + 'static>(
             config,
             move |out: &mut [T], _| {
                 let playing = ctl.playing.load(Ordering::Acquire);
+                let step = playback_step(RATE, out_rate, speed_at(SPEED_IDX.load(Ordering::Relaxed)));
                 let sample = |f: usize, c: usize| {
                     f32::from(data.samples[f * src_ch + c.min(src_ch - 1)]) / 32768.0
                 };
@@ -755,6 +791,39 @@ pub fn synth_tone_ogg(freq: f32, secs: f32) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn speed_cycles_through_all_three_and_wraps() {
+        assert_eq!(next_speed_idx(0), 1);
+        assert_eq!(next_speed_idx(1), 2);
+        assert_eq!(next_speed_idx(2), 0);
+        assert_eq!(speed_label_at(0), "1\u{00d7}");
+        assert_eq!(speed_label_at(1), "1.5\u{00d7}");
+        assert_eq!(speed_label_at(2), "2\u{00d7}");
+        assert_eq!(speed_at(99), 2.0);
+    }
+
+    #[test]
+    fn step_scales_with_speed_and_device_rate() {
+        assert_eq!(playback_step(48_000, 48_000, 1.0), 1.0);
+        assert_eq!(playback_step(48_000, 48_000, 2.0), 2.0);
+        assert_eq!(playback_step(48_000, 44_100, 1.0), 48_000.0 / 44_100.0);
+        // 1.5x: a 12 s note is consumed in 8 s of output frames.
+        let step = playback_step(48_000, 48_000, 1.5);
+        let out_frames = (12.0 * 48_000.0 / step).round();
+        assert_eq!(out_frames, 8.0 * 48_000.0);
+    }
+
+    #[test]
+    fn progress_stays_in_source_time_at_any_speed() {
+        // Position is counted in source frames, so after 4 s of wall time at
+        // 1.5x the note is at 6 s, i.e. half of a 12 s note.
+        let step = playback_step(48_000, 48_000, 1.5);
+        let pos_frames = step * 4.0 * 48_000.0;
+        let pos_secs = pos_frames as f32 / RATE as f32;
+        assert!((pos_secs - 6.0).abs() < 1e-3);
+        assert!((pos_secs / 12.0 - 0.5).abs() < 1e-4);
+    }
 
     /// Same algorithm as the engine's `ogg_opus_duration_secs`.
     fn engine_duration_secs(data: &[u8]) -> Option<u32> {

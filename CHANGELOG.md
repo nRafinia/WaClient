@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.8.0
+
+### Added
+- Emoji-only messages (1-3 emoji, ZWJ/flags/skin tones count as one) are shown large (48 / 40 / 32 px)
+  without a bubble; the time sits in a small pill. Replies, media, links and locations keep the bubble.
+- Voice notes: a pill on a playing/paused voice bubble cycles the speed 1x / 1.5x / 2x for the session
+  (resampling, so the pitch rises with the speed; progress and time stay in note time).
+- Storage manager (Settings > Storage): disk used by the profile (database, media, avatars), a bar
+  split by type, and the top 50 chats by media size, each with "Clear media". "Clear cache…" clears
+  by type and age ("older than 7 days / 30 days / 3 months / 1 year") and shows what it will free.
+  Messages are never deleted; starred messages and unsent media are kept; cleared media can be
+  downloaded again while it is on WhatsApp's servers. New `storage_ui.rs`, `storage.slint`, `wa_store::storage`.
+- Message translation: "Translate" in the message menu shows the translation under the bubble
+  ("Show original" toggles, errors offer Retry). Settings > Chats > Translation: target language and
+  Manual (default) / Automatic mode; the language is asked on first use. Text goes to Google Translate.
+  Cached translations of a chat are fetched when it opens. New `translate_ui.rs`, `translate.slint`.
+- Translate before sending: a translate button in the composer (when it has text) translates the
+  typed text into the chat's language, detected from the other side's recent messages, and puts
+  the result back into the composer; a strip above it offers Undo. The chevron or a right-click
+  picks the target language (remembered per chat). Never sent automatically. New `compose_translate.rs`.
+- Search filters in the chat list: chips for Photos & videos, Links, Documents and Voice, a "From"
+  sender picker and a date range (today, last 7 / 30 days, custom). Results are message hits from
+  every chat with chat name, date and a thumbnail or icon; a click opens the chat at that message.
+  Filters work without a query. New `global_search.rs`, `search_filters.slint`; store migration 12
+  (indexes for newest-first, per-sender and per-kind scans) and `Store::search_everywhere`.
+- Jump to date: a calendar button in the in-chat search bar opens a month calendar (days with
+  messages are marked); picking a day scrolls to its first message, loading older history as needed.
+  New `calendar.slint`.
+
+### Fixed
+- "Clear all media cache" no longer deletes starred messages' media or files still being sent; it
+  uses the same safe planner as the storage manager.
+- Translation fails fast (with "Can't reach the translation service. Check your connection or
+  proxy.") when the network or proxy is down, manual requests no longer wait behind automatic ones,
+  translations for a previous target language are not shown, and an edited message drops its old
+  translation.
+
 ## 0.7.0
 
 ### Fixed

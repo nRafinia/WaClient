@@ -1,0 +1,317 @@
+import { Button } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { IconCheck } from "icons.slint";
+
+export struct LangItem {
+    code: string,
+    name: string,
+}
+
+// Message translation, driven from Rust (app/translate_ui.rs).
+export global TranslateState {
+    // The language list, filtered by the picker's search box.
+    in property <[LangItem]> languages;
+    // Target language of the profile ("" = not chosen yet).
+    in property <string> target-code;
+    in property <string> target-name;
+    // true = every incoming message in another language is translated automatically.
+    in property <bool> auto;
+    // First-use dialog.
+    in-out property <bool> dialog-open;
+    in-out property <string> dialog-pick;
+    // Message id: translate it, switch between original and translation, or try again.
+    callback translate(string);
+    callback toggle(string);
+    callback retry(string);
+    callback filter(string);
+    callback set-target(string);
+    callback set-auto(bool);
+    callback dialog-save(string);
+    callback dialog-cancel();
+}
+
+// Search box and scrollable list of languages.
+export component LanguagePicker inherits Rectangle {
+    in property <string> selected;
+    in property <length> list-h: 220px;
+    callback picked(string);
+
+    height: 36px + 6px + root.list-h;
+
+    Rectangle {
+        y: 0px;
+        height: 36px;
+        background: Theme.input-bg;
+        border-radius: 8px;
+        if search.text == "": Text {
+            x: 12px;
+            text: "Search languages";
+            color: Theme.secondary;
+            font-size: 14px;
+            vertical-alignment: center;
+        }
+        search := TextInput {
+            x: 12px;
+            width: parent.width - 24px;
+            height: parent.height;
+            color: Theme.text;
+            font-size: 14px;
+            single-line: true;
+            vertical-alignment: center;
+            edited => { TranslateState.filter(self.text); }
+        }
+    }
+    Rectangle {
+        y: 42px;
+        height: root.list-h;
+        background: Theme.panel;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: Theme.divider;
+        clip: true;
+        if TranslateState.languages.length == 0: Text {
+            text: "No matching language";
+            color: Theme.secondary;
+            font-size: 13px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        Flickable {
+            VerticalLayout {
+                for l in TranslateState.languages: Rectangle {
+                    height: 36px;
+                    background: l.code == root.selected ? Theme.selected : (row-ta.has-hover ? Theme.hover : transparent);
+                    Text {
+                        x: 14px;
+                        width: parent.width - 52px;
+                        text: l.name;
+                        color: Theme.text;
+                        font-size: 14px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    if l.code == root.selected: IconCheck {
+                        x: parent.width - self.width - 14px;
+                        y: (parent.height - self.height) / 2;
+                        size: 16px;
+                        color: Theme.accent;
+                    }
+                    row-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.picked(l.code); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component ModeRow inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool> on;
+    callback clicked();
+
+    height: 56px;
+    background: ta.has-hover ? Theme.hover : transparent;
+    Rectangle {
+        x: 24px;
+        y: (parent.height - self.height) / 2;
+        width: 20px;
+        height: 20px;
+        border-radius: 10px;
+        border-width: 2px;
+        border-color: root.on ? Theme.accent : Theme.secondary;
+        if root.on: Rectangle {
+            x: 4px;
+            y: 4px;
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            background: Theme.accent;
+        }
+    }
+    VerticalLayout {
+        x: 60px;
+        width: parent.width - 84px;
+        alignment: center;
+        spacing: 2px;
+        Text {
+            text: root.title;
+            color: Theme.text;
+            font-size: 15px;
+            overflow: elide;
+        }
+        Text {
+            text: root.subtitle;
+            color: Theme.secondary;
+            font-size: 12px;
+            overflow: elide;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Settings, Chats: target language and Manual / Automatic.
+export component TranslationSection inherits VerticalLayout {
+    property <bool> picker-open: false;
+    property <string> lang: TranslateState.target-name != "" ? TranslateState.target-name : "your language";
+
+    alignment: start;
+    spacing: 4px;
+
+    Rectangle {
+        height: 28px;
+        Text {
+            x: 24px;
+            width: parent.width - 48px;
+            text: "Translation";
+            color: Theme.accent;
+            font-size: 13px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+    }
+    Rectangle {
+        height: 56px;
+        background: pick-ta.has-hover ? Theme.hover : transparent;
+        VerticalLayout {
+            x: 24px;
+            width: parent.width - 220px;
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: "Translate to";
+                color: Theme.text;
+                font-size: 15px;
+            }
+            Text {
+                text: "Messages are translated by Google Translate";
+                color: Theme.secondary;
+                font-size: 12px;
+                overflow: elide;
+            }
+        }
+        Rectangle {
+            x: parent.width - self.width - 24px;
+            y: (parent.height - self.height) / 2;
+            width: 170px;
+            height: 34px;
+            border-radius: 17px;
+            background: Theme.input-bg;
+            Text {
+                x: 14px;
+                width: parent.width - 28px;
+                text: TranslateState.target-name != "" ? TranslateState.target-name : "Choose\u{2026}";
+                color: Theme.text;
+                font-size: 14px;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+        pick-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.picker-open = !root.picker-open;
+                TranslateState.filter("");
+            }
+        }
+    }
+    if root.picker-open: VerticalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        padding-bottom: 6px;
+        LanguagePicker {
+            selected: TranslateState.target-code;
+            picked(code) => {
+                TranslateState.set-target(code);
+                root.picker-open = false;
+            }
+        }
+    }
+    ModeRow {
+        title: "Manual";
+        subtitle: "Translate a message only when you choose Translate in its menu";
+        on: !TranslateState.auto;
+        clicked => { TranslateState.set-auto(false); }
+    }
+    ModeRow {
+        title: "Automatic";
+        subtitle: "Sends every incoming message that isn't in " + root.lang + " to Google Translate";
+        on: TranslateState.auto;
+        clicked => {
+            TranslateState.set-auto(true);
+            if (TranslateState.target-code == "") {
+                root.picker-open = true;
+                TranslateState.filter("");
+            }
+        }
+    }
+}
+
+// First-use modal: asks for the target language, then the translation goes on.
+export component TranslateDialog inherits Rectangle {
+    background: #000000b0;
+    TouchArea { }
+
+    FocusScope {
+        width: parent.width;
+        height: parent.height;
+        init => { self.focus(); }
+        capture-key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                TranslateState.dialog-cancel();
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            width: min(400px, parent.width - 32px);
+            height: body.preferred-height;
+            background: Theme.panel;
+            border-radius: 12px;
+
+            body := VerticalLayout {
+                padding: 20px;
+                spacing: 12px;
+                Text {
+                    text: "Translate messages to\u{2026}";
+                    color: Theme.text;
+                    font-size: 18px;
+                    font-weight: 600;
+                }
+                LanguagePicker {
+                    selected: TranslateState.dialog-pick;
+                    list-h: min(240px, root.height - 300px);
+                    picked(code) => { TranslateState.dialog-pick = code; }
+                }
+                Text {
+                    text: "Messages you translate are sent to Google Translate.";
+                    color: Theme.secondary;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+                    Button {
+                        text: "Cancel";
+                        clicked => { TranslateState.dialog-cancel(); }
+                    }
+                    Button {
+                        text: "Translate";
+                        primary: true;
+                        enabled: TranslateState.dialog-pick != "";
+                        clicked => { TranslateState.dialog-save(TranslateState.dialog-pick); }
+                    }
+                }
+            }
+        }
+    }
+}

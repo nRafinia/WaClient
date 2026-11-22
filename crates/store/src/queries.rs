@@ -167,7 +167,7 @@ fn remove_chat_content(conn: &Connection, chat_jid: &str) -> Result<Vec<String>>
         .prepare("SELECT local_path FROM messages WHERE chat_jid = ?1 AND local_path IS NOT NULL")?
         .query_map(params![chat_jid], |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    for table in ["messages", "reactions", "polls", "poll_votes", "receipts"] {
+    for table in ["messages", "reactions", "polls", "poll_votes", "receipts", "translations"] {
         conn.execute(&format!("DELETE FROM {table} WHERE chat_jid = ?1"), params![chat_jid])?;
     }
     Ok(paths)
@@ -559,6 +559,12 @@ impl Store {
              WHERE chat_jid = ?1 AND id = ?2",
             params![chat_jid, id],
         )?;
+        if changed > 0 {
+            tx.execute(
+                "DELETE FROM translations WHERE chat_jid = ?1 AND msg_id = ?2",
+                params![chat_jid, id],
+            )?;
+        }
         if changed > 0 && is_latest(&tx, chat_jid, id)? {
             tx.execute(
                 "UPDATE chats SET last_preview = ?2 WHERE jid = ?1",
@@ -609,7 +615,7 @@ impl Store {
             "DELETE FROM messages WHERE chat_jid = ?1 AND id = ?2",
             params![chat_jid, id],
         )?;
-        for table in ["reactions", "polls", "poll_votes", "receipts"] {
+        for table in ["reactions", "polls", "poll_votes", "receipts", "translations"] {
             tx.execute(
                 &format!("DELETE FROM {table} WHERE chat_jid = ?1 AND msg_id = ?2"),
                 params![chat_jid, id],
@@ -702,7 +708,7 @@ impl Store {
             .prepare(&format!("SELECT local_path FROM messages WHERE {doomed} AND local_path IS NOT NULL"))?
             .query_map(params![chat_jid, max_ts, max_rowid], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        for table in ["reactions", "polls", "poll_votes", "receipts"] {
+        for table in ["reactions", "polls", "poll_votes", "receipts", "translations"] {
             tx.execute(
                 &format!(
                     "DELETE FROM {table} WHERE chat_jid = ?1 AND msg_id NOT IN                      (SELECT id FROM messages WHERE chat_jid = ?1 AND NOT ({doomed}))"
@@ -779,6 +785,12 @@ impl Store {
              WHERE chat_jid = ?1 AND id = ?2 AND revoked = 0",
             params![chat_jid, id, new_text],
         )?;
+        if changed > 0 {
+            tx.execute(
+                "DELETE FROM translations WHERE chat_jid = ?1 AND msg_id = ?2",
+                params![chat_jid, id],
+            )?;
+        }
         if changed > 0 && is_latest(&tx, chat_jid, id)? {
             tx.execute(
                 "UPDATE chats SET last_preview = COALESCE(NULLIF(?2, ''), last_preview) \
@@ -848,10 +860,14 @@ impl Store {
                     params![from_jid, into_jid],
                 )?;
                 tx.execute(
+                    "UPDATE OR IGNORE translations SET chat_jid = ?2 WHERE chat_jid = ?1",
+                    params![from_jid, into_jid],
+                )?;
+                tx.execute(
                     "UPDATE chats SET                      pinned_msg_id = (SELECT pinned_msg_id FROM chats WHERE jid = ?1),                      pinned_msg_until = (SELECT pinned_msg_until FROM chats WHERE jid = ?1)                      WHERE jid = ?2 AND pinned_msg_until <                      (SELECT pinned_msg_until FROM chats WHERE jid = ?1)",
                     params![from_jid, into_jid],
                 )?;
-                for table in ["reactions", "poll_votes", "polls", "receipts"] {
+                for table in ["reactions", "poll_votes", "polls", "receipts", "translations"] {
                     tx.execute(
                         &format!("DELETE FROM {table} WHERE chat_jid = ?1"),
                         params![from_jid],
@@ -927,7 +943,7 @@ impl Store {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
         tx.execute_batch("DELETE FROM messages; DELETE FROM chats; DELETE FROM contacts; \
-             DELETE FROM reactions; DELETE FROM polls; DELETE FROM poll_votes; \n             DELETE FROM receipts;")?;
+             DELETE FROM reactions; DELETE FROM polls; DELETE FROM poll_votes; \n             DELETE FROM receipts; DELETE FROM translations;")?;
         tx.commit()?;
         Ok(())
     }

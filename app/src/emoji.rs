@@ -1097,6 +1097,99 @@ fn tmp_path(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
+/// Emoji that show as a picture without a variation selector.
+fn is_emoji_base(c: char) -> bool {
+    matches!(u32::from(c),
+        0x1F000..=0x1FAFF | 0x2600..=0x27BF | 0x231A | 0x231B | 0x23E9..=0x23F3 | 0x23F8..=0x23FA
+        | 0x25FD | 0x25FE | 0x2B1B | 0x2B1C | 0x2B50 | 0x2B55)
+        && !is_skin_tone(c)
+        && !is_regional(c)
+}
+
+/// Text-style symbols that are an emoji only with a following U+FE0F.
+fn is_emoji_text_default(c: char) -> bool {
+    matches!(u32::from(c),
+        0xA9 | 0xAE | 0x203C | 0x2049 | 0x2122 | 0x2139 | 0x2194..=0x21AA | 0x2328 | 0x23CF
+        | 0x23ED..=0x23EF | 0x24C2 | 0x25AA | 0x25AB | 0x25B6 | 0x25C0 | 0x25FB | 0x25FC
+        | 0x2934 | 0x2935 | 0x2B05..=0x2B07 | 0x3030 | 0x303D | 0x3297 | 0x3299)
+}
+
+fn is_skin_tone(c: char) -> bool {
+    matches!(u32::from(c), 0x1F3FB..=0x1F3FF)
+}
+
+fn is_regional(c: char) -> bool {
+    matches!(u32::from(c), 0x1F1E6..=0x1F1FF)
+}
+
+const VS16: char = '\u{FE0F}';
+const ZWJ: char = '\u{200D}';
+const KEYCAP: char = '\u{20E3}';
+
+/// Length in chars of the single emoji at the start of `s`, if there is one:
+/// a flag, a keycap, a tag-sequence flag, or a base emoji with optional
+/// variation selector / skin tone, joined by ZWJ into longer sequences.
+fn emoji_len(s: &[char]) -> Option<usize> {
+    let first = *s.first()?;
+    if is_regional(first) {
+        return s.get(1).filter(|c| is_regional(**c)).map(|_| 2);
+    }
+    if matches!(first, '0'..='9' | '#' | '*') {
+        let n = if s.get(1) == Some(&VS16) { 2 } else { 1 };
+        return (s.get(n) == Some(&KEYCAP)).then_some(n + 1);
+    }
+    let mut i = 0;
+    loop {
+        let c = *s.get(i)?;
+        let with_vs = s.get(i + 1) == Some(&VS16);
+        if !(is_emoji_base(c) || (is_emoji_text_default(c) && with_vs)) {
+            return None;
+        }
+        i += 1;
+        if with_vs {
+            i += 1;
+        }
+        match s.get(i) {
+            Some(t) if is_skin_tone(*t) => i += 1,
+            // Subdivision flags (England, ...): black flag + tag chars + cancel tag.
+            Some('\u{E0020}'..='\u{E007E}') if c == '\u{1F3F4}' => {
+                while matches!(s.get(i), Some('\u{E0020}'..='\u{E007E}')) {
+                    i += 1;
+                }
+                if s.get(i) == Some(&'\u{E007F}') {
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        if s.get(i) == Some(&ZWJ) && s.get(i + 1).is_some_and(|n| is_emoji_base(*n) || is_emoji_text_default(*n)) {
+            i += 1;
+        } else {
+            return Some(i);
+        }
+    }
+}
+
+/// `Some(n)` for a message that is only 1..=3 emoji (whitespace between them
+/// allowed), shown large without a bubble; `None` for anything else.
+pub fn emoji_only_count(text: &str) -> Option<u8> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    let mut count = 0u8;
+    while i < chars.len() {
+        if chars[i].is_whitespace() {
+            i += 1;
+            continue;
+        }
+        i += emoji_len(&chars[i..])?;
+        count += 1;
+        if count > 3 {
+            return None;
+        }
+    }
+    (count > 0).then_some(count)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReactionChip {
     pub emoji: String,
@@ -1125,6 +1218,45 @@ pub fn aggregate_label(reactions: &[(String, u32, bool)]) -> Vec<ReactionChip> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn emoji_only_counts_one_to_three() {
+        assert_eq!(emoji_only_count("😀"), Some(1));
+        assert_eq!(emoji_only_count("😀😂"), Some(2));
+        assert_eq!(emoji_only_count("😀 😂\n🙏"), Some(3));
+        assert_eq!(emoji_only_count("  👍  "), Some(1));
+        assert_eq!(emoji_only_count("❤️"), Some(1));
+        assert_eq!(emoji_only_count("❤"), Some(1));
+    }
+
+    #[test]
+    fn emoji_only_sequences_count_as_one() {
+        assert_eq!(emoji_only_count("👨‍👩‍👧‍👦"), Some(1), "ZWJ family");
+        assert_eq!(emoji_only_count("👍🏽"), Some(1), "skin tone");
+        assert_eq!(emoji_only_count("👩🏽‍💻"), Some(1), "ZWJ with skin tone");
+        assert_eq!(emoji_only_count("🇮🇷"), Some(1), "flag");
+        assert_eq!(emoji_only_count("🇮🇷🇩🇪🇫🇷"), Some(3), "three flags");
+        assert_eq!(emoji_only_count("🏴󠁧󠁢󠁥󠁮󠁧󠁿"), Some(1), "tag flag");
+        assert_eq!(emoji_only_count("1️⃣"), Some(1), "keycap");
+        assert_eq!(emoji_only_count("#️⃣"), Some(1), "keycap hash");
+        assert_eq!(emoji_only_count("🏳️‍🌈"), Some(1), "rainbow flag");
+        assert_eq!(emoji_only_count("🧑‍🤝‍🧑👨‍👩‍👧"), Some(2));
+    }
+
+    #[test]
+    fn emoji_only_rejects_everything_else() {
+        assert_eq!(emoji_only_count(""), None);
+        assert_eq!(emoji_only_count("   "), None);
+        assert_eq!(emoji_only_count("ok 👍"), None);
+        assert_eq!(emoji_only_count("👍 ok"), None);
+        assert_eq!(emoji_only_count("😀😀😀😀"), None, "four");
+        assert_eq!(emoji_only_count("1"), None, "bare digit");
+        assert_eq!(emoji_only_count("#"), None);
+        assert_eq!(emoji_only_count("🇮"), None, "lone regional indicator");
+        assert_eq!(emoji_only_count("\u{1F3FD}"), None, "lone skin tone");
+        assert_eq!(emoji_only_count("©"), None, "text symbol without VS16");
+        assert_eq!(emoji_only_count("😀."), None);
+    }
+
     use super::*;
 
     fn temp_file(name: &str) -> PathBuf {

@@ -467,6 +467,20 @@ pub fn msg_item(m: &MessageRow, is_group: bool, images: MsgImages, ui: RowUi<'_>
     let has_links = styled.is_some();
     let styled = styled.unwrap_or_default();
     let link_url = m.link_url.as_deref().filter(|u| !m.revoked && crate::links::is_safe_link(u));
+    // Replies, media, polls, contacts, locations and link cards keep the normal bubble.
+    let big_emoji = if media
+        || m.revoked
+        || ui.poll.is_some()
+        || is_contact
+        || link_url.is_some()
+        || m.geo_lat.is_some()
+        || m.quoted_preview.as_deref().is_some_and(|q| !q.is_empty())
+        || is_notice(&m.id)
+    {
+        None
+    } else {
+        m.text.as_deref().and_then(crate::emoji::emoji_only_count)
+    };
     MsgItem {
         id: m.id.as_str().into(),
         is_sep: false,
@@ -511,6 +525,7 @@ pub fn msg_item(m: &MessageRow, is_group: bool, images: MsgImages, ui: RowUi<'_>
         reactions: reaction_chips(if m.revoked { &[] } else { ui.reactions }),
         styled,
         has_links,
+        big_emoji: big_emoji.map_or(0, i32::from),
         can_copy: !m.revoked && ui.poll.is_none() && m.text.as_deref().is_some_and(|t| !t.trim().is_empty()),
         can_delete_everyone: can_delete_for_everyone(m, chrono::Utc::now().timestamp()),
         starred: m.starred,
@@ -522,6 +537,10 @@ pub fn msg_item(m: &MessageRow, is_group: bool, images: MsgImages, ui: RowUi<'_>
         geo: m.geo_lat.zip(m.geo_lon).filter(|_| !m.revoked).map(|(la, lo)| crate::geo::coords_text(la, lo)).unwrap_or_default().into(),
         expires: m.expires_at.is_some(),
         is_notice: is_notice(&m.id),
+        can_translate: can_translate(m, ui.poll.is_some() || is_contact),
+        tr_state: 0,
+        tr_text: SharedString::default(),
+        tr_note: SharedString::default(),
         contact: is_contact,
         contact_name: contacts.first().map(|c| c.name.as_str()).unwrap_or_default().into(),
         contact_phone: contacts.first().map(|c| c.phone.as_str()).unwrap_or_default().into(),
@@ -570,6 +589,16 @@ pub fn can_edit(m: &MessageRow, now: i64) -> bool {
         && m.text.as_deref().is_some_and(|t| !t.trim().is_empty())
         && !matches!(m.status, MessageStatus::Pending | MessageStatus::Failed)
         && now.saturating_sub(m.ts) < EDIT_WINDOW_SECS
+}
+
+/// Text messages and media captions can be translated; polls, shared contacts,
+/// locations and system notices cannot (`special`: poll or contact card).
+pub fn can_translate(m: &MessageRow, special: bool) -> bool {
+    !m.revoked
+        && !special
+        && !is_notice(&m.id)
+        && m.geo_lat.is_none()
+        && m.text.as_deref().is_some_and(|t| !t.trim().is_empty())
 }
 
 /// Text and media can be forwarded; polls and other system rows cannot.
@@ -624,6 +653,7 @@ pub fn separator_item(ts: i64, now: DateTime<Local>) -> MsgItem {
         reactions: ModelRc::default(),
         styled: StyledText::default(),
         has_links: false,
+        big_emoji: 0,
         can_copy: false,
         can_delete_everyone: false,
         contact: false,
@@ -650,6 +680,10 @@ pub fn separator_item(ts: i64, now: DateTime<Local>) -> MsgItem {
         geo: SharedString::default(),
         expires: false,
         is_notice: false,
+        can_translate: false,
+        tr_state: 0,
+        tr_text: SharedString::default(),
+        tr_note: SharedString::default(),
     }
 }
 
