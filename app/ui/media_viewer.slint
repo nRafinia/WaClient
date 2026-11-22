@@ -1,0 +1,337 @@
+import { Spinner } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { IconClose, IconRotateRight, IconZoomIn, IconZoomOut, IconSaveAs, IconForwardArrow, IconCopyImage, IconChat, IconPlay } from "icons.slint";
+
+// The photo/video viewer of a chat. All geometry (zoom, pan, rotation, fit) is
+// computed in Rust (app/src/app/media_viewer.rs); this file only draws the
+// rectangle it is given and forwards pointer and key events.
+export global MediaViewerState {
+    in-out property <bool> open;
+    in-out property <image> source;
+    in-out property <bool> has-image;
+    in-out property <bool> loading;
+    in-out property <bool> failed;
+    in-out property <bool> is-video;
+    // The image rectangle inside the viewport (the image arrives already turned).
+    in-out property <length> img-x;
+    in-out property <length> img-y;
+    in-out property <length> img-w;
+    in-out property <length> img-h;
+    in-out property <string> sender;
+    in-out property <string> date;
+    in-out property <string> counter;
+    in-out property <string> caption;
+    in-out property <string> zoom-text;
+    in-out property <bool> has-older;
+    in-out property <bool> has-newer;
+    in-out property <bool> can-copy;
+    in-out property <bool> zoomed;
+
+    callback close();
+    // true = towards older media (left arrow).
+    callback step(bool);
+    callback zoom-at(length, length, float);
+    callback zoom-key(bool);
+    callback zoom-fit();
+    callback toggle-zoom(length, length);
+    callback pan-begin();
+    callback pan-by(length, length);
+    callback viewport(length, length);
+    callback rotate();
+    callback save();
+    callback forward();
+    callback show-in-chat();
+    callback copy();
+    callback open-video();
+}
+
+component ViewerButton inherits Rectangle {
+    in property <bool> enabled: true;
+    callback clicked();
+    width: 38px;
+    height: 38px;
+    border-radius: 19px;
+    background: touch.has-hover && root.enabled ? #ffffff26 : transparent;
+    opacity: root.enabled ? 1.0 : 0.35;
+    @children
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component ArrowButton inherits Rectangle {
+    in property <bool> left;
+    callback clicked();
+    width: 44px;
+    height: 44px;
+    border-radius: 22px;
+    background: touch.has-hover ? #000000b8 : #00000080;
+    Path {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 22px;
+        height: 22px;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        stroke: white;
+        stroke-width: 2px;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+        commands: root.left ? "M 15 5 L 8 12 L 15 19" : "M 9 5 L 16 12 L 9 19";
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component MediaViewer inherits Rectangle {
+    background: #0a0f12;
+    clip: true;
+
+    keys := FocusScope {
+        init => { self.focus(); }
+        key-pressed(e) => {
+            if (e.text == Key.LeftArrow) {
+                MediaViewerState.step(true);
+            } else if (e.text == Key.RightArrow) {
+                MediaViewerState.step(false);
+            } else if (e.text == "+" || e.text == "=") {
+                MediaViewerState.zoom-key(true);
+            } else if (e.text == "-" || e.text == "_" || e.text == "\u{1f}") {
+                MediaViewerState.zoom-key(false);
+            } else if (e.text == "0") {
+                MediaViewerState.zoom-fit();
+            } else if (e.text == "r" || e.text == "R") {
+                MediaViewerState.rotate();
+            } else if (e.modifiers.control && (e.text == "c" || e.text == "C" || e.text == "\u{3}")) {
+                MediaViewerState.copy();
+            }
+            // Modal: nothing reaches the chat behind it.
+            return accept;
+        }
+
+        viewport := Rectangle {
+            y: 56px;
+            height: parent.height - 56px;
+            clip: true;
+            init => { MediaViewerState.viewport(self.width, self.height); }
+            changed width => { MediaViewerState.viewport(self.width, self.height); }
+            changed height => { MediaViewerState.viewport(self.width, self.height); }
+
+            if MediaViewerState.has-image: Image {
+                x: MediaViewerState.img-x;
+                y: MediaViewerState.img-y;
+                width: MediaViewerState.img-w;
+                height: MediaViewerState.img-h;
+                source: MediaViewerState.source;
+                image-fit: fill;
+            }
+
+            pad := TouchArea {
+                mouse-cursor: MediaViewerState.zoomed ? (self.pressed ? MouseCursor.grabbing : MouseCursor.grab) : MouseCursor.default;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                        keys.focus();
+                        MediaViewerState.pan-begin();
+                    }
+                }
+                moved => {
+                    if (self.pressed) {
+                        MediaViewerState.pan-by(self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y);
+                    }
+                }
+                double-clicked => { MediaViewerState.toggle-zoom(self.mouse-x, self.mouse-y); }
+                scroll-event(e) => {
+                    MediaViewerState.zoom-at(self.mouse-x, self.mouse-y, e.delta-y / 1px);
+                    return accept;
+                }
+            }
+
+            if MediaViewerState.loading: Spinner {
+                indeterminate: true;
+                width: 44px;
+                height: 44px;
+            }
+
+            if MediaViewerState.failed: Text {
+                text: "Couldn't load the image";
+                color: white;
+                font-size: 16px;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            if MediaViewerState.is-video: Rectangle {
+                width: 168px;
+                height: 44px;
+                border-radius: 22px;
+                background: open-touch.has-hover ? Theme.accent.brighter(0.15) : Theme.accent;
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 8px;
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    IconPlay { size: 18px; color: white; y: (parent.height - self.height) / 2; }
+                    Text {
+                        text: "Open video";
+                        color: white;
+                        font-size: 14px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                }
+                open-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { MediaViewerState.open-video(); }
+                }
+            }
+
+            if MediaViewerState.has-older: ArrowButton {
+                x: 16px;
+                y: (parent.height - self.height) / 2;
+                left: true;
+                clicked => { MediaViewerState.step(true); keys.focus(); }
+            }
+            if MediaViewerState.has-newer: ArrowButton {
+                x: parent.width - self.width - 16px;
+                y: (parent.height - self.height) / 2;
+                clicked => { MediaViewerState.step(false); keys.focus(); }
+            }
+
+            // Caption and position.
+            VerticalLayout {
+                width: parent.width;
+                height: self.preferred-height;
+                y: parent.height - self.height - 14px;
+                spacing: 6px;
+                if MediaViewerState.caption != "": Rectangle {
+                    property <length> text-w: min(cap.preferred-width, min(parent.width - 160px, 640px));
+                    height: cap.preferred-height + 12px;
+                    Rectangle {
+                        width: parent.text-w + 24px;
+                        x: (parent.width - self.width) / 2;
+                        border-radius: 8px;
+                        background: #000000a0;
+                    }
+                    cap := Text {
+                        width: parent.text-w;
+                        x: (parent.width - self.width) / 2;
+                        text: MediaViewerState.caption;
+                        color: white;
+                        font-size: 14px;
+                        wrap: word-wrap;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                Rectangle {
+                    height: 26px;
+                    Rectangle {
+                        width: counter.preferred-width + 24px;
+                        height: 26px;
+                        x: (parent.width - self.width) / 2;
+                        border-radius: 13px;
+                        background: #000000a0;
+                        counter := Text {
+                            text: MediaViewerState.counter;
+                            color: white;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Top bar.
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: 56px;
+            background: #0a0f12e6;
+            VerticalLayout {
+                x: 20px;
+                y: 8px;
+                width: parent.width - 460px;
+                height: 40px;
+                alignment: center;
+                Text {
+                    text: MediaViewerState.sender;
+                    color: white;
+                    font-size: 15px;
+                    font-weight: 600;
+                    overflow: elide;
+                }
+                Text {
+                    text: MediaViewerState.date;
+                    color: Theme.secondary;
+                    font-size: 12px;
+                    overflow: elide;
+                }
+            }
+            HorizontalLayout {
+                x: parent.width - self.preferred-width - 12px;
+                y: 9px;
+                height: 38px;
+                spacing: 2px;
+                ViewerButton {
+                    enabled: !MediaViewerState.is-video && MediaViewerState.has-image;
+                    clicked => { MediaViewerState.zoom-key(false); }
+                    IconZoomOut { x: 11px; y: 11px; size: 16px; color: white; }
+                }
+                Rectangle {
+                    width: 48px;
+                    height: 38px;
+                    Text {
+                        text: MediaViewerState.zoom-text;
+                        color: white;
+                        font-size: 12px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { MediaViewerState.zoom-fit(); }
+                    }
+                }
+                ViewerButton {
+                    enabled: !MediaViewerState.is-video && MediaViewerState.has-image;
+                    clicked => { MediaViewerState.zoom-key(true); }
+                    IconZoomIn { x: 11px; y: 11px; size: 16px; color: white; }
+                }
+                ViewerButton {
+                    enabled: !MediaViewerState.is-video && MediaViewerState.has-image;
+                    clicked => { MediaViewerState.rotate(); }
+                    IconRotateRight { x: 11px; y: 11px; size: 16px; color: white; }
+                }
+                ViewerButton {
+                    enabled: MediaViewerState.can-copy;
+                    clicked => { MediaViewerState.copy(); }
+                    IconCopyImage { x: 11px; y: 11px; size: 16px; color: white; }
+                }
+                ViewerButton {
+                    clicked => { MediaViewerState.forward(); }
+                    IconForwardArrow { x: 11px; y: 11px; size: 16px; color: white; }
+                }
+                ViewerButton {
+                    clicked => { MediaViewerState.save(); }
+                    IconSaveAs { x: 11px; y: 11px; size: 16px; color: white; }
+                }
+                ViewerButton {
+                    clicked => { MediaViewerState.show-in-chat(); }
+                    IconChat { x: 11px; y: 11px; size: 16px; color: white; }
+                }
+                ViewerButton {
+                    clicked => { MediaViewerState.close(); }
+                    IconClose { x: 11px; y: 11px; size: 16px; color: white; }
+                }
+            }
+        }
+    }
+}

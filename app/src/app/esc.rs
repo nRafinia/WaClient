@@ -4,7 +4,7 @@
 use slint::ComponentHandle;
 
 use super::App;
-use crate::{FolderState, GroupAdmin, GroupNew, LocationState, MsgOps, PollState, ShareState, StatusPost, TimerState, TranslateState};
+use crate::{AppearanceState, ExportState, FolderState, GroupAdmin, GroupNew, LocationState, MediaViewerState, MsgOps, PollState, ShareState, StatusPost, TimerState, TranslateState};
 
 /// What is open right now, as far as the controller can tell. Popup menus and
 /// the emoji picker are not listed: they own the keyboard while open and
@@ -24,8 +24,15 @@ pub struct EscState {
     /// The share-contact picker or the disappearing-timer dialog: modal.
     pub share_open: bool,
     pub timer_dialog: bool,
+    /// The export-chat dialog (Esc cancels a running export first).
+    pub export_dialog: bool,
+    /// The "Send later" time dialog, and the list of scheduled messages below it.
+    pub schedule_dialog: bool,
+    pub schedule_list: bool,
     /// The first-use "Translate messages to..." dialog: modal.
     pub translate_dialog: bool,
+    /// The chat wallpaper dialog: modal.
+    pub wallpaper_dialog: bool,
     /// The forward picker or the pin-duration dialog: modal, so topmost.
     pub ops_dialog: bool,
     /// The audience chooser of the status editor (on top of the editor).
@@ -42,6 +49,9 @@ pub struct EscState {
     /// Files are being sent: the preview cannot be dismissed.
     pub attach_busy: bool,
     pub viewer_open: bool,
+    /// The photo/video viewer of the chat media (a forward picker opened from
+    /// it is `ops_dialog` and closes first).
+    pub media_viewer: bool,
     /// An incoming-call banner is showing (the topmost one is dismissed).
     pub call_banner: bool,
     pub search_open: bool,
@@ -70,7 +80,11 @@ pub enum EscAction {
     CloseGroupNew,
     CloseShare,
     CloseTimerDialog,
+    CloseExport,
+    CloseScheduleDialog,
+    CloseScheduleList,
     CloseTranslateDialog,
+    CloseWallpaperDialog,
     CloseOpsDialog,
     CloseAudiencePicker,
     CloseStatusPost,
@@ -79,6 +93,7 @@ pub enum EscAction {
     CloseMention,
     CloseAttach,
     CloseViewer,
+    CloseMediaViewer,
     DismissCall,
     CloseSearch,
     CloseGroupView,
@@ -105,8 +120,16 @@ pub fn esc_action(s: &EscState) -> EscAction {
         EscAction::CloseShare
     } else if s.timer_dialog {
         EscAction::CloseTimerDialog
+    } else if s.export_dialog {
+        EscAction::CloseExport
+    } else if s.schedule_dialog {
+        EscAction::CloseScheduleDialog
+    } else if s.schedule_list {
+        EscAction::CloseScheduleList
     } else if s.translate_dialog {
         EscAction::CloseTranslateDialog
+    } else if s.wallpaper_dialog {
+        EscAction::CloseWallpaperDialog
     } else if s.ops_dialog {
         EscAction::CloseOpsDialog
     } else if s.audience_picker {
@@ -123,6 +146,8 @@ pub fn esc_action(s: &EscState) -> EscAction {
         if s.attach_busy { EscAction::Ignore } else { EscAction::CloseAttach }
     } else if s.viewer_open {
         EscAction::CloseViewer
+    } else if s.media_viewer {
+        EscAction::CloseMediaViewer
     } else if s.call_banner {
         EscAction::DismissCall
     } else if s.search_open {
@@ -161,7 +186,11 @@ impl App {
             group_new: win.global::<GroupNew>().get_dialog() != 0,
             share_open: win.global::<ShareState>().get_open(),
             timer_dialog: win.global::<TimerState>().get_dialog_open(),
+            export_dialog: win.global::<ExportState>().get_open(),
+            schedule_dialog: super::schedule_ui::dialog_open(&win),
+            schedule_list: super::schedule_ui::list_open(&win),
             translate_dialog: win.global::<TranslateState>().get_dialog_open(),
+            wallpaper_dialog: win.global::<AppearanceState>().get_dialog_open(),
             ops_dialog: ops.get_forward_open() || !ops.get_pin_ask_id().is_empty(),
             audience_picker: post.get_open() && post.get_picker_open(),
             status_post: post.get_open(),
@@ -171,6 +200,7 @@ impl App {
             attach_open: win.get_attach_open(),
             attach_busy: win.get_attach_busy(),
             viewer_open: win.get_viewer_open(),
+            media_viewer: win.global::<MediaViewerState>().get_open(),
             call_banner: super::call_ui::has_banners(),
             search_open: win.get_search_open(),
             group_view: group.get_view() != 0 && win.get_contact_info_open(),
@@ -191,7 +221,11 @@ impl App {
             EscAction::CloseGroupNew => self.group_new_cancel(),
             EscAction::CloseShare => self.share_close(),
             EscAction::CloseTimerDialog => self.timer_close_dialog(),
+            EscAction::CloseExport => self.export_close(),
+            EscAction::CloseScheduleDialog => self.schedule_close_dialog(),
+            EscAction::CloseScheduleList => self.schedule_close_list(),
             EscAction::CloseTranslateDialog => self.translate_dialog_cancel(),
+            EscAction::CloseWallpaperDialog => self.wallpaper_close(),
             EscAction::CloseOpsDialog => self.ops_dialog_close(),
             EscAction::CloseAudiencePicker => self.audience_cancel(),
             EscAction::CloseStatusPost => self.status_post_cancel(),
@@ -200,6 +234,7 @@ impl App {
             EscAction::CloseMention => self.close_mentions(),
             EscAction::CloseAttach => self.attach_cancel(),
             EscAction::CloseViewer => self.status_close(),
+            EscAction::CloseMediaViewer => self.media_viewer_close(),
             EscAction::DismissCall => self.call_dismiss_top(),
             EscAction::CloseSearch => {
                 win.set_search_open(false);
@@ -239,7 +274,11 @@ mod tests {
             group_view: true,
             share_open: true,
             timer_dialog: true,
+            export_dialog: true,
+            schedule_dialog: true,
+            schedule_list: true,
             translate_dialog: true,
+            wallpaper_dialog: true,
             ops_dialog: true,
             audience_picker: true,
             status_post: true,
@@ -249,6 +288,7 @@ mod tests {
             attach_open: true,
             attach_busy: false,
             viewer_open: true,
+            media_viewer: true,
             call_banner: true,
             search_open: true,
             info_open: true,
@@ -270,7 +310,11 @@ mod tests {
             EscAction::CloseGroupNew,
             EscAction::CloseShare,
             EscAction::CloseTimerDialog,
+            EscAction::CloseExport,
+            EscAction::CloseScheduleDialog,
+            EscAction::CloseScheduleList,
             EscAction::CloseTranslateDialog,
+            EscAction::CloseWallpaperDialog,
             EscAction::CloseOpsDialog,
             EscAction::CloseAudiencePicker,
             EscAction::CloseStatusPost,
@@ -279,6 +323,7 @@ mod tests {
             EscAction::CloseMention,
             EscAction::CloseAttach,
             EscAction::CloseViewer,
+            EscAction::CloseMediaViewer,
             EscAction::DismissCall,
             EscAction::CloseSearch,
             EscAction::CloseGroupView,
@@ -298,7 +343,11 @@ mod tests {
                 EscAction::CloseGroupNew => s.group_new = false,
                 EscAction::CloseShare => s.share_open = false,
                 EscAction::CloseTimerDialog => s.timer_dialog = false,
+                EscAction::CloseExport => s.export_dialog = false,
+                EscAction::CloseScheduleDialog => s.schedule_dialog = false,
+                EscAction::CloseScheduleList => s.schedule_list = false,
                 EscAction::CloseTranslateDialog => s.translate_dialog = false,
+                EscAction::CloseWallpaperDialog => s.wallpaper_dialog = false,
                 EscAction::CloseOpsDialog => s.ops_dialog = false,
                 EscAction::CloseAudiencePicker => s.audience_picker = false,
                 EscAction::CloseStatusPost => s.status_post = false,
@@ -307,6 +356,7 @@ mod tests {
                 EscAction::CloseMention => s.mention_open = false,
                 EscAction::CloseAttach => s.attach_open = false,
                 EscAction::CloseViewer => s.viewer_open = false,
+                EscAction::CloseMediaViewer => s.media_viewer = false,
                 EscAction::DismissCall => s.call_banner = false,
                 EscAction::CloseSearch => s.search_open = false,
                 EscAction::CloseGroupView => s.group_view = false,
@@ -319,6 +369,14 @@ mod tests {
             }
         }
         assert_eq!(esc_action(&s), EscAction::None);
+    }
+
+    #[test]
+    fn forward_picker_opened_from_the_media_viewer_closes_first() {
+        let s = EscState { media_viewer: true, ops_dialog: true, has_chat: true, ..Default::default() };
+        assert_eq!(esc_action(&s), EscAction::CloseOpsDialog);
+        let s = EscState { media_viewer: true, info_open: true, has_chat: true, ..Default::default() };
+        assert_eq!(esc_action(&s), EscAction::CloseMediaViewer);
     }
 
     #[test]

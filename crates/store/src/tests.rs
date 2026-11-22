@@ -1774,3 +1774,42 @@ fn translations_follow_chat_delete_merge_and_clear_all() {
     s.clear_all().unwrap();
     assert!(tr_ids(&s, A, &["p1"], "en").is_empty());
 }
+
+fn export_ids(rows: &[(ExportCursor, MessageRow)]) -> Vec<&str> {
+    rows.iter().map(|(_, m)| m.id.as_str()).collect()
+}
+
+#[test]
+fn export_pages_ascend_without_gaps_or_repeats() {
+    let s = Store::open_in_memory().unwrap();
+    s.upsert_chat(A, ChatKind::Dm, Some("Ann")).unwrap();
+    // Three messages share a timestamp: paging must not skip or repeat them.
+    for (id, ts) in [("a", 10), ("b", 20), ("c", 20), ("d", 20), ("e", 30)] {
+        s.insert_message(&msg(A, id, ts, false), false).unwrap();
+    }
+    s.insert_message(&msg("222@s.whatsapp.net", "other", 20, false), false).unwrap();
+    let mut seen = Vec::new();
+    let mut after = None;
+    loop {
+        let page = s.export_page(A, None, None, after, 2).unwrap();
+        let Some(last) = page.last() else { break };
+        after = Some(last.0);
+        seen.extend(export_ids(&page).into_iter().map(String::from));
+    }
+    assert_eq!(seen, ["a", "b", "c", "d", "e"]);
+    assert_eq!(s.export_count(A, None, None).unwrap(), 5);
+}
+
+#[test]
+fn export_range_is_half_open() {
+    let s = Store::open_in_memory().unwrap();
+    s.upsert_chat(A, ChatKind::Dm, None).unwrap();
+    for (id, ts) in [("a", 10), ("b", 20), ("c", 30)] {
+        s.insert_message(&msg(A, id, ts, false), false).unwrap();
+    }
+    let page = s.export_page(A, Some(20), Some(30), None, 10).unwrap();
+    assert_eq!(export_ids(&page), ["b"]);
+    assert_eq!(s.export_count(A, Some(20), Some(30)).unwrap(), 1);
+    assert_eq!(s.export_count(A, Some(20), None).unwrap(), 2);
+    assert_eq!(s.export_count(A, None, Some(10)).unwrap(), 0);
+}

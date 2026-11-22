@@ -519,3 +519,93 @@ export component IconTranslate inherits Path {
     stroke-line-join: round;
     commands: "M 3 5 L 13 5 M 8 3 L 8 5 M 5 5 C 5.5 9 8 12 12 13.5 M 11 5 C 10.5 9 7.5 12 3.5 13.5 M 13 21 L 17 11 L 21 21 M 14.5 17.5 L 19.5 17.5";
 }
+
+// Media viewer: rotate 90 degrees clockwise.
+export component IconRotateRight inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 19.5 12 A 7.5 7.5 0 1 1 16.5 6 M 16.5 6 L 12.5 5.5 M 16.5 6 L 15.8 2";
+}
+
+// Media viewer: magnifier with a plus.
+export component IconZoomIn inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 4 10 A 6 6 0 1 0 16 10 A 6 6 0 1 0 4 10 Z M 14.5 14.5 L 20 20 M 7.5 10 L 12.5 10 M 10 7.5 L 10 12.5";
+}
+
+// Media viewer: magnifier with a minus.
+export component IconZoomOut inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 4 10 A 6 6 0 1 0 16 10 A 6 6 0 1 0 4 10 Z M 14.5 14.5 L 20 20 M 7.5 10 L 12.5 10";
+}
+
+// Media viewer: arrow into a tray (save as).
+export component IconSaveAs inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 12 4 L 12 15 M 7 10.5 L 12 15.5 L 17 10.5 M 5 20 L 19 20";
+}
+
+// Media viewer: forward.
+export component IconForwardArrow inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 21 11 L 14 4.5 M 21 11 L 14 17.5 M 21 11 L 10 11 C 5.5 11 3.5 14 3 19";
+}
+
+// Media viewer: copy.
+export component IconCopyImage inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 9 9 L 20 9 L 20 20 L 9 20 Z M 15 9 L 15 4 L 4 4 L 4 15 L 9 15";
+}

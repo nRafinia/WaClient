@@ -1,0 +1,287 @@
+import { Theme } from "theme.slint";
+import { IconCheck } from "icons.slint";
+
+// State of the "Export chat" dialog (Rust: app/src/app/export_ui.rs). The
+// fields are two-way bound; the controller reads them when the export starts.
+export global ExportState {
+    in-out property <bool> open;
+    in property <string> chat-name;
+    // 0 = HTML, 1 = Text, 2 = JSON.
+    in-out property <int> format;
+    // 0 = all, 1 = last 30 days, 2 = custom.
+    in-out property <int> range;
+    in-out property <string> from-text;
+    in-out property <string> to-text;
+    in-out property <bool> include-media: true;
+    in-out property <string> dest;
+    // Why the export cannot start (bad date, folder).
+    in property <string> error;
+    in property <bool> running;
+    in property <bool> finished;
+    in property <float> progress;
+    in property <string> progress-text;
+    in property <string> result-text;
+    // Opens the dialog for the open chat (the header menu).
+    callback open-dialog();
+    callback browse();
+    callback start();
+    // Stops a running export.
+    callback cancel();
+    callback close();
+    callback open-folder();
+}
+
+component Chip inherits Rectangle {
+    in property <string> text;
+    in property <bool> on;
+    callback clicked();
+    height: 30px;
+    min-width: 64px;
+    border-radius: 15px;
+    border-width: 1px;
+    border-color: root.on ? Theme.accent : Theme.divider;
+    background: root.on ? Theme.accent : (ta.has-hover ? Theme.selected : transparent);
+    Text {
+        text: root.text;
+        color: root.on ? #111b21 : Theme.text;
+        font-size: 13px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component Label inherits Text {
+    color: Theme.secondary;
+    font-size: 13px;
+    height: 26px;
+    vertical-alignment: bottom;
+}
+
+component Field inherits Rectangle {
+    in-out property <string> value;
+    in property <string> placeholder;
+    height: 36px;
+    background: Theme.input-bg;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.divider;
+    if input.text == "": Text {
+        x: 10px;
+        width: parent.width - 20px;
+        text: root.placeholder;
+        color: Theme.secondary;
+        font-size: 13px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    input := TextInput {
+        x: 10px;
+        y: (parent.height - self.preferred-height) / 2;
+        width: parent.width - 20px;
+        color: Theme.text;
+        font-size: 13px;
+        single-line: true;
+        text <=> root.value;
+    }
+}
+
+component ExportButton inherits Rectangle {
+    in property <string> text;
+    in property <color> fill: Theme.input-bg;
+    in property <color> label-color: Theme.text;
+    callback clicked();
+    height: 32px;
+    min-width: 84px;
+    border-radius: 16px;
+    background: area.pressed ? fill.darker(0.2) : (area.has-hover ? fill.brighter(0.1) : fill);
+    area := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    Text {
+        text: root.text;
+        color: root.label-color;
+        font-size: 13px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// Modal that covers its parent.
+export component ExportDialog inherits Rectangle {
+    background: #000000b0;
+    TouchArea { }
+
+    FocusScope {
+        width: parent.width;
+        height: parent.height;
+        init => { self.focus(); }
+        capture-key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                if (ExportState.running) {
+                    ExportState.cancel();
+                } else {
+                    ExportState.close();
+                }
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            width: min(460px, parent.width - 32px);
+            height: body.preferred-height;
+            background: Theme.panel;
+            border-radius: 12px;
+
+            body := VerticalLayout {
+                padding: 20px;
+                spacing: 4px;
+                Text {
+                    text: "Export chat";
+                    color: Theme.text;
+                    font-size: 18px;
+                    font-weight: 600;
+                }
+                Text {
+                    text: ExportState.chat-name;
+                    color: Theme.secondary;
+                    font-size: 13px;
+                    overflow: elide;
+                }
+                if !ExportState.running && !ExportState.finished: VerticalLayout {
+                    spacing: 4px;
+                    Label { text: "Format"; }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        Chip { text: "HTML"; on: ExportState.format == 0; clicked => { ExportState.format = 0; } }
+                        Chip { text: "Text"; on: ExportState.format == 1; clicked => { ExportState.format = 1; } }
+                        Chip { text: "JSON"; on: ExportState.format == 2; clicked => { ExportState.format = 2; } }
+                    }
+                    Text {
+                        text: ExportState.format == 0 ? "One readable page (index.html) that works offline." : (ExportState.format == 1 ? "A WhatsApp-style chat.txt." : "chat.json for programs; the fields are described in the README.");
+                        color: Theme.secondary;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                    Label { text: "Date range"; }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        Chip { text: "All"; on: ExportState.range == 0; clicked => { ExportState.range = 0; } }
+                        Chip { text: "Last 30 days"; on: ExportState.range == 1; clicked => { ExportState.range = 1; } }
+                        Chip { text: "Custom"; on: ExportState.range == 2; clicked => { ExportState.range = 2; } }
+                    }
+                    if ExportState.range == 2: HorizontalLayout {
+                        spacing: 8px;
+                        Field { value <=> ExportState.from-text; placeholder: "From  YYYY-MM-DD"; }
+                        Field { value <=> ExportState.to-text; placeholder: "To  YYYY-MM-DD"; }
+                    }
+                    Rectangle {
+                        height: 36px;
+                        background: media-ta.has-hover ? Theme.selected : transparent;
+                        border-radius: 8px;
+                        Rectangle {
+                            x: 8px;
+                            y: (parent.height - self.height) / 2;
+                            width: 18px;
+                            height: 18px;
+                            border-radius: 4px;
+                            border-width: 2px;
+                            border-color: ExportState.include-media ? Theme.accent : Theme.secondary;
+                            background: ExportState.include-media ? Theme.accent : transparent;
+                            if ExportState.include-media: IconCheck {
+                                size: 14px;
+                                x: 0px;
+                                y: 0px;
+                                color: #111b21;
+                            }
+                        }
+                        Text {
+                            x: 36px;
+                            width: parent.width - 44px;
+                            text: "Include media (downloaded files only)";
+                            color: Theme.text;
+                            font-size: 14px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        media-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { ExportState.include-media = !ExportState.include-media; }
+                        }
+                    }
+                    Label { text: "Save to"; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Field { value <=> ExportState.dest; placeholder: "Folder"; }
+                        ExportButton { text: "Browse"; min-width: 80px; clicked => { ExportState.browse(); } }
+                    }
+                    if ExportState.error != "": Text {
+                        text: ExportState.error;
+                        color: Theme.danger;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { height: 8px; }
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: 8px;
+                        ExportButton { text: "Cancel"; clicked => { ExportState.close(); } }
+                        ExportButton { text: "Export"; fill: Theme.accent; label-color: white; clicked => { ExportState.start(); } }
+                    }
+                }
+                if ExportState.running: VerticalLayout {
+                    spacing: 8px;
+                    Rectangle { height: 8px; }
+                    Rectangle {
+                        height: 8px;
+                        border-radius: 4px;
+                        background: Theme.input-bg;
+                        Rectangle {
+                            x: 0px;
+                            width: parent.width * Math.max(0.0, Math.min(1.0, ExportState.progress));
+                            height: parent.height;
+                            border-radius: 4px;
+                            background: Theme.accent;
+                        }
+                    }
+                    Text {
+                        text: ExportState.progress-text;
+                        color: Theme.text;
+                        font-size: 14px;
+                    }
+                    Rectangle { height: 8px; }
+                    HorizontalLayout {
+                        alignment: end;
+                        ExportButton { text: "Cancel"; clicked => { ExportState.cancel(); } }
+                    }
+                }
+                if ExportState.finished: VerticalLayout {
+                    spacing: 8px;
+                    Rectangle { height: 8px; }
+                    Text {
+                        text: ExportState.result-text;
+                        color: Theme.text;
+                        font-size: 14px;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { height: 8px; }
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: 8px;
+                        ExportButton { text: "Close"; clicked => { ExportState.close(); } }
+                        ExportButton { text: "Open folder"; fill: Theme.accent; label-color: white; clicked => { ExportState.open-folder(); } }
+                    }
+                }
+            }
+        }
+    }
+}

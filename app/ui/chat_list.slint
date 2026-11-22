@@ -8,6 +8,7 @@ import { FolderState, FolderTab } from "folders.slint";
 import { LockState } from "lock.slint";
 import { GroupNew } from "group_new.slint";
 import { SearchFilters, SearchFilterBar, SearchResultsPanel } from "search_filters.slint";
+import { Schedule } from "schedule.slint";
 
 component ChatRowItem inherits Rectangle {
     in property <ChatItem> chat;
@@ -58,7 +59,7 @@ component ChatRowItem inherits Rectangle {
         }
     }
 
-    Avatar {
+    if !root.chat.saved: Avatar {
         x: 14px;
         y: (parent.height - self.height) / 2;
         size: 49px;
@@ -66,6 +67,25 @@ component ChatRowItem inherits Rectangle {
         has-image: root.chat.has-avatar;
         initials: root.chat.initials;
         tint: root.chat.tint;
+    }
+    // Saved Messages: a bookmark on the accent colour instead of a photo.
+    if root.chat.saved: Rectangle {
+        x: 14px;
+        y: (parent.height - self.height) / 2;
+        width: 49px;
+        height: 49px;
+        border-radius: 25px;
+        background: Theme.accent;
+        Path {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 24px;
+            height: 24px;
+            viewbox-width: 24;
+            viewbox-height: 24;
+            commands: "M 6 3 L 18 3 L 18 21 L 12 16.5 L 6 21 Z";
+            fill: #111b21;
+        }
     }
 
     if root.chat.disappearing: Rectangle {
@@ -631,7 +651,7 @@ export component ChatList inherits Rectangle {
                     x: parent.width - self.width;
                     y: parent.height + 4px;
                     width: 200px;
-                    height: 12px + 34px * (ChatActions.starred-enabled ? 6 : 5);
+                    height: 12px + 34px * (ChatActions.starred-enabled ? 7 : 6);
                     close-policy: close-on-click-outside;
                     Rectangle {
                         background: Theme.panel;
@@ -675,6 +695,13 @@ export component ChatList inherits Rectangle {
                                 label: "Starred messages";
                                 clicked => {
                                     ChatActions.open-starred();
+                                    header-menu.close();
+                                }
+                            }
+                            MenuRow {
+                                label: Schedule.overdue-count > 0 ? "Scheduled messages (" + Schedule.overdue-count + " overdue)" : "Scheduled messages";
+                                clicked => {
+                                    Schedule.open-all-list();
                                     header-menu.close();
                                 }
                             }

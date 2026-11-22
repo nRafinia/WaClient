@@ -133,7 +133,7 @@ fn start_dir() -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
-mod known_folder {
+pub(super) mod known_folder {
     use std::ffi::c_void;
     use std::os::windows::ffi::OsStringExt;
     use std::path::PathBuf;
@@ -185,6 +185,13 @@ impl App {
             st.msgs.iter().find(|m| m.id == id && !m.revoked).cloned()
         };
         let Some(m) = row else { return };
+        self.save_row(&m);
+    }
+
+    /// `save_as` for a row that is not necessarily in the open chat's loaded
+    /// messages (the media viewer browses the whole chat).
+    pub(super) fn save_row(&self, m: &wa_store::MessageRow) {
+        let id = m.id.as_str();
         if matches!(m.kind, MessageKind::Text | MessageKind::Other) {
             return;
         }

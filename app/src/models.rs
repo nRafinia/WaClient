@@ -122,6 +122,7 @@ pub fn chat_item(row: &ChatRow, avatar: Option<Image>, now: DateTime<Local>) -> 
         disappearing: row.ephemeral_secs > 0,
         is_dm: ChatKind::from_jid(&row.jid) == ChatKind::Dm,
         blocked: false,
+        saved: false,
         draft: false,
         has_avatar: avatar.is_some(),
         avatar: avatar.unwrap_or_default(),

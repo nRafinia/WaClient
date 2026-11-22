@@ -23,6 +23,9 @@ use super::{App, with_app};
 use crate::models::{initials, tint_for};
 use crate::{MainWindow, MentionItem, Mentions, MsgOps};
 
+#[path = "undo.rs"]
+mod undo;
+
 /// Group members are reloaded when older than this.
 const MEMBERS_FRESH: Duration = Duration::from_secs(10 * 60);
 /// A member request that got no answer is repeated after this long.
@@ -284,6 +287,8 @@ struct Gate {
 thread_local! {
     static ST: RefCell<ComposerState> = RefCell::default();
     static SAVE_TIMER: Timer = Timer::default();
+    /// Undo/redo history of the composer text (see undo.rs).
+    static UNDO: RefCell<undo::UndoStack> = RefCell::default();
 }
 
 /// Writes every changed draft file now.
@@ -334,6 +339,41 @@ pub(super) fn wire(win: &MainWindow) {
             m.set_fmt_end(i32::try_from(edit.cursor).unwrap_or(i32::MAX));
         }
         edit.text.into()
+    });
+    // Undo / redo (undo.rs). `note` is told about every change of the text.
+    m.on_note(|text, cursor, atomic| {
+        UNDO.with(|u| u.borrow_mut().note(text.as_str(), usize::try_from(cursor).unwrap_or(0), atomic));
+    });
+    m.on_reset_undo(|text, cursor| {
+        UNDO.with(|u| u.borrow_mut().reset(text.as_str(), usize::try_from(cursor).unwrap_or(0)));
+    });
+    let weak = win.as_weak();
+    m.on_history(move |text, cursor, redo| {
+        let snap = UNDO.with(|u| {
+            let mut u = u.borrow_mut();
+            // Typed text not reported yet (should not happen) must not be lost.
+            u.note(text.as_str(), usize::try_from(cursor).unwrap_or(0), false);
+            if redo { u.redo() } else { u.undo() }
+        });
+        if let Some(win) = weak.upgrade() {
+            let m = win.global::<Mentions>();
+            m.set_undo_ok(snap.is_some());
+            m.set_undo_cursor(snap.as_ref().map_or(0, |s| i32::try_from(s.cursor).unwrap_or(i32::MAX)));
+        }
+        snap.map_or(text, |s| s.text.into())
+    });
+    // Home / End in right-to-left paragraphs (undo.rs `rtl_home_end`).
+    let weak = win.as_weak();
+    m.on_line_nav(move |text, anchor, cursor, home, shift| {
+        let off = |v: i32| usize::try_from(v).unwrap_or(0);
+        let Some((a, c)) = undo::rtl_home_end(text.as_str(), off(anchor), off(cursor), home, shift) else {
+            return false;
+        };
+        let Some(win) = weak.upgrade() else { return false };
+        let m = win.global::<Mentions>();
+        m.set_nav_anchor(i32::try_from(a).unwrap_or(i32::MAX));
+        m.set_nav_cursor(i32::try_from(c).unwrap_or(i32::MAX));
+        true
     });
 }
 
@@ -596,6 +636,7 @@ impl App {
                 win.invoke_set_composer(d.text.as_str().into(), i32::try_from(d.text.len()).unwrap_or(i32::MAX));
                 p.st.borrow_mut().reply = d.reply;
                 self.sync_reply();
+                UNDO.with(|u| u.borrow_mut().reset(&d.text, d.text.len()));
             }
             None => win.invoke_clear_composer(),
         }
@@ -683,6 +724,11 @@ impl App {
         ST.with(|s| {
             s.borrow().gates.get(&(profile.to_string(), jid.to_string())).and_then(|g| g.notice).unwrap_or_default()
         })
+    }
+
+    /// Whether a complete reply about this group's send permission was received this session.
+    pub(super) fn gate_known(&self, profile: &str, jid: &str) -> bool {
+        ST.with(|s| s.borrow().gates.contains_key(&(profile.to_string(), jid.to_string())))
     }
 
     /// Records a group's send permission from a reply and updates the open chat.

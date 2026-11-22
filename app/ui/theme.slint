@@ -5,19 +5,46 @@ export global PopupState {
 }
 
 export global Theme {
-    out property <color> bg: #111b21;
-    out property <color> panel: #202c33;
-    out property <color> chat-bg: #0b141a;
-    out property <color> my-bubble: #005c4b;
-    out property <color> their-bubble: #202c33;
-    out property <color> text: #e9edef;
-    out property <color> secondary: #8696a0;
-    out property <color> accent: #00a884;
-    out property <color> badge: #00a884;
-    out property <color> input-bg: #2a3942;
-    out property <color> hover: #1a262d;
-    out property <color> selected: #2a3942;
-    out property <color> divider: #222d34;
+    // Dark or light palette; set from Rust (app/appearance_ui.rs) from the
+    // Theme setting (System / Light / Dark / Scheduled).
+    in-out property <bool> dark: true;
+    out property <color> bg: root.dark ? #111b21 : #ffffff;
+    out property <color> panel: root.dark ? #202c33 : #f0f2f5;
+    out property <color> chat-bg: root.dark ? #0b141a : #efeae2;
+    // Accent, badge and the outgoing bubble are derived from the accent colour
+    // chosen in Settings (contrast checked in Rust), so they are set from there.
+    in-out property <color> my-bubble: #005c4b;
+    // Quoted block inside an outgoing bubble.
+    in-out property <color> my-quote: #0b4a3e;
+    out property <color> their-bubble: root.dark ? #202c33 : #ffffff;
+    // Quoted block inside an incoming bubble.
+    out property <color> quote-bg: root.dark ? #17212a : #f0f2f5;
+    out property <color> text: root.dark ? #e9edef : #111b21;
+    out property <color> secondary: root.dark ? #8696a0 : #667781;
+    in-out property <color> accent: #00a884;
+    in-out property <color> badge: #00a884;
+    out property <color> input-bg: root.dark ? #2a3942 : #f0f2f5;
+    out property <color> hover: root.dark ? #1a262d : #f5f6f6;
+    out property <color> selected: root.dark ? #2a3942 : #e9edef;
+    out property <color> divider: root.dark ? #222d34 : #e9edef;
+    // Inset block on a bubble (link preview, location, file icon, quote).
+    out property <color> card-bg: root.dark ? #0000004d : #00000012;
+    // Placeholder behind images/videos that have not loaded yet.
+    out property <color> media-bg: root.dark ? #0f171c : #e1e5e8;
+    // Small strips on the panel (translate strip, edit/reply bars).
+    out property <color> strip-bg: root.dark ? #1a262d : #ffffff;
+    // Floating pill (toast / snackbar).
+    out property <color> pill-bg: root.dark ? #111b21f0 : #fffffff0;
+    // Progress tracks, separators and hover tints that sit on bubbles/panels.
+    out property <color> track: root.dark ? #ffffff33 : #00000024;
+    out property <color> track-hi: root.dark ? #ffffff40 : #00000033;
+    out property <color> track-lo: root.dark ? #ffffff26 : #0000001a;
+    // Filled part / knob of the voice player inside an outgoing bubble.
+    out property <color> on-mine: root.dark ? #ffffffcc : root.accent;
+    // Stylised map tile.
+    out property <color> map-bg: root.dark ? #2b3b44 : #e5e3df;
+    out property <color> map-road: root.dark ? #3e525d : #ffffff;
+    out property <color> map-river: root.dark ? #35657a : #aad3df;
     out property <color> tick-read: #53bdeb;
     out property <color> danger: #ea4335;
     out property <color> warn: #f5a623;
@@ -41,6 +68,8 @@ export struct ChatItem {
     // One-to-one chat (can be blocked) and blocked by us.
     is-dm: bool,
     blocked: bool,
+    // The pinned "Saved Messages" row (the chat with our own number).
+    saved: bool,
     // The preview is the unsent draft of the chat.
     draft: bool,
     avatar: image,

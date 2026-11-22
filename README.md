@@ -15,6 +15,9 @@ A native Windows desktop client for WhatsApp, written in Rust. It links to your 
 - Chat list with search, unread counters, profile pictures, group support.
 - Send and receive text, with replies (quoting).
 - Send and receive media: images, video, documents, audio; download, open, show in folder.
+- Photo viewer: click a photo to zoom (wheel at the cursor, Ctrl+= / Ctrl+-, double-click, drag to pan), rotate (R, view only),
+  and browse every photo and video of the chat with Left / Right (counter "12 / 87"). The top bar has sender and date,
+  Copy image, Forward, Save as and Show in chat. Videos still open in the system player ("Open video").
 - Emoji-only messages (1-3 emoji) are shown large, without a bubble.
 - Voice playback speed 1x / 1.5x / 2x (pill on the bubble; pitch rises with speed).
 - Voice notes: record (Ogg/Opus) and play back. Buffer underruns/overruns (xruns) are ignored. If
@@ -40,7 +43,8 @@ A native Windows desktop client for WhatsApp, written in Rust. It links to your 
   message box is replaced by a notice when you are not an admin.
 - Settings page (per profile), grouped into categories: Profile, Account (privacy: read
   receipts, typing indicator, online presence, link previews, blocked contacts), Chats (font size,
-  Enter-to-send, auto-download of media), Notifications (message preview, sound), Storage (data
+  Enter-to-send, Saved Messages row, auto-download of media), Notifications (message preview, sound
+  choice with preview), Storage (data
   location, clearing the media cache), App (close to tray, start with Windows) and Help.
 - Incognito quick toggle (ghost icon) in the chat-list header: turns off chat read receipts and
   status-view receipts for the active profile. Per-chat "Turn off read receipts for this chat" and
@@ -64,6 +68,22 @@ A native Windows desktop client for WhatsApp, written in Rust. It links to your 
 - Pinned-message bar: pin a message in a chat for everyone (24 hours, 7 days or 30 days).
 - Starred messages: starred messages show a star marker. A starred messages panel lists them per
   chat (chat header menu) or across all chats (header menu ☰), and jumps to the message.
+- Export chat (chat header menu > Export chat...): one chat to HTML (one self-contained `index.html`
+  with inline CSS, light/dark, bubbles, replies, reactions, polls, locations, contacts), plain text
+  (WhatsApp-style `DD/MM/YYYY, HH:MM - Name: text`) or JSON. Date range All / Last 30 days / Custom
+  (`YYYY-MM-DD`). "Include media" copies the already downloaded files into a `media/` folder; media
+  that was never downloaded is listed as "(not downloaded)" and nothing is downloaded for the
+  export. Runs in the background with progress and Cancel. View-once media is never exported. All
+  message text is HTML-escaped and only http, https and mailto links are clickable. Local only.
+  JSON schema (`chat.json`, an array in chat order, one object per message): `id` (string), `ts`
+  (ISO 8601 with the local UTC offset), `sender` (display name, "You" for your own messages, empty
+  for notices), `sender_jid`, `from_me` (bool), `kind` (`text`, `image`, `video`, `audio`, `voice`,
+  `document`, `sticker`, `poll`, `contact`, `location`, `notice`, `deleted`, `other`), `notice`
+  (bool, a system row such as a group change), `text` (string or null), `media` (path inside the
+  export such as `media/00001-photo.jpg`, or null), `quoted_id` (string or null), `reactions`
+  (`[{"emoji", "count"}]`), `edited` (bool), `starred` (bool), and for their kinds `poll`
+  (`{"question", "multiple", "options": [{"name", "votes"}]}`), `location` (`{"lat", "lon"}` or
+  null) and `contacts` (`[{"name", "phone"}]`).
 - Message info panel for your own messages: delivery, read and played receipts per recipient in
   groups; a compact view in direct chats. The panel always shows the message status.
 - @mentions in groups: typing @ opens a suggestion popup (Up / Down, Enter or Tab to pick). Messages
@@ -86,6 +106,10 @@ A native Windows desktop client for WhatsApp, written in Rust. It links to your 
   previews show the text without markers. The composer has shortcuts and a small B / I / S / M /
   quote bar that appears over the composer while text is selected.
 - Contact and group info panel, opened from the chat header.
+- Per-chat notifications (info panel): own sound with preview, show/hide message text and an
+  "Always notify" exception for muted chats; five built-in notification tones.
+- Saved Messages: a pinned chat with yourself at the top of the list, and "Save to Saved Messages"
+  in the message menu.
 - Chat-list menu: Archive / Unarchive, Pin (at most 3; not for archived chats), Mute (8 hours,
   1 week or always) and Mark as read. Archived chats are shown in a separate Archived list;
   archiving a pinned chat unpins it.
@@ -151,6 +175,20 @@ A native Windows desktop client for WhatsApp, written in Rust. It links to your 
   ("Show original" switches back). Settings > Chats > Translation sets the target language and the mode:
   Manual (default; asked for the language on first use) or Automatic, which translates every incoming
   message that isn't in your language. Message text is sent to Google Translate; results are cached locally.
+- Appearance (Settings > Chats): System / Light / Dark / Scheduled night-mode theme, eight accent
+  colours, and chat wallpapers (presets or your own image) for all chats or per chat (chat menu >
+  Wallpaper...).
+- Send later: right-click the Send button (or click the small chevron on it) > "Send later...",
+  then pick In 1 hour / Tonight 21:00 / Tomorrow 09:00 or type a local date and time (in the future,
+  at most one year ahead). Text only (formatting, mentions and the reply target are kept). **WhatsApp
+  has no server-side scheduling: WaClient sends the message itself, so it only goes out while
+  WaClient is running** (the tray counts; all profiles send on their own account). A clock icon in the
+  chat header lists the chat's scheduled messages (Edit time, Send now, Delete); the chat-list menu >
+  "Scheduled messages" lists all of the profile. Messages that came due while WaClient was closed
+  (or the PC slept for over 5 minutes) are never sent silently: a banner offers "Send now" or
+  "Review". A group that has become admins-only (or that you left) keeps the message and marks it
+  "Couldn't send". A message is removed from the schedule file before it is sent, so it can never
+  go out twice (a crash in between loses it instead).
 
 ## Known limitations
 
@@ -198,11 +236,14 @@ A native Windows desktop client for WhatsApp, written in Rust. It links to your 
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous chat in the list (wraps around)           |
 | Alt+Down / Alt+Up | Next / previous chat with unread messages                         |
 | Double-click      | On a message: reply to it                                         |
+| Left / Right      | Photo viewer: older / newer photo or video of the chat            |
+| + / - , 0, R      | Photo viewer: zoom in / out (also Ctrl+= / Ctrl+-), fit, rotate   |
+| Ctrl+C            | Photo viewer: copy the image                                      |
 | Up / Down         | Move in the @mention popup                                        |
 | Enter / Tab       | Pick the highlighted @mention                                     |
 
 Esc closes, in order: a forward or pin dialog, the mention popup, the attach preview (not while
-sending), the status viewer, chat search, contact info, the message info or starred panel, edit
+sending), the photo viewer, the status viewer, chat search, contact info, the message info or starred panel, edit
 mode, selection mode, the reply, and finally the open chat. Menus and the emoji picker close
 themselves first. The status viewer also uses Left / Right arrows.
 
@@ -280,6 +321,7 @@ location" below). Paths in this table are relative to the current data folder:
 | `profiles/<id>/media/`      | downloaded media and cached avatars                   |
 | `profiles/<id>/settings.json` | that profile's settings                             |
 | `profiles/<id>/drafts.json` | unsent drafts per chat (text and reply target)        |
+| `profiles/<id>/scheduled.json` | messages scheduled with "Send later" (corrupt: renamed to `.bad`) |
 
 Bootstrap files always stay in `%APPDATA%\WaClient` and are never moved:
 

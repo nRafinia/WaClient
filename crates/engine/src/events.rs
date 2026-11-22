@@ -1271,9 +1271,7 @@ fn notify(sh: &Shared, msg: &wa_store::NewMessage, push_name: &str) {
             return;
         }
     };
-    if chat.muted_until > now_secs() {
-        return;
-    }
+    let muted = chat.muted_until > now_secs();
     let title = if chat.kind == ChatKind::Group {
         format!("{} @ {}", sender_name(sh, msg, push_name), chat.display_name)
     } else {
@@ -1283,6 +1281,7 @@ fn notify(sh: &Shared, msg: &wa_store::NewMessage, push_name: &str) {
         chat_jid: msg.chat_jid.clone(),
         title,
         body: convert::preview(msg),
+        muted,
     });
 }
 
@@ -1334,6 +1333,35 @@ mod tests {
             raw: None,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn notify_flags_muted_chats_instead_of_dropping_them() {
+        let store = Arc::new(Store::open_in_memory().expect("store"));
+        let (ui, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (sig, _sig_rx) = tokio::sync::mpsc::unbounded_channel();
+        let sh = Shared::new(
+            store.clone(),
+            ui,
+            sig,
+            Arc::new(tokio::sync::Mutex::new(())),
+            Arc::new(MediaState::new(std::env::temp_dir())),
+            Arc::new(std::sync::Mutex::new(EngineSettings::default())),
+        );
+        let m = new_msg("N1", CHAT);
+        store.insert_message(&m, true).expect("insert");
+
+        notify(&sh, &m, "");
+        assert!(matches!(rx.try_recv(), Ok(UiEvent::Notify { muted: false, .. })));
+
+        store.set_chat_flags(CHAT, None, None, Some(i64::MAX)).expect("mute");
+        notify(&sh, &m, "");
+        assert!(matches!(rx.try_recv(), Ok(UiEvent::Notify { muted: true, .. })));
+
+        let off = EngineSettings { notifications: false, ..EngineSettings::default() };
+        sh.set_settings(off);
+        notify(&sh, &m, "");
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

@@ -29,7 +29,7 @@ effort, and whether items can run as parallel agents with disjoint files.
 | 2.5 | **Big emoji** for emoji-only messages; **font size / compact mode** | S | |
 | 2.6 | **Voice playback speed** 1× / 1.5× / 2× (if not present) | S | |
 
-## Phase 3 — v0.9 "look & feel"
+## Phase 3 — v0.9 "look & feel" — DONE in 0.9.0
 | # | Item | Size | Notes |
 |---|---|---|---|
 | 3.1 | **Themes / accent colours**, scheduled night mode | M | Theme tokens already exist. |

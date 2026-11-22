@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.9.0
+
+### Added
+
+- Send later: right-click the Send button (or its small chevron) > "Send later..." with quick picks
+  (In 1 hour, Tonight 21:00, Tomorrow 09:00) and a local date/time (future, at most 1 year). Text
+  only; mentions, formatting and reply are kept. WhatsApp cannot schedule, so WaClient sends the
+  message itself, only while it is running. Items persist per profile in `scheduled.json`; a timer
+  (15 s) sends due ones on their own profile; items that came due while the app was closed are held
+  behind an "N scheduled messages are overdue" banner (Send now / Review) instead of being sent
+  silently (the banner counts every profile, e.g. "3 scheduled messages are overdue (Work: 2)", and
+  Review switches to the profile that has them); the composer gate is re-checked when an item fires
+  (an unknown group is asked for its flags first, one tick later). Quick picks are recomputed when
+  confirmed and every time must still be in the future. An item due while its profile is not
+  connected stays ("Waiting for connection") and is sent once connected. A clock icon in the chat header and
+  the chat-list menu > "Scheduled messages" list them (Edit time, Send now, Delete). New
+  `schedule_ui.rs`, `schedule.slint`.
+- Notification sounds: Settings > Notifications picks the sound (Windows default or one of five built-in
+  tones; a tap previews it). Per chat, the info panel has a Notifications section: sound (Default /
+  None / a tone, with a play button), "Show preview text" (Default / On / Off) and "Always notify"
+  (also when the chat is muted). Tones are synthesized, not bundled; a tone plays on its own audio
+  stream, so a voice note keeps playing, and is skipped only while another tone is still sounding.
+  Muted chats stay silent unless they are an exception; the lock screen still hides the text.
+  New `notify_ui.rs`.
+- Saved Messages: a pinned row at the top of the chat list opens the chat with your own number
+  (created locally on first use); the header says "Saved Messages" and the message menu gains
+  "Save to Saved Messages" (forwards the message there). Hide it in Settings > Chats > "Show Saved
+  Messages". New `saved_ui.rs`.
+- Appearance (Settings > Chats > Appearance): Theme System / Light / Dark / Scheduled (dark from
+  HH:MM to HH:MM, default 22:00-07:00, switches live; the default stays Dark), eight accent colours
+  (WhatsApp green, blue, purple, pink, red, orange, teal, graphite) applied to buttons, badges, the
+  selected tab and the outgoing bubble (its tint is computed per mode for readable text).
+- Chat wallpapers: None (default), eight light/dark-aware presets or your own image (copied into the
+  profile folder, scaled to at most 2560 px JPEG, cropped to fill, dimmed 0-60% in dark mode), for all
+  chats (Settings) or one chat (chat header menu > Wallpaper..., with "Use default"). New
+  `appearance_ui.rs`, `appearance.slint`.
+- Photo viewer: clicking a photo opens an in-app viewer instead of the external program. Zoom with the
+  mouse wheel (at the cursor), Ctrl+= / Ctrl+-, + / -, 0 = fit, double-click (fit / 100% or 2x), drag to
+  pan (zoom range fit to 8x); rotate with R or the button (the file is untouched; large images are turned off the UI thread); browse all photos and
+  videos of the chat with Left / Right or the on-screen arrows ("12 / 87"; photos download on demand).
+  Top bar: sender and date, Copy image, Forward, Save as, Show in chat. Videos show their thumbnail with
+  an "Open video" button (system player, as before). New `media_viewer.rs`, `media_viewer.slint`.
+- Export chat (chat header menu): HTML (self-contained, light/dark), WhatsApp-style text or JSON,
+  date range, optional copy of downloaded media, progress with Cancel. New `export/`, `export_ui.rs`,
+  `export.slint`; store read helpers `export_count` / `export_page`.
+
+### Fixed
+
+- Composer keyboard: Ctrl+A/C/V/X/Z/Y and the other Ctrl shortcuts now work on non-Latin keyboard layouts (Persian, Arabic, Russian, Hebrew); Ctrl+X / Shift+Delete cut; Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z undo and redo (also formatting, mentions, paste, emoji and translation); Home / End in Persian lines go to the logical start / end.
+
 ## 0.8.0
 
 ### Added

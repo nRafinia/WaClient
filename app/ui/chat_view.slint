@@ -5,13 +5,16 @@ import { PollBubble } from "poll_bubble.slint";
 import { ContactCard } from "contact_card.slint";
 import { LocationCard } from "location_card.slint";
 import { ReactionBar, QuickReactPopup } from "reactions.slint";
-import { MsgMenu, DeleteDialog, Chevron, MenuRow } from "msg_menu.slint";
+import { MsgMenu, DeleteDialog, Chevron, MenuRow, SavedMessages } from "msg_menu.slint";
 import { EmojiPicker, EmojiRow, EmojiTab } from "emoji_picker.slint";
 import { ChatSearchBar } from "chat_search.slint";
 import { MsgOps, SelectionBar, EditBar, PinnedBar, PinDialog, StarIcon } from "msgops.slint";
 import { ForwardPicker } from "forward_picker.slint";
 import { TranslateState } from "translate.slint";
 import { TimerState } from "timer_dialog.slint";
+import { ExportState } from "export.slint";
+import { AppearanceState, WallpaperLayer } from "appearance.slint";
+import { Schedule } from "schedule.slint";
 import { IconClose, IconCheck, IconCheckDouble, IconClock, IconPlay, IconArrowDown, IconSearch, IconTimer, IconContact, IconPin, IconFile, IconPoll, IconTranslate } from "icons.slint";
 
 export struct MentionItem {
@@ -57,6 +60,20 @@ export global Mentions {
     callback format(string, int, int, int) -> string;
     in-out property <int> fmt-start;
     in-out property <int> fmt-end;
+    // Undo history of the composer (undo.rs). `note`: the text changed (text,
+    // cursor, true for a programmatic edit that is always one step).
+    // `history`: (text, cursor, redo) -> the text to restore; undo-ok says
+    // whether there was a step, undo-cursor where the cursor goes.
+    callback note(string, int, bool);
+    callback reset-undo(string, int);
+    callback history(string, int, bool) -> string;
+    in-out property <bool> undo-ok;
+    in-out property <int> undo-cursor;
+    // Home / End in a right-to-left paragraph: (text, anchor, cursor, home,
+    // shift) -> true when handled; the selection is left in nav-anchor/nav-cursor.
+    callback line-nav(string, int, int, bool, bool) -> bool;
+    in-out property <int> nav-anchor;
+    in-out property <int> nav-cursor;
 }
 
 // One button of the formatting bar over the composer.
@@ -187,9 +204,10 @@ component Bubble inherits Rectangle {
     property <bool> can-save: root.m.media-kind > 0 && !root.m.revoked;
     property <bool> can-reveal: (root.m.media-kind == 3 || root.m.media-kind == 4) && root.m.has-local && !root.m.revoked;
     property <length> menu-w: 190px;
+    property <bool> can-save-saved: root.m.can-share && SavedMessages.jid != "" && SavedMessages.jid != SavedMessages.open-chat;
     property <string> translate-label: root.m.revoked || !root.m.can-translate ? "" : (root.m.tr-state == 2 ? "Show original" : (root.m.tr-state == 4 ? "Show translation" : "Translate"));
     property <bool> can-info: root.m.mine && !root.m.revoked && root.m.status > 1;
-    property <length> menu-h: 12px + 34px * ((root.m.revoked ? 0 : 4) + (root.m.can-copy ? 1 : 0) + (root.translate-label != "" ? 1 : 0) + (root.can-download ? 1 : 0) + (root.can-open ? 1 : 0) + (root.can-save ? 1 : 0) + (root.can-reveal ? 1 : 0) + (root.m.can-share ? 1 : 0) + (root.m.can-edit ? 1 : 0) + (root.can-info ? 1 : 0) + 2);
+    property <length> menu-h: 12px + 34px * ((root.m.revoked ? 0 : 4) + (root.m.can-copy ? 1 : 0) + (root.translate-label != "" ? 1 : 0) + (root.can-download ? 1 : 0) + (root.can-open ? 1 : 0) + (root.can-save ? 1 : 0) + (root.can-reveal ? 1 : 0) + (root.m.can-share ? 1 : 0) + (root.can-save-saved ? 1 : 0) + (root.m.can-edit ? 1 : 0) + (root.can-info ? 1 : 0) + 2);
 
     // Opens the context menu with its corner at (px, py) of this bubble.
     function open-menu(px: length, py: length) {
@@ -253,7 +271,7 @@ component Bubble inherits Rectangle {
         if root.m.quoted != "": Rectangle {
             height: quoted-text.preferred-height + 12px;
             preferred-width: quoted-text.preferred-width + 24px;
-            background: #0000004d;
+            background: Theme.card-bg;
             border-radius: 6px;
             Rectangle {
                 x: 0px;
@@ -284,7 +302,7 @@ component Bubble inherits Rectangle {
 
                 width: self.has-pic ? self.pic.width * self.sc * 1px : min(root.media-w, 240px);
                 height: self.has-pic ? self.pic.height * self.sc * 1px : 150px;
-                background: #0f171c;
+                background: Theme.media-bg;
                 border-radius: 6px;
                 clip: true;
 
@@ -381,7 +399,7 @@ component Bubble inherits Rectangle {
                 width: 40px;
                 height: 40px;
                 border-radius: 6px;
-                background: #0000004d;
+                background: Theme.card-bg;
                 Text {
                     text: root.m.file-ext;
                     color: Theme.tick-read;
@@ -512,11 +530,11 @@ component Bubble inherits Rectangle {
                 width: parent.width - 46px;
                 height: 4px;
                 border-radius: 2px;
-                background: #ffffff33;
+                background: Theme.track;
                 Rectangle {
                     x: 0px;
                     width: parent.width * root.m.play-progress;
-                    background: root.m.mine ? #ffffffcc : Theme.accent;
+                    background: root.m.mine ? Theme.on-mine : Theme.accent;
                     border-radius: 2px;
                 }
                 if root.m.play-state > 0: Rectangle {
@@ -525,7 +543,7 @@ component Bubble inherits Rectangle {
                     width: 10px;
                     height: 10px;
                     border-radius: 5px;
-                    background: root.m.mine ? white : Theme.accent;
+                    background: root.m.mine ? (Theme.dark ? white : Theme.accent) : Theme.accent;
                 }
             }
             if root.m.play-state > 0: Rectangle {
@@ -534,7 +552,7 @@ component Bubble inherits Rectangle {
                 width: 36px;
                 height: 18px;
                 border-radius: 9px;
-                background: speed-ta.has-hover ? #ffffff40 : #ffffff26;
+                background: speed-ta.has-hover ? Theme.track-hi : Theme.track-lo;
                 Text {
                     text: VoiceSpeed.label;
                     color: Theme.text;
@@ -601,7 +619,7 @@ component Bubble inherits Rectangle {
             property <length> desc-h: root.m.link-desc != "" ? 48px : 0px;
             preferred-width: min(300px, root.max-w - 20px);
             height: self.thumb-h + 10px + self.title-h + self.desc-h + 16px + 8px;
-            background: #0000004d;
+            background: Theme.card-bg;
             border-radius: 6px;
             clip: true;
             if root.m.link-has-thumb: Image {
@@ -676,7 +694,7 @@ component Bubble inherits Rectangle {
         // ---- translation under the text ----
         if root.m.tr-state != 0 && !root.m.revoked: Rectangle {
             height: 1px;
-            background: root.m.mine ? #ffffff30 : Theme.divider;
+            background: root.m.mine ? Theme.track : Theme.divider;
         }
         if root.m.tr-state == 1 && !root.m.revoked: Text {
             text: "Translating\u{2026}";
@@ -850,7 +868,7 @@ component Bubble inherits Rectangle {
         width: root.m.revoked ? 24px : 104px;
         height: 20px;
         border-radius: 10px;
-        background: root.m.mine ? #0b4a3e : #17212a;
+        background: root.m.mine ? Theme.my-quote : Theme.quote-bg;
         if !root.m.revoked: Text {
             x: 0px;
             width: 26px;
@@ -914,6 +932,7 @@ component Bubble inherits Rectangle {
             can-save: root.can-save;
             can-edit: root.m.can-edit;
             can-forward: root.m.can-share;
+            can-save-to-saved: root.can-save-saved;
             can-pin: !root.m.revoked;
             pinned: root.m.pinned;
             can-star: !root.m.revoked;
@@ -925,6 +944,10 @@ component Bubble inherits Rectangle {
             }
             forward => {
                 MsgOps.forward-one(root.m.id);
+                menu.close();
+            }
+            save-to-saved => {
+                SavedMessages.save(root.m.id);
                 menu.close();
             }
             pin => {
@@ -1363,6 +1386,7 @@ export component ChatView inherits Rectangle {
     }
     public function clear-composer() {
         input.text = "";
+        Mentions.reset-undo("", 0);
     }
     public pure function composer-text() -> string {
         return input.text;
@@ -1373,6 +1397,21 @@ export component ChatView inherits Rectangle {
     public function set-composer(text: string, cursor: int) {
         input.text = text;
         input.set-selection-offsets(cursor, cursor);
+        Mentions.note(input.text, input.cursor-position-byte-offset, true);
+    }
+    // Ctrl+Z / Ctrl+Y: the composer keeps its own history because Slint drops
+    // its own whenever the text is assigned from outside.
+    function history-step(redo: bool) {
+        if (root.gated || ComposeTranslate.busy) {
+            return;
+        }
+        let t = Mentions.history(input.text, input.cursor-position-byte-offset, redo);
+        if (Mentions.undo-ok) {
+            input.text = t;
+            input.set-selection-offsets(Mentions.undo-cursor, Mentions.undo-cursor);
+            root.composing(input.text);
+            Mentions.edited(input.text, input.cursor-position-byte-offset);
+        }
     }
     // Applies WhatsApp formatting to the composer selection (see format.rs).
     function apply-format(kind: int) {
@@ -1382,6 +1421,7 @@ export component ChatView inherits Rectangle {
         input.text = Mentions.format(input.text, input.anchor-position-byte-offset, input.cursor-position-byte-offset, kind);
         input.set-selection-offsets(Mentions.fmt-start, Mentions.fmt-end);
         input.focus();
+        Mentions.note(input.text, input.cursor-position-byte-offset, true);
         root.composing(input.text);
         Mentions.edited(input.text, input.cursor-position-byte-offset);
     }
@@ -1436,6 +1476,12 @@ export component ChatView inherits Rectangle {
         root.send-message(input.text);
         input.text = "";
     }
+    function open-schedule() {
+        if (root.gated || ComposeTranslate.busy || root.recording || input.text == "") {
+            return;
+        }
+        Schedule.open-dialog(input.text);
+    }
 
     if !root.has-chat: Text {
         text: "Select a chat to start messaging";
@@ -1447,6 +1493,11 @@ export component ChatView inherits Rectangle {
 
     Rectangle {
         visible: root.has-chat;
+        WallpaperLayer {
+            y: 60px;
+            width: parent.width;
+            height: parent.height - 60px;
+        }
         // Header
         Rectangle {
             y: 0px;
@@ -1464,7 +1515,7 @@ export component ChatView inherits Rectangle {
             header-title := Text {
                 x: 68px;
                 y: root.header-subtitle == "" ? (parent.height - self.height) / 2 : 10px;
-                width: min(self.preferred-width, parent.width - 84px - 96px - (root.header-receipts-off ? 24px : 0px));
+                width: min(self.preferred-width, parent.width - 84px - 96px - (root.header-receipts-off ? 24px : 0px) - (Schedule.chat-count > 0 ? 40px : 0px));
                 text: root.header-name;
                 color: Theme.text;
                 font-size: 16px;
@@ -1487,7 +1538,7 @@ export component ChatView inherits Rectangle {
             if root.header-subtitle != "": Text {
                 x: 68px;
                 y: 33px;
-                width: parent.width - 84px - 96px;
+                width: parent.width - 84px - 96px - (Schedule.chat-count > 0 ? 40px : 0px);
                 text: root.header-subtitle;
                 color: Theme.secondary;
                 font-size: 13px;
@@ -1526,7 +1577,7 @@ export component ChatView inherits Rectangle {
                     x: parent.width + 40px - 260px;
                     y: 52px;
                     width: 260px;
-                    height: 12px + 34px * (root.receipts-global-off || root.header-receipts-off ? 3 : 2);
+                    height: 12px + 34px * (root.receipts-global-off || root.header-receipts-off ? 5 : 4);
                     close-policy: close-on-click-outside;
                     Rectangle {
                         width: parent.width;
@@ -1559,6 +1610,20 @@ export component ChatView inherits Rectangle {
                                     header-menu.close();
                                 }
                             }
+                            MenuRow {
+                                label: "Wallpaper\u{2026}";
+                                clicked => {
+                                    AppearanceState.open-wallpaper(true);
+                                    header-menu.close();
+                                }
+                            }
+                            MenuRow {
+                                label: "Export chat\u{2026}";
+                                clicked => {
+                                    ExportState.open-dialog();
+                                    header-menu.close();
+                                }
+                            }
                         }
                     }
                 }
@@ -1585,6 +1650,25 @@ export component ChatView inherits Rectangle {
                             root.open-search();
                         }
                     }
+                }
+            }
+            // Scheduled messages of this chat ("Send later").
+            if Schedule.chat-count > 0: Rectangle {
+                x: parent.width - 128px;
+                y: 12px;
+                width: 36px;
+                height: 36px;
+                border-radius: 18px;
+                background: sched-btn.has-hover ? Theme.hover : transparent;
+                IconClock {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    size: 20px;
+                    color: Theme.accent;
+                }
+                sched-btn := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { Schedule.open-chat-list(); }
                 }
             }
         }
@@ -1668,7 +1752,7 @@ export component ChatView inherits Rectangle {
                 y: 0px;
                 width: parent.width;
                 height: composer.strip-h;
-                background: #1a262d;
+                background: Theme.strip-bg;
                 Text {
                     x: 14px;
                     width: parent.width - 28px - 80px;
@@ -1717,7 +1801,7 @@ export component ChatView inherits Rectangle {
                 y: 8px + composer.strip-h;
                 width: parent.width - 20px;
                 height: 50px;
-                background: #1a262d;
+                background: Theme.strip-bg;
                 border-radius: 8px;
                 Rectangle {
                     x: 0px;
@@ -1868,6 +1952,36 @@ export component ChatView inherits Rectangle {
                             if (e.modifiers.control && (e.text == "v" || e.text == "V" || e.text == "\u{16}") && !root.gated && root.paste()) {
                                 return accept;
                             }
+                            // Cut, undo, redo, explicitly (layout_keys.rs makes e.text
+                            // the Latin letter on every keyboard layout).
+                            if (e.modifiers.control && !e.modifiers.alt && !root.gated && !ComposeTranslate.busy) {
+                                if (!e.modifiers.shift && (e.text == "x" || e.text == "X" || e.text == "\u{18}")) {
+                                    input.cut();
+                                    return accept;
+                                }
+                                if (!e.modifiers.shift && (e.text == "z" || e.text == "Z" || e.text == "\u{1a}")) {
+                                    root.history-step(false);
+                                    return accept;
+                                }
+                                if ((!e.modifiers.shift && (e.text == "y" || e.text == "Y" || e.text == "\u{19}"))
+                                    || (e.modifiers.shift && (e.text == "z" || e.text == "Z" || e.text == "\u{1a}"))) {
+                                    root.history-step(true);
+                                    return accept;
+                                }
+                            }
+                            if (e.text == Key.Delete && e.modifiers.shift && !e.modifiers.control && !e.modifiers.alt
+                                && !root.gated && !ComposeTranslate.busy && input.anchor-position-byte-offset != input.cursor-position-byte-offset) {
+                                input.cut();
+                                return accept;
+                            }
+                            // Home / End: Slint goes to the visual left / right edge,
+                            // which in a right-to-left paragraph is the logical end / start.
+                            if ((e.text == Key.Home || e.text == Key.End) && !e.modifiers.control && !e.modifiers.alt && !e.modifiers.meta
+                                && Mentions.line-nav(input.text, input.anchor-position-byte-offset, input.cursor-position-byte-offset,
+                                    e.text == Key.Home, e.modifiers.shift)) {
+                                input.set-selection-offsets(Mentions.nav-anchor, Mentions.nav-cursor);
+                                return accept;
+                            }
                             // Formatting shortcuts. Ctrl+letter may arrive as the
                             // control character (Ctrl+B = \u{2}, Ctrl+I = \u{9},
                             // Ctrl+Shift+X = \u{18}, Ctrl+Shift+M = \u{d}).
@@ -1933,6 +2047,7 @@ export component ChatView inherits Rectangle {
                                 wrap: word-wrap;
                                 single-line: false;
                                 edited => {
+                                    Mentions.note(self.text, self.cursor-position-byte-offset, false);
                                     root.composing(self.text);
                                     Mentions.edited(self.text, self.cursor-position-byte-offset);
                                 }
@@ -2073,6 +2188,7 @@ export component ChatView inherits Rectangle {
                             vertical-alignment: center;
                         }
                     }
+                    // Right-click, or the small chevron: "Send later…".
                     TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
@@ -2080,6 +2196,62 @@ export component ChatView inherits Rectangle {
                                 root.start-record();
                             } else {
                                 root.do-send();
+                            }
+                        }
+                        pointer-event(e) => {
+                            if (e.button == PointerEventButton.right && e.kind == PointerEventKind.down && input.text != "" && !root.gated) {
+                                send-menu.show();
+                            }
+                        }
+                    }
+                    if input.text != "" && !root.gated: Rectangle {
+                        x: parent.width - 15px;
+                        y: parent.height - 17px;
+                        width: 16px;
+                        height: 16px;
+                        border-radius: 8px;
+                        background: Theme.panel;
+                        border-width: 1px;
+                        border-color: Theme.divider;
+                        Chevron {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2 + 1px;
+                            width: 8px;
+                            height: 5px;
+                            tint: sched-chev.has-hover ? Theme.text : Theme.secondary;
+                        }
+                        sched-chev := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { send-menu.show(); }
+                        }
+                    }
+                    property <bool> send-menu-shown: send-menu.is-open;
+                    changed send-menu-shown => { PopupState.open = max(0, PopupState.open + (self.send-menu-shown ? 1 : -1)); }
+                    // Opens upwards, right edge on the Send button. The callback
+                    // runs before the popup closes.
+                    send-menu := PopupWindow {
+                        x: parent.width - self.width;
+                        y: -self.height - 8px;
+                        width: 170px;
+                        height: 12px + 34px;
+                        close-policy: close-on-click-outside;
+                        Rectangle {
+                            width: parent.width;
+                            height: parent.height;
+                            background: Theme.panel;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: Theme.divider;
+                            VerticalLayout {
+                                padding-top: 6px;
+                                padding-bottom: 6px;
+                                MenuRow {
+                                    label: "Send later…";
+                                    clicked => {
+                                        root.open-schedule();
+                                        send-menu.close();
+                                    }
+                                }
                             }
                         }
                     }
@@ -2266,7 +2438,7 @@ export component ChatView inherits Rectangle {
                     height: 6px;
                     visible: !root.rec-stopped;
                     border-radius: 3px;
-                    background: #ffffff22;
+                    background: Theme.track-lo;
                     Rectangle {
                         x: 0px;
                         width: parent.width * clamp(root.rec-level, 0.0, 1.0);

@@ -16,26 +16,32 @@ import { IconClose } from "icons.slint";
 import { LoginView } from "login.slint";
 import { ChatList } from "chat_list.slint";
 import { ChatView, MentionItem, Mentions, ComposeLang, ComposeTranslate, AttachActions } from "chat_view.slint";
-import { Toast } from "msg_menu.slint";
+import { Toast, SavedMessages } from "msg_menu.slint";
 import { MsgOps, PickItem, ReceiptRow, StarredRow } from "msgops.slint";
 import { MessageInfoPanel } from "message_info.slint";
 import { StarredPanel } from "starred.slint";
 import { AttachItem, AttachPreview, AttachOptions, DropOverlay } from "attach_preview.slint";
 import { ShareState, ShareRow, SharePicker } from "share_contact.slint";
 import { TimerState, TimerOption, TimerDialog } from "timer_dialog.slint";
+import { ExportState, ExportDialog } from "export.slint";
+import { Schedule, SchedRow, QuickPick, ScheduleDialog, ScheduledList, OverdueBanner } from "schedule.slint";
 import { CalendarState, CalendarCell, CalendarOverlay } from "calendar.slint";
 import { SearchFilters, SearchHitItem, SenderItem } from "search_filters.slint";
 import { StorageUsage, StorageChat, StorageSegment, StorageType, StorageDialog } from "storage.slint";
 import { TranslateState, LangItem, TranslateDialog } from "translate.slint";
-import { ContactInfoPanel, ContactInfoModel, GroupMemberItem, GalleryThumb, GalleryDoc, GalleryLink, InfoGallery } from "contact_info.slint";
+import { AppearanceState, WallpaperDialog } from "appearance.slint";
+export { AppearanceState, WallpaperPreset } from "appearance.slint";
+import { ContactInfoPanel, ContactInfoModel, GroupMemberItem, GalleryThumb, GalleryDoc, GalleryLink, InfoGallery, NotifyInfo, SoundChoice } from "contact_info.slint";
 import { GroupAdmin, GroupDialogs, MemberFailure } from "group_admin.slint";
 import { GroupNew, GroupNewDialogs } from "group_new.slint";
 import { CallState, CallBannerItem, CallBanners } from "call_banner.slint";
 import { LockState, LockScreen } from "lock.slint";
 import { ProxyState, ProxyBlockedView } from "proxy.slint";
 import { FolderState, FolderTab, FolderPickRow, FolderMenuRow, FolderDialogs } from "folders.slint";
+import { MediaViewer, MediaViewerState } from "media_viewer.slint";
+export { MediaViewerState }
 
-export { CalendarState, CalendarCell, SearchFilters, SearchHitItem, SenderItem, StorageUsage, StorageChat, StorageSegment, StorageType, ProxyState,FolderState, FolderTab, FolderPickRow, FolderMenuRow, CallState, CallBannerItem, GroupAdmin, GroupNew, MemberFailure, LockState, PollActions, PollState, PollField, StatusPost, LocationState, LocationActions, MsgOps, PickItem, ReceiptRow, StarredRow, AccountState, ChatActions, ContactRowItem, StorageState, StorageFolder, MovingWindow, Theme, ChatItem, MsgItem, ProfileItem, ReactionConfig, PollOptionItem, ReactionChipItem, EmojiRow, EmojiTab, SettingsModel, StatusEntry, StatusSlideItem, ContactInfoModel, GroupMemberItem, ContactEntry, GalleryThumb, GalleryDoc, GalleryLink, InfoGallery, AttachItem, AttachOptions, ShareState, ShareRow, TimerState, TimerOption, TranslateState, LangItem, MentionItem, Mentions, ComposeLang, ComposeTranslate, PhoneLinks, VoiceSpeed, AttachActions }
+export { ExportState, SavedMessages, NotifyInfo, SoundChoice, CalendarState, CalendarCell, SearchFilters, SearchHitItem, SenderItem, StorageUsage, StorageChat, StorageSegment, StorageType, ProxyState,FolderState, FolderTab, FolderPickRow, FolderMenuRow, CallState, CallBannerItem, GroupAdmin, GroupNew, MemberFailure, LockState, PollActions, PollState, PollField, StatusPost, LocationState, LocationActions, MsgOps, PickItem, ReceiptRow, StarredRow, AccountState, ChatActions, ContactRowItem, StorageState, StorageFolder, MovingWindow, Theme, ChatItem, MsgItem, ProfileItem, ReactionConfig, PollOptionItem, ReactionChipItem, EmojiRow, EmojiTab, SettingsModel, StatusEntry, StatusSlideItem, ContactInfoModel, GroupMemberItem, ContactEntry, GalleryThumb, GalleryDoc, GalleryLink, InfoGallery, AttachItem, AttachOptions, ShareState, ShareRow, TimerState, TimerOption, TranslateState, LangItem, MentionItem, Mentions, ComposeLang, ComposeTranslate, PhoneLinks, VoiceSpeed, AttachActions, Schedule, SchedRow, QuickPick }
 
 export component MainWindow inherits Window {
     in property <string> window-title: "WaClient";
@@ -251,8 +257,11 @@ export component MainWindow inherits Window {
     callback attach-cancel();
     callback attach-remove(int);
 
+    // The std widgets follow the app theme.
+    property <bool> theme-dark: Theme.dark;
+    changed theme-dark => { Palette.color-scheme = self.theme-dark ? ColorScheme.dark : ColorScheme.light; }
     init => {
-        Palette.color-scheme = ColorScheme.dark;
+        Palette.color-scheme = Theme.dark ? ColorScheme.dark : ColorScheme.light;
     }
 
     public function scroll-to-bottom() { view.scroll-to-bottom(); }
@@ -288,7 +297,7 @@ export component MainWindow inherits Window {
             }
             // Ctrl+Alt+1..9: chat folder N (Ctrl+1..5 is the profile switch).
             if (e.modifiers.control && e.modifiers.alt && !e.modifiers.shift && root.dialog-kind == 0 && !root.show-settings
-                && !root.viewer-open && !root.attach-open && root.logged-in && FolderState.dialog == 0) {
+                && !root.viewer-open && !MediaViewerState.open && !root.attach-open && root.logged-in && FolderState.dialog == 0) {
                 if (e.text == "1") { FolderState.select-at(0); return accept; }
                 if (e.text == "2") { FolderState.select-at(1); return accept; }
                 if (e.text == "3") { FolderState.select-at(2); return accept; }
@@ -308,7 +317,7 @@ export component MainWindow inherits Window {
             }
             // Telegram-style chat switching: Ctrl+Tab / Ctrl+Shift+Tab and
             // Alt+Down / Alt+Up (Rust ignores them while a dialog is open).
-            if (root.dialog-kind == 0 && !root.show-settings && !root.viewer-open && !root.attach-open && root.logged-in
+            if (root.dialog-kind == 0 && !root.show-settings && !root.viewer-open && !MediaViewerState.open && !root.attach-open && root.logged-in
                 && !root.status-mode && PopupState.open == 0) {
                 if (e.modifiers.control && !e.modifiers.alt && (e.text == Key.Tab || e.text == Key.Backtab)) {
                     root.step-chat(!(e.modifiers.shift || e.text == Key.Backtab));
@@ -576,11 +585,27 @@ export component MainWindow inherits Window {
                     width: parent.width;
                     height: parent.height;
                 }
+                if Schedule.list-open: ScheduledList {
+                    width: parent.width;
+                    height: parent.height;
+                }
+                if Schedule.dialog != 0: ScheduleDialog {
+                    width: parent.width;
+                    height: parent.height;
+                }
+                if ExportState.open: ExportDialog {
+                    width: parent.width;
+                    height: parent.height;
+                }
                 if StorageUsage.dialog != 0: StorageDialog {
                     width: parent.width;
                     height: parent.height;
                 }
                 if TranslateState.dialog-open: TranslateDialog {
+                    width: parent.width;
+                    height: parent.height;
+                }
+                if AppearanceState.dialog-open: WallpaperDialog {
                     width: parent.width;
                     height: parent.height;
                 }
@@ -591,6 +616,10 @@ export component MainWindow inherits Window {
                 if root.drop-hover: DropOverlay {
                     width: parent.width;
                     height: parent.height;
+                }
+                if Schedule.overdue-count > 0: OverdueBanner {
+                    y: root.banner-kind > 0 ? 38px : 0px;
+                    width: parent.width;
                 }
                 if root.banner-kind > 0: Rectangle {
                     y: 0px;
@@ -685,6 +714,13 @@ export component MainWindow inherits Window {
                 open-media => { root.status-open-media(); }
                 pause(p) => { root.status-pause(p); }
             }
+        }
+
+        // Photo/video viewer of the chat media (zoom, rotate, browse).
+        if MediaViewerState.open: MediaViewer {
+            x: 64px;
+            width: parent.width - 64px;
+            height: parent.height;
         }
 
         ProfileRail {

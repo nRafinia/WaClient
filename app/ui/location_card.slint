@@ -34,7 +34,7 @@ export component LocationPin inherits Rectangle {
 
 // A stylised map tile with a pin; the real map opens in the browser.
 export component MapTile inherits Rectangle {
-    background: #2b3b44;
+    background: Theme.map-bg;
     border-radius: 6px;
     clip: true;
     // Streets and a river, in the 260x96 grid of the tile.
@@ -44,7 +44,7 @@ export component MapTile inherits Rectangle {
         viewbox-width: 260;
         viewbox-height: 96;
         commands: "M 0 30 L 260 38 M 0 74 L 260 66 M 70 0 L 82 96 M 176 0 L 168 96 M 120 0 L 128 96";
-        stroke: #3e525d;
+        stroke: Theme.map-road;
         stroke-width: 5px;
         fill: transparent;
     }
@@ -54,7 +54,7 @@ export component MapTile inherits Rectangle {
         viewbox-width: 260;
         viewbox-height: 96;
         commands: "M 0 88 C 60 70 100 96 150 80 C 200 64 230 80 260 60";
-        stroke: #35657a;
+        stroke: Theme.map-river;
         stroke-width: 9px;
         fill: transparent;
     }
@@ -76,7 +76,7 @@ export component LocationCard inherits Rectangle {
     preferred-width: root.content-w;
     width: root.content-w;
     height: 96px + 34px;
-    background: #0000004d;
+    background: Theme.card-bg;
     border-radius: 6px;
     clip: true;
 

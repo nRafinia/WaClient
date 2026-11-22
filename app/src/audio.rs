@@ -774,6 +774,125 @@ where
         .context("open the input stream")
 }
 
+// ---- notification chimes --------------------------------------------------------
+
+/// One synthesized note: frequency in Hz, start and length in seconds.
+pub type Note = (f32, f32, f32);
+
+/// Longest chime we render (the shortest toast sound is far below this).
+const CHIME_MAX_SECS: f32 = 3.0;
+/// True while a chime plays: a second one arriving meanwhile is skipped, so a
+/// burst of messages never stacks sounds.
+static CHIME_BUSY: AtomicBool = AtomicBool::new(false);
+
+/// Renders notes as mono f32 at `rate`: a sine with two soft overtones, a 4 ms
+/// attack and an exponential decay, peak-normalized so every chime is equally loud.
+pub fn render_notes(notes: &[Note], rate: u32) -> Vec<f32> {
+    let rate_f = rate as f32;
+    let end = notes.iter().map(|(_, at, len)| at + len).fold(0.0f32, f32::max).min(CHIME_MAX_SECS);
+    let total = (end * rate_f) as usize;
+    let mut out = vec![0.0f32; total];
+    for &(freq, at, len) in notes {
+        let first = (at * rate_f) as usize;
+        let count = (len * rate_f) as usize;
+        for i in 0..count {
+            let Some(slot) = out.get_mut(first + i) else { break };
+            let t = i as f32 / rate_f;
+            let phase = 2.0 * std::f32::consts::PI * freq * t;
+            let wave = phase.sin() + 0.3 * (2.0 * phase).sin() + 0.1 * (3.0 * phase).sin();
+            let attack = (t / 0.004).min(1.0);
+            let decay = (-5.0 * t / len.max(0.01)).exp();
+            let tail = ((len - t) / 0.01).clamp(0.0, 1.0);
+            *slot += wave * attack * decay * tail;
+        }
+    }
+    let peak = out.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    if peak > 0.0 {
+        let gain = 0.4 / peak;
+        out.iter_mut().for_each(|v| *v *= gain);
+    }
+    out
+}
+
+/// Plays a chime on its own output stream and thread. The OS mixer blends it
+/// with a voice note that may be playing, so neither is interrupted; the chime
+/// is skipped only when another chime is still sounding.
+pub fn play_chime(notes: &'static [Note]) {
+    if CHIME_BUSY.swap(true, Ordering::AcqRel) {
+        log::debug!("chime skipped: another one is still playing");
+        return;
+    }
+    let spawned = std::thread::Builder::new().name("chime".into()).spawn(move || {
+        if let Err(e) = run_chime(notes) {
+            log::warn!("notification sound failed: {e:#}");
+        }
+        CHIME_BUSY.store(false, Ordering::Release);
+    });
+    if let Err(e) = spawned {
+        CHIME_BUSY.store(false, Ordering::Release);
+        log::warn!("could not start the notification sound: {e}");
+    }
+}
+
+fn run_chime(notes: &[Note]) -> Result<()> {
+    let device = cpal::default_host()
+        .default_output_device()
+        .ok_or_else(|| anyhow!("no audio output device"))?;
+    let cfg = device.default_output_config().context("query the output device")?;
+    let format = cfg.sample_format();
+    let config: StreamConfig = cfg.into();
+    let samples = Arc::new(render_notes(notes, config.sample_rate));
+    let done = Arc::new(AtomicBool::new(false));
+    let stream = match format {
+        SampleFormat::F32 => build_chime::<f32>(&device, config, samples, done.clone()),
+        SampleFormat::I16 => build_chime::<i16>(&device, config, samples, done.clone()),
+        SampleFormat::I32 => build_chime::<i32>(&device, config, samples, done.clone()),
+        SampleFormat::U16 => build_chime::<u16>(&device, config, samples, done.clone()),
+        other => bail!("unsupported output sample format {other}"),
+    }?;
+    stream.play().context("start the output stream")?;
+    let deadline = Instant::now() + Duration::from_secs_f32(CHIME_MAX_SECS + 1.0);
+    while !done.load(Ordering::Acquire) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // Lets the device drain its buffer before the stream is dropped.
+    std::thread::sleep(Duration::from_millis(150));
+    Ok(())
+}
+
+fn build_chime<T: SizedSample + FromSample<f32> + Send + 'static>(
+    device: &Device,
+    config: StreamConfig,
+    samples: Arc<Vec<f32>>,
+    done: Arc<AtomicBool>,
+) -> Result<Stream> {
+    let out_ch = usize::from(config.channels).max(1);
+    let mut pos = 0usize;
+    device
+        .build_output_stream(
+            config,
+            move |out: &mut [T], _| {
+                for frame in out.chunks_mut(out_ch) {
+                    let v = samples.get(pos).copied().unwrap_or(0.0);
+                    if pos >= samples.len() {
+                        done.store(true, Ordering::Release);
+                    }
+                    pos += 1;
+                    frame.iter_mut().for_each(|slot| *slot = T::from_sample(v));
+                }
+            },
+            |e| {
+                if is_transient_stream_error(&e) {
+                    log::debug!("chime output glitch (ignored): {e}");
+                } else {
+                    log::error!("chime output error: {e}");
+                }
+            },
+            None,
+        )
+        .context("open the output stream")
+}
+
 /// Ogg/Opus bytes for a sine tone; used by demo data and tests.
 #[cfg(any(test, debug_assertions))]
 pub fn synth_tone_ogg(freq: f32, secs: f32) -> Result<Vec<u8>> {
@@ -791,6 +910,18 @@ pub fn synth_tone_ogg(freq: f32, secs: f32) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chime_rendering_is_bounded_audible_and_normalized() {
+        let notes: [Note; 2] = [(660.0, 0.0, 0.3), (880.0, 0.15, 0.4)];
+        let out = render_notes(&notes, 48_000);
+        assert_eq!(out.len(), (0.55f32 * 48_000.0) as usize);
+        let peak = out.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!((peak - 0.4).abs() < 1e-3);
+        assert!(render_notes(&[], 48_000).is_empty());
+        let long = render_notes(&[(440.0, 0.0, 30.0)], 8_000);
+        assert_eq!(long.len(), (CHIME_MAX_SECS * 8_000.0) as usize);
+    }
 
     #[test]
     fn speed_cycles_through_all_three_and_wraps() {

@@ -261,7 +261,12 @@ pub fn enable_file_drop_with_hover(
     let batch: Rc<RefCell<Vec<PathBuf>>> = Rc::default();
     let hovering = Rc::new(RefCell::new(false));
 
-    window.on_winit_window_event(move |_, event| {
+    let mods = crate::layout_keys::new_state();
+    window.on_winit_window_event(move |window, event| {
+        // Ctrl shortcuts on a non-Latin keyboard layout (see layout_keys.rs).
+        if crate::layout_keys::remap(window, event, &mods) {
+            return EventResult::PreventDefault;
+        }
         match event {
             WindowEvent::HoveredFile(_) => {
                 if !hovering.replace(true) {

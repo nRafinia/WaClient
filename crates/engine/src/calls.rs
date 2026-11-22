@@ -331,15 +331,20 @@ fn notify(sh: &Shared, chat_jid: &str, title: String, is_video: bool) {
     if !settings::may_notify(&sh.settings()) {
         return;
     }
-    match sh.store.chat(chat_jid) {
-        Ok(Some(c)) if c.muted_until > now_secs() => return,
-        Ok(_) => {}
-        Err(e) => log::error!("chat lookup failed: {e}"),
-    }
+    // Same contract as message notifications: a muted chat is flagged, the UI decides.
+    let muted = match sh.store.chat(chat_jid) {
+        Ok(Some(c)) => c.muted_until > now_secs(),
+        Ok(None) => false,
+        Err(e) => {
+            log::error!("chat lookup failed: {e}");
+            false
+        }
+    };
     sh.emit(UiEvent::Notify {
         chat_jid: chat_jid.to_string(),
         title,
         body: notify_body(is_video).to_string(),
+        muted,
     });
 }
 

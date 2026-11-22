@@ -17,7 +17,7 @@ use crate::settings::{self, AppSettings};
 use crate::{MainWindow, SettingsModel, StorageFolder, StorageState, Theme, location};
 
 /// Slider drags change settings continuously; the file is written once they settle.
-const SAVE_DELAY: Duration = Duration::from_millis(400);
+pub(super) const SAVE_DELAY: Duration = Duration::from_millis(400);
 
 /// Where a profile's `settings.json` lives. The demo never writes into the
 /// real data directory: it uses a temporary folder instead.
@@ -34,6 +34,8 @@ fn to_model(s: &AppSettings, autostart: bool) -> SettingsModel {
         notifications: s.engine.notifications,
         notification_preview: s.notification_preview,
         notification_sound: s.notification_sound,
+        notification_tone: s.notification_tone.as_str().into(),
+        show_saved_messages: s.show_saved_messages,
         send_read_receipts: s.engine.send_read_receipts,
         send_status_receipts: s.engine.send_status_receipts,
         send_typing: s.engine.send_typing,
@@ -55,6 +57,8 @@ fn apply_model(base: &AppSettings, m: &SettingsModel) -> AppSettings {
     s.engine.notifications = m.notifications;
     s.notification_preview = m.notification_preview;
     s.notification_sound = m.notification_sound;
+    s.notification_tone = super::notify_ui::valid_tone(m.notification_tone.as_str()).to_string();
+    s.show_saved_messages = m.show_saved_messages;
     s.engine.send_read_receipts = m.send_read_receipts;
     s.engine.send_status_receipts = m.send_status_receipts;
     s.engine.send_typing = m.send_typing;
@@ -122,8 +126,18 @@ impl App {
             self.settings_dirty.borrow_mut().insert(p.id.clone());
             self.settings_timer.start(TimerMode::SingleShot, SAVE_DELAY, || with_app(App::flush_settings));
             self.apply_profile_prefs(&p);
+            self.notify_settings_changed();
+            if next.show_saved_messages != prev.show_saved_messages {
+                self.refresh_chats();
+            }
         }
         win.set_settings(to_model(&next, next.start_minimized_with_windows));
+    }
+
+    /// Schedules the write of a profile's settings after a change made outside the Settings page.
+    pub(super) fn mark_settings_dirty(&self, p: &ProfileState) {
+        self.settings_dirty.borrow_mut().insert(p.id.clone());
+        self.settings_timer.start(TimerMode::SingleShot, SAVE_DELAY, || with_app(App::flush_settings));
     }
 
     /// Remembers the audience of the last status post for this profile.
@@ -160,6 +174,7 @@ impl App {
         win.global::<Theme>().set_font_scale(s.font_scale);
         win.set_enter_sends(s.enter_sends);
         self.close_to_tray.set(s.close_to_tray);
+        self.appearance_apply(p);
         self.translate_sync(&s.engine);
     }
 

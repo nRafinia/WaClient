@@ -5,13 +5,18 @@ import { TimerChips } from "timer_dialog.slint";
 import { AppLockSection } from "lock.slint";
 import { ProxySection } from "proxy.slint";
 import { TranslationSection } from "translate.slint";
+import { AppearanceSection } from "appearance.slint";
 import { StorageSection } from "storage.slint";
+import { NotifyInfo } from "contact_info.slint";
 
 // font-scale-index: 0 small, 1 normal, 2 large.
 export struct SettingsModel {
     notifications: bool,
     notification-preview: bool,
     notification-sound: bool,
+    // Id of the sound used while notification-sound is on ("default" = system toast sound).
+    notification-tone: string,
+    show-saved-messages: bool,
     send-read-receipts: bool,
     send-status-receipts: bool,
     send-typing: bool,
@@ -951,6 +956,15 @@ export component SettingsPage inherits Rectangle {
                             }
                         }
                         ToggleRow {
+                            title: "Show Saved Messages";
+                            subtitle: "Pins a chat with yourself at the top of the chat list";
+                            checked: root.model.show-saved-messages;
+                            toggled => {
+                                root.model.show-saved-messages = !root.model.show-saved-messages;
+                                root.changed(root.model);
+                            }
+                        }
+                        ToggleRow {
                             title: "Send link previews";
                             subtitle: "Fetches the linked page from your computer when you send a link";
                             checked: root.model.send-link-previews;
@@ -1007,6 +1021,10 @@ export component SettingsPage inherits Rectangle {
                                 }
                             }
                         }
+
+                        Divider { }
+
+                        AppearanceSection { }
 
                         Divider { }
 
@@ -1101,6 +1119,45 @@ export component SettingsPage inherits Rectangle {
                             toggled => {
                                 root.model.notification-sound = !root.model.notification-sound;
                                 root.changed(root.model);
+                            }
+                        }
+                        // Sound choice: None is the switch above; a tap plays a preview.
+                        if root.model.notification-sound: Rectangle {
+                            height: 52px;
+                            opacity: root.model.notifications ? 1.0 : 0.45;
+                            HorizontalLayout {
+                                padding-left: 24px;
+                                padding-right: 24px;
+                                spacing: 8px;
+                                alignment: start;
+                                for s in NotifyInfo.global-sounds: Rectangle {
+                                    property <bool> on: s.id == root.model.notification-tone;
+                                    height: 34px;
+                                    width: sound-text.preferred-width + 28px;
+                                    y: (parent.height - self.height) / 2;
+                                    border-radius: 17px;
+                                    border-width: 1px;
+                                    border-color: self.on ? Theme.accent : Theme.divider;
+                                    background: self.on ? Theme.accent : (sound-ta.has-hover ? Theme.selected : transparent);
+                                    sound-text := Text {
+                                        text: s.label;
+                                        color: parent.on ? #111b21 : Theme.text;
+                                        font-size: 13px;
+                                        font-weight: 600;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    sound-ta := TouchArea {
+                                        mouse-cursor: root.model.notifications ? pointer : default;
+                                        clicked => {
+                                            if root.model.notifications {
+                                                root.model.notification-tone = s.id;
+                                                root.changed(root.model);
+                                                NotifyInfo.preview-sound(s.id);
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

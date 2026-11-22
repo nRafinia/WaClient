@@ -1,6 +1,8 @@
 //! Persistent user settings: per-profile `settings.json`, the global
 //! "start with Windows" registry value, and the media cache cleanup.
 
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -105,6 +107,98 @@ pub struct StatusAudiencePref {
     pub jids: Vec<String>,
 }
 
+/// Notification exceptions of one chat. `sound`: `None` follows the global
+/// choice, otherwise a sound id (`"none"`, `"default"` or a built-in tone).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChatNotifyPref {
+    pub sound: Option<String>,
+    /// `None` follows the global "show preview" switch.
+    pub preview: Option<bool>,
+    /// Notify even while the chat is muted.
+    pub always: bool,
+}
+
+impl ChatNotifyPref {
+    /// An entry that changes nothing is not worth keeping on disk.
+    pub fn is_default(&self) -> bool {
+        *self == ChatNotifyPref::default()
+    }
+}
+
+/// Chat background. `kind`: 0 none, 1 preset, 2 image (`file` inside the
+/// profile's wallpapers folder). `dim` (percent) darkens an image in dark mode.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WallpaperPref {
+    pub kind: u8,
+    pub preset: u8,
+    pub dim: u8,
+    pub file: String,
+}
+
+impl Default for WallpaperPref {
+    fn default() -> Self {
+        WallpaperPref { kind: 0, preset: 0, dim: 25, file: String::new() }
+    }
+}
+
+pub const WALLPAPER_PRESETS: u8 = 8;
+pub const WALLPAPER_DIM_MAX: u8 = 60;
+pub const ACCENT_COUNT: u8 = 8;
+const MINUTES_PER_DAY: u16 = 24 * 60;
+
+impl WallpaperPref {
+    fn clamped(mut self) -> Self {
+        self.kind = self.kind.min(2);
+        self.preset = self.preset.min(WALLPAPER_PRESETS - 1);
+        self.dim = self.dim.min(WALLPAPER_DIM_MAX);
+        if self.kind == 2 && self.file.is_empty() {
+            self.kind = 0;
+        }
+        self
+    }
+}
+
+/// Look of the app, per profile. `theme_mode`: 0 system, 1 light, 2 dark,
+/// 3 scheduled (dark from `night_from` to `night_to`, minutes after midnight).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AppearanceSettings {
+    pub theme_mode: u8,
+    pub accent: u8,
+    pub night_from: u16,
+    pub night_to: u16,
+    pub wallpaper: WallpaperPref,
+    /// Per-chat overrides keyed by chat JID; a chat without an entry uses `wallpaper`.
+    pub chat_wallpapers: HashMap<String, WallpaperPref>,
+}
+
+impl Default for AppearanceSettings {
+    fn default() -> Self {
+        AppearanceSettings {
+            theme_mode: 2,
+            accent: 0,
+            night_from: 22 * 60,
+            night_to: 7 * 60,
+            wallpaper: WallpaperPref::default(),
+            chat_wallpapers: HashMap::new(),
+        }
+    }
+}
+
+impl AppearanceSettings {
+    pub fn clamped(mut self) -> Self {
+        self.theme_mode = self.theme_mode.min(3);
+        self.accent = self.accent.min(ACCENT_COUNT - 1);
+        self.night_from = self.night_from.min(MINUTES_PER_DAY - 1);
+        self.night_to = self.night_to.min(MINUTES_PER_DAY - 1);
+        self.wallpaper = self.wallpaper.clamped();
+        self.chat_wallpapers = self.chat_wallpapers.into_iter().map(|(k, v)| (k, v.clamped())).collect();
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -116,9 +210,16 @@ pub struct AppSettings {
     /// Show the message text in toasts (otherwise "New message").
     pub notification_preview: bool,
     pub notification_sound: bool,
+    /// Sound id used while `notification_sound` is on (`"default"` = the system toast sound).
+    pub notification_tone: String,
+    /// Per-chat notification exceptions, keyed by chat JID.
+    pub chat_notify: BTreeMap<String, ChatNotifyPref>,
+    /// Pinned "Saved Messages" row at the top of the chat list.
+    pub show_saved_messages: bool,
     pub enter_sends: bool,
     pub font_scale: f32,
     pub status_audience: StatusAudiencePref,
+    pub appearance: AppearanceSettings,
 }
 
 impl Default for AppSettings {
@@ -129,9 +230,13 @@ impl Default for AppSettings {
             start_minimized_with_windows: false,
             notification_preview: true,
             notification_sound: true,
+            notification_tone: "default".to_string(),
+            chat_notify: BTreeMap::new(),
+            show_saved_messages: true,
             enter_sends: true,
             font_scale: 1.0,
             status_audience: StatusAudiencePref::default(),
+            appearance: AppearanceSettings::default(),
         }
     }
 }
@@ -146,6 +251,7 @@ impl AppSettings {
         } else {
             1.0
         };
+        self.appearance = self.appearance.clamped();
         self
     }
 
@@ -298,6 +404,33 @@ mod tests {
         assert!(s.engine.send_presence);
         assert_eq!(s.engine.auto_download_max_mb, 16);
         assert_eq!(s.font_scale_index(), 1);
+    }
+
+    #[test]
+    fn appearance_defaults_and_old_files() {
+        let a = AppearanceSettings::default();
+        assert_eq!((a.theme_mode, a.accent, a.night_from, a.night_to), (2, 0, 22 * 60, 7 * 60));
+        assert_eq!(a.wallpaper.kind, 0);
+        let s: AppSettings = serde_json::from_str("{\"enter_sends\": false}").expect("parse");
+        assert_eq!(s.appearance, a);
+    }
+
+    #[test]
+    fn appearance_is_clamped_and_roundtrips() {
+        let t = TempDir::new();
+        let mut s = AppSettings::default();
+        s.appearance.theme_mode = 3;
+        s.appearance.accent = 200;
+        s.appearance.night_from = 5000;
+        s.appearance.wallpaper = WallpaperPref { kind: 2, preset: 99, dim: 99, file: "g.jpg".into() };
+        s.appearance.chat_wallpapers.insert("a@s.whatsapp.net".into(), WallpaperPref { kind: 2, ..WallpaperPref::default() });
+        save(&t.0, &s).expect("save");
+        let l = load(&t.0).appearance;
+        assert_eq!((l.theme_mode, l.accent, l.night_from), (3, ACCENT_COUNT - 1, 24 * 60 - 1));
+        assert_eq!((l.wallpaper.preset, l.wallpaper.dim), (WALLPAPER_PRESETS - 1, WALLPAPER_DIM_MAX));
+        // An image wallpaper without a file falls back to none.
+        assert_eq!(l.chat_wallpapers["a@s.whatsapp.net"].kind, 0);
+        assert_eq!(l.wallpaper.file, "g.jpg");
     }
 
     #[test]

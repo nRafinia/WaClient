@@ -19,6 +19,7 @@ use wa_engine::{Command, ConnState, MessageStatus, OutgoingMediaKind, STATUS_JID
 use wa_store::{ChatKind, ChatRow, MessageKind, MessageRow};
 
 mod account_ui;
+mod appearance_ui;
 mod attach_ui;
 mod call_ui;
 mod chat_search;
@@ -34,8 +35,10 @@ mod group_new_ui;
 mod info_ui;
 mod location_ui;
 mod lock_ui;
+mod media_viewer;
 mod msg_actions;
 mod msgops_ui;
+mod notify_ui;
 mod phone_ui;
 mod poll_ui;
 mod prefs;
@@ -43,11 +46,14 @@ mod privacy;
 pub mod proxy_ui;
 mod removal;
 mod save_as;
+mod saved_ui;
+mod schedule_ui;
 mod search_ui;
 mod share_ui;
 mod shortcuts;
 mod status;
 mod status_post_ui;
+mod export_ui;
 mod storage_ui;
 mod timer_ui;
 mod translate_ui;
@@ -587,12 +593,18 @@ impl App {
         group_new_ui::wire(win);
         folders_ui::wire(win);
         timer_ui::wire(win);
+        notify_ui::wire(win);
+        saved_ui::wire(win);
+        schedule_ui::wire(win);
         storage_ui::wire(win);
+        export_ui::wire(win);
         translate_ui::wire(win);
+        appearance_ui::wire(win);
         phone_ui::wire(win);
         call_ui::wire(win);
         lock_ui::wire(win);
         search_ui::wire(win);
+        media_viewer::wire(win);
         global_search::wire(win);
         proxy_ui::wire(win);
 
@@ -736,6 +748,7 @@ impl App {
         notes.extend(failures.into_iter().map(|f| format!("Could not start profile {f}")));
         app.save_registry();
         app.render_active();
+        app.schedule_start();
         // After render_active (which clears the banner); a persistent fatal
         // banner of the active profile is not replaced.
         if !notes.is_empty() && app.p().fatal_msg.borrow().is_none() {
@@ -809,12 +822,14 @@ impl App {
         // The outgoing profile's chat is closed: a profile is always entered
         // with no chat open.
         self.status_close();
+        self.media_viewer_close();
         self.close_chat();
         // Pickers and dialogs were opened for the outgoing profile.
         self.share_profile_changed();
         self.group_new_profile_changed();
         self.folders_profile_changed();
         self.translate_profile_changed();
+        self.schedule_profile_changed();
         self.p().st.borrow_mut().query.clear();
         *self.active.borrow_mut() = next.clone();
         self.registry.borrow_mut().last_active = Some(next.id.clone());
@@ -822,6 +837,7 @@ impl App {
         self.render_active();
         // "Other profile" labels depend on which profile is active.
         self.calls_render();
+        self.sched_refresh_ui();
     }
 
     /// Fills the window from the active profile's state.
@@ -1716,7 +1732,7 @@ impl App {
             }
             UiEvent::Typing { chat_jid, composing, .. } => self.on_typing(&p, chat_jid, composing),
             UiEvent::Presence { jid, online, last_seen } => self.on_presence(&p, jid, online, last_seen),
-            UiEvent::Notify { chat_jid, title, body } => self.on_notify(&p, &chat_jid, &title, &body),
+            UiEvent::Notify { chat_jid, title, body, muted } => self.on_notify(&p, &chat_jid, &title, &body, muted),
             UiEvent::HistoryProgress { percent } => {
                 let text = if percent < 100 {
                     format!("Syncing history… {percent}%")
@@ -1801,32 +1817,8 @@ impl App {
         }
     }
 
-    fn on_notify(&self, p: &ProfileState, chat_jid: &str, title: &str, body: &str) {
-        let locked = self.is_locked();
-        let looking = !locked
-            && self.is_active(p)
-            && p.st.borrow().selected.as_deref() == Some(chat_jid)
-            && self.window_active();
-        if looking {
-            return;
-        }
-        let sound = p.settings.borrow().notification_sound;
-        if locked {
-            // Nothing about the chat, the sender or the text while locked.
-            if let Some(d) = self.desktop.borrow().as_ref() {
-                d.notify("WaClient", "New message", &p.id, chat_jid, sound);
-            }
-            return;
-        }
-        let title = if self.multi() { format!("[{}] {title}", p.name()) } else { title.to_string() };
-        let (preview, sound) = {
-            let s = p.settings.borrow();
-            (s.notification_preview, s.notification_sound)
-        };
-        let body = if preview { body } else { "New message" };
-        if let Some(d) = self.desktop.borrow().as_ref() {
-            d.notify(&title, body, &p.id, chat_jid, sound);
-        }
+    fn on_notify(&self, p: &ProfileState, chat_jid: &str, title: &str, body: &str, muted: bool) {
+        self.notify_incoming(p, chat_jid, title, body, muted);
     }
 
     fn on_messages_changed(&self, chat_jid: &str) {
@@ -1976,6 +1968,7 @@ impl App {
             return;
         }
         self.info_media_ready(&p.id, chat_jid, id, path);
+        self.viewer_media_ready(&p.id, chat_jid, id, path);
         let mut st = p.st.borrow_mut();
         st.downloading.remove(id);
         st.failed.remove(id);
@@ -2019,6 +2012,7 @@ impl App {
             return;
         }
         self.info_media_failed(&p.id, chat_jid, id);
+        self.viewer_media_failed(&p.id, chat_jid, id);
         {
             let mut st = p.st.borrow_mut();
             st.downloading.remove(id);
@@ -2094,6 +2088,7 @@ impl App {
             }
         }
         // Archived and muted chats never count (see `unread_total`).
+        self.saved_apply(&p, &full, &mut items, query.is_empty() && !archived_mode);
         self.update_unread(&p, &full);
         p.st.borrow_mut().chats = full;
         self.chats_model.set_vec(items);
@@ -2140,6 +2135,7 @@ impl App {
         self.draft_touch();
         self.close_mentions();
         self.poll_chat_changed();
+        self.export_chat_changed();
         self.info_close();
         self.attach_cancel();
         self.search_reset();
@@ -2177,9 +2173,12 @@ impl App {
         if self.p().st.borrow().selected.as_deref() == Some(jid) {
             return;
         }
+        self.saved_ensure_chat(jid);
+        self.media_viewer_close();
         self.ops_chat_leaving(true);
         self.draft_touch();
         self.poll_chat_changed();
+        self.export_chat_changed();
         self.info_close();
         self.attach_cancel();
         self.search_reset();
@@ -2218,6 +2217,7 @@ impl App {
             win.set_has_reply(false);
             win.invoke_focus_composer();
         }
+        self.appearance_chat_changed();
         self.draft_restore(jid);
         self.rebuild_rows();
         self.update_header();
@@ -2247,6 +2247,8 @@ impl App {
     fn update_header(&self) {
         let Some(win) = self.win() else { return };
         let p = self.p();
+        self.saved_sync();
+        self.notify_sync();
         let mut st = p.st.borrow_mut();
         let Some(row) = st.sel_row.clone() else {
             return;
@@ -2264,7 +2266,7 @@ impl App {
             conn_text(&st.conn)
         };
         drop(st);
-        win.set_header_name(row.display_name.as_str().into());
+        win.set_header_name(self.header_title(&p, &row).into());
         win.set_header_initials(models::initials(&row.display_name).into());
         win.set_header_tint(models::tint_for(&row.jid));
         win.set_header_has_avatar(avatar.is_some());
@@ -2272,6 +2274,7 @@ impl App {
         win.set_header_subtitle(subtitle.into());
         win.set_header_receipts_off(row.receipts_off);
         self.timer_sync(row.ephemeral_secs);
+        self.sched_refresh_ui();
         win.set_chat_blocked(self.is_blocked_dm(&row.jid));
         win.set_composer_blocked_text(self.gate_notice(&p.id, &row.jid).into());
     }
@@ -2685,6 +2688,9 @@ impl App {
 
     /// Click on a video/document/image: open it, downloading first if needed.
     fn open_item(&self, id: &str) {
+        if self.viewer_try_open(id) {
+            return;
+        }
         let local = {
             let p = self.p();
             let st = p.st.borrow();
@@ -2874,7 +2880,10 @@ impl App {
                 }
                 self.refresh_row(&msg_id);
             }
-            DecodeDone::Media { path, buf } => self.on_status_decoded(&path, buf),
+            DecodeDone::Media { path, buf } => {
+                self.viewer_decoded(&path, &buf);
+                self.on_status_decoded(&path, buf);
+            }
             DecodeDone::Avatar { path, buf } => {
                 let img = buf.map(Image::from_rgba8);
                 // Paths are unique per profile, so at most one profile asked.
@@ -3062,6 +3071,7 @@ impl App {
                 win.set_status_mode(true);
                 self.refresh_statuses();
             }
+            "viewer-fit" | "viewer-zoom" | "viewer-browse" => self.demo_media_viewer(what),
             "viewer" => {
                 win.set_status_mode(true);
                 self.refresh_statuses();
@@ -3101,6 +3111,10 @@ impl App {
                 self.demo_compose_translate(what);
             }
             "call-incoming" | "call-incoming-video-group" => self.demo_call(what),
+            "export-dialog" => {
+                self.select_chat("111@s.whatsapp.net");
+                self.export_open();
+            }
             "locked" => self.demo_lock(),
             "lock-damaged" => self.demo_lock_damaged(),
             "proxy-blocked" => self.demo_proxy_blocked(),
@@ -3142,8 +3156,12 @@ impl App {
                 self.refresh_statuses();
                 self.open_status(-1);
             }
+            w if w.starts_with("notif-") => self.demo_notif(w),
+            "saved-messages" => self.demo_saved(),
             w if w.starts_with("v04-") => self.demo_v04(w),
+            w if w.starts_with("schedule") => self.demo_schedule(w),
             w if w.starts_with("translate-") => self.demo_translate(w),
+            w if w.starts_with("theme-") || w.starts_with("wallpaper") => self.demo_appearance(w),
             w if w.starts_with("info") => self.demo_info(w),
             "folders" | "folders-form" => self.demo_folders(what == "folders-form"),
             "archived" => {
@@ -3242,6 +3260,7 @@ impl App {
                 self.set_blocked(&format!("{}@s.whatsapp.net", a.trim_start_matches("block:")), true);
             }
             a if a.starts_with("v04-") => self.demo_v04(a),
+            a if a.starts_with("schedule") => self.demo_schedule(a),
             "info-open" => self.open_info(),
             "switch" => {
                 let ids = self.profile_ids();

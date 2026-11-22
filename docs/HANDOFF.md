@@ -1,4 +1,4 @@
-# WaClient — handoff notes (state as of 2026-11-22, v0.8.0)
+# WaClient — handoff notes (state as of 2026-11-22, v0.9.0)
 
 Read this first in a new session. It records what exists, what was decided and why,
 what is untested, and how to work on the project safely. README.md is the user-facing
@@ -12,7 +12,7 @@ client to look as much like the official one as possible.
 
 - Workspace: `crates/store` (`wa_store`, rusqlite 0.39 bundled), `crates/engine`
   (`wa_engine`, whatsapp-rust 0.7, `default-features=false` minus `simd`), `app` (`waclient`,
-  Slint 1.19 UI). Version lives in root `Cargo.toml` (`version = "0.8.0"`).
+  Slint 1.19 UI). Version lives in root `Cargo.toml` (`version = "0.9.0"`).
 - Latest local package: `dist/WaClient-0.6.0-win-x64.zip` (keep only the latest release in `dist/`).
 - Identity: `ClientProfile::web()` (the Windows profile was rejected by the server as
   "outdated"), DevicePropsOverride os "Windows", PlatformType UWP, require_full_sync,
@@ -23,7 +23,7 @@ client to look as much like the official one as possible.
 | What | Command |
 |---|---|
 | Build (debug) | `cargo build -p waclient` |
-| Test all | `cargo test --workspace` (984 passing at v0.8.0, 3 ignored) |
+| Test all | `cargo test --workspace` (1103 passing at v0.9.0, 3 ignored) |
 | Test one area | `cargo test -p wa_engine <filter>` / `cargo test -p waclient <filter>` |
 | Engine+store only | `cargo build -p wa_engine -p wa_store` |
 | Store perf smoke | `cargo test -p wa_store --test perf -- --ignored` |
@@ -111,6 +111,22 @@ client to look as much like the official one as possible.
   sent; ringing calls survive Disconnected (2-min TTL), cleared on logout / stream replaced.
   Answering/placing calls (whatsapp-rust `voip-*` features: webrtc, opus 0.3, 16 kHz 60 ms
   streaming audio) and video (needs an H.264 codec) were judged heavy and risky; not started.
+- Keyboard shortcuts are layout-independent (`app/src/layout_keys.rs`, hooked in drop_paste.rs's
+  single `on_winit_window_event`): with Ctrl held (no Alt), a physical letter/digit/period key whose
+  character is NOT ASCII (Persian, Arabic, Cyrillic, Hebrew layouts) is re-dispatched as the US
+  letter. ASCII layouts (QWERTY/QWERTZ/AZERTY/Dvorak) are never touched. Any future
+  `on_winit_window_event` user must keep calling `layout_keys::remap`.
+- Composer undo/redo is our own stack (`app/src/app/undo.rs`): Slint clears its native undo on every
+  programmatic `text =` (formatting, mentions, emoji, paste, translate). RTL paragraphs get logical
+  Home/End.
+- Notify carries `muted: bool`; the engine emits for muted chats and the app decides ("always notify"
+  exception, sounds, lock masking) in `notify_ui.rs`.
+- Send later (`schedule_ui.rs`, per-profile `scheduled.json`): remove-then-send (never double-send),
+  overdue items are held for the user, never sent silently after the app was closed.
+- Export (`app/src/export/`): always writes into a folder it creates (or an empty one); never
+  overwrites; HTML escapes everything; only http/https/mailto links.
+- Light theme: colours must come from Theme tokens (theme.slint has light+dark values); don't add
+  hard-coded surface colours in .slint files.
 - Live-location SENDING is deliberately not built (decided 2026-11-21): whatsapp-rust 0.7 has
   no protocol-correct way to send position updates or stop a share (only the initial
   LiveLocationMessage), and the official Windows/Web clients can't share live location either,

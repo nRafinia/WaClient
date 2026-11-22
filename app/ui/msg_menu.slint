@@ -37,6 +37,15 @@ export component MenuRow inherits Rectangle {
     }
 }
 
+// The chat with our own number ("Saved Messages"), for the message menu.
+export global SavedMessages {
+    // Empty until our own number is known.
+    in property <string> jid;
+    // The chat that is open now (a message is not saved into the chat it is in).
+    in property <string> open-chat;
+    callback save(string);
+}
+
 // Context menu of a message bubble. Only the actions that apply are shown.
 export component MsgMenu inherits Rectangle {
     in property <bool> can-reply;
@@ -50,6 +59,7 @@ export component MsgMenu inherits Rectangle {
     in property <bool> can-save;
     in property <bool> can-edit;
     in property <bool> can-forward;
+    in property <bool> can-save-to-saved;
     in property <bool> can-pin;
     in property <bool> pinned;
     in property <bool> can-star;
@@ -66,6 +76,7 @@ export component MsgMenu inherits Rectangle {
     callback delete();
     callback edit();
     callback forward();
+    callback save-to-saved();
     callback pin();
     callback star();
     callback info();
@@ -100,6 +111,10 @@ export component MsgMenu inherits Rectangle {
         if root.can-forward: MenuRow {
             label: "Forward";
             clicked => { root.forward(); }
+        }
+        if root.can-save-to-saved: MenuRow {
+            label: "Save to Saved Messages";
+            clicked => { root.save-to-saved(); }
         }
         if root.can-star: MenuRow {
             label: root.starred ? "Unstar" : "Star";
@@ -213,7 +228,7 @@ export component Toast inherits Rectangle {
     width: label.preferred-width + 32px + (root.action != "" ? act.preferred-width + 16px : 0px);
     height: 34px;
     border-radius: 17px;
-    background: #111b21f0;
+    background: Theme.pill-bg;
     border-width: 1px;
     border-color: Theme.divider;
     label := Text {

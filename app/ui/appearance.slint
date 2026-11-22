@@ -1,0 +1,432 @@
+import { Button, Slider } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+export struct WallpaperPreset {
+    c1: color,
+    c2: color,
+}
+
+// Theme, accent colour and chat wallpaper, driven from Rust (app/appearance_ui.rs).
+export global AppearanceState {
+    // 0 system, 1 light, 2 dark, 3 scheduled.
+    in property <int> theme-mode;
+    in property <int> accent;
+    in property <[color]> accents;
+    // "HH:MM" of the scheduled night range.
+    in property <string> night-from;
+    in property <string> night-to;
+    // Profile wallpaper in words ("None", a preset name, "Custom image").
+    in property <string> wp-summary;
+    // The presets in the colours of the current mode.
+    in property <[WallpaperPreset]> presets;
+
+    // Wallpaper behind the open chat: 0 none, 1 gradient (wp-c1 to wp-c2), 2 image.
+    in property <int> wp-kind;
+    in property <color> wp-c1;
+    in property <color> wp-c2;
+    in property <image> wp-image;
+    // Black overlay on an image, 0 to 0.6 (dark mode only).
+    in property <float> wp-dim;
+
+    // Wallpaper dialog. dialog-chat: it edits one chat; dlg-override: that chat has its own.
+    in-out property <bool> dialog-open;
+    in property <bool> dialog-chat;
+    in property <bool> dlg-override;
+    in property <int> dlg-kind;
+    in property <int> dlg-preset;
+    in property <int> dlg-dim;
+    in property <image> dlg-image;
+    in property <bool> dlg-busy;
+
+    callback set-theme-mode(int);
+    callback set-accent(int);
+    // Moves the night start (0) or end (1) by minutes.
+    callback night-step(int, int);
+    // true = the open chat, false = the profile default.
+    callback open-wallpaper(bool);
+    callback pick-none();
+    callback pick-preset(int);
+    callback choose-image();
+    callback set-dim(int);
+    callback use-default();
+    callback close-dialog();
+}
+
+// Fills its parent with the wallpaper of the open chat.
+export component WallpaperLayer inherits Rectangle {
+    clip: true;
+    if AppearanceState.wp-kind == 1: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: @linear-gradient(135deg, AppearanceState.wp-c1, AppearanceState.wp-c2);
+    }
+    if AppearanceState.wp-kind == 2: Image {
+        width: parent.width;
+        height: parent.height;
+        source: AppearanceState.wp-image;
+        // Crops instead of stretching.
+        image-fit: cover;
+    }
+    if AppearanceState.wp-kind == 2 && AppearanceState.wp-dim > 0: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: black;
+        opacity: AppearanceState.wp-dim;
+    }
+}
+
+component Chip inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked();
+
+    height: 32px;
+    border-radius: 16px;
+    background: root.selected ? Theme.accent : (ta.has-hover ? Theme.selected : Theme.input-bg);
+    Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.text;
+        color: root.selected ? #111b21 : Theme.text;
+        font-size: 13px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component Stepper inherits Rectangle {
+    in property <string> value;
+    callback step(int);
+
+    height: 32px;
+    width: 120px;
+    border-radius: 16px;
+    background: Theme.input-bg;
+    for d[i] in [-30, 30]: Rectangle {
+        x: i == 0 ? 0px : parent.width - self.width;
+        width: 32px;
+        height: 32px;
+        border-radius: 16px;
+        background: ta.has-hover ? Theme.selected : transparent;
+        Text {
+            width: parent.width;
+            height: parent.height;
+            text: i == 0 ? "-" : "+";
+            color: Theme.text;
+            font-size: 18px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.step(d); }
+        }
+    }
+    Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.value;
+        color: Theme.text;
+        font-size: 14px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// Settings, Chats: theme, night schedule, accent colour, default wallpaper.
+export component AppearanceSection inherits VerticalLayout {
+    alignment: start;
+    spacing: 4px;
+
+    Rectangle {
+        height: 28px;
+        Text {
+            x: 24px;
+            width: parent.width - 48px;
+            text: "Appearance";
+            color: Theme.accent;
+            font-size: 13px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+    }
+    Rectangle {
+        height: 56px;
+        HorizontalLayout {
+            padding-left: 24px;
+            padding-right: 24px;
+            spacing: 8px;
+            Text {
+                text: "Theme";
+                color: Theme.text;
+                font-size: 15px;
+                vertical-alignment: center;
+            }
+            Rectangle { }
+            VerticalLayout {
+                alignment: center;
+                HorizontalLayout {
+                    spacing: 6px;
+                    for name[i] in ["System", "Light", "Dark", "Scheduled"]: Chip {
+                        width: i == 3 ? 86px : 64px;
+                        text: name;
+                        selected: AppearanceState.theme-mode == i;
+                        clicked => { AppearanceState.set-theme-mode(i); }
+                    }
+                }
+            }
+        }
+    }
+    if AppearanceState.theme-mode == 3: Rectangle {
+        height: 56px;
+        HorizontalLayout {
+            padding-left: 24px;
+            padding-right: 24px;
+            spacing: 8px;
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text {
+                    text: "Night mode";
+                    color: Theme.text;
+                    font-size: 15px;
+                }
+                Text {
+                    text: "Dark from " + AppearanceState.night-from + " to " + AppearanceState.night-to;
+                    color: Theme.secondary;
+                    font-size: 12px;
+                }
+            }
+            Rectangle { }
+            VerticalLayout {
+                alignment: center;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Stepper {
+                        value: AppearanceState.night-from;
+                        step(d) => { AppearanceState.night-step(0, d); }
+                    }
+                    Text {
+                        text: "to";
+                        color: Theme.secondary;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                    }
+                    Stepper {
+                        value: AppearanceState.night-to;
+                        step(d) => { AppearanceState.night-step(1, d); }
+                    }
+                }
+            }
+        }
+    }
+    Rectangle {
+        height: 56px;
+        HorizontalLayout {
+            padding-left: 24px;
+            padding-right: 24px;
+            spacing: 8px;
+            Text {
+                text: "Accent colour";
+                color: Theme.text;
+                font-size: 15px;
+                vertical-alignment: center;
+            }
+            Rectangle { }
+            VerticalLayout {
+                alignment: center;
+                HorizontalLayout {
+                    spacing: 8px;
+                    for c[i] in AppearanceState.accents: Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 14px;
+                        background: c;
+                        border-width: AppearanceState.accent == i ? 3px : 0px;
+                        border-color: Theme.text;
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { AppearanceState.set-accent(i); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Rectangle {
+        height: 56px;
+        background: wp-ta.has-hover ? Theme.hover : transparent;
+        VerticalLayout {
+            x: 24px;
+            width: parent.width - 180px;
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: "Chat wallpaper";
+                color: Theme.text;
+                font-size: 15px;
+            }
+            Text {
+                text: AppearanceState.wp-summary;
+                color: Theme.secondary;
+                font-size: 12px;
+                overflow: elide;
+            }
+        }
+        Chip {
+            x: parent.width - self.width - 24px;
+            y: (parent.height - self.height) / 2;
+            width: 96px;
+            text: "Change\u{2026}";
+        }
+        wp-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { AppearanceState.open-wallpaper(false); }
+        }
+    }
+}
+
+component Tile inherits Rectangle {
+    in property <bool> selected;
+    callback clicked();
+
+    width: 72px;
+    height: 72px;
+    border-radius: 10px;
+    clip: true;
+    border-width: root.selected ? 3px : 1px;
+    border-color: root.selected ? Theme.accent : Theme.divider;
+    @children
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Wallpaper chooser: the profile default, or one chat (with "Use default").
+export component WallpaperDialog inherits Rectangle {
+    background: #000000b0;
+    TouchArea { }
+
+    FocusScope {
+        width: parent.width;
+        height: parent.height;
+        init => { self.focus(); }
+        capture-key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                AppearanceState.close-dialog();
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            width: min(420px, parent.width - 32px);
+            height: body.preferred-height;
+            background: Theme.panel;
+            border-radius: 12px;
+
+            body := VerticalLayout {
+                padding: 20px;
+                spacing: 12px;
+                Text {
+                    text: AppearanceState.dialog-chat ? "Wallpaper for this chat" : "Chat wallpaper";
+                    color: Theme.text;
+                    font-size: 18px;
+                    font-weight: 600;
+                }
+                // Two rows of five: None, the eight presets, an image.
+                Rectangle {
+                    height: 72px * 2 + 8px;
+                    Tile {
+                        x: 0px;
+                        y: 0px;
+                        selected: AppearanceState.dlg-kind == 0;
+                        clicked => { AppearanceState.pick-none(); }
+                        Rectangle { background: Theme.chat-bg; }
+                        Text {
+                            width: parent.width;
+                            height: parent.height;
+                            text: "None";
+                            color: Theme.secondary;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                    for pr[i] in AppearanceState.presets: Tile {
+                        x: mod(i + 1, 5) * (72px + 5px);
+                        y: floor((i + 1) / 5) * (72px + 8px);
+                        selected: AppearanceState.dlg-kind == 1 && AppearanceState.dlg-preset == i;
+                        clicked => { AppearanceState.pick-preset(i); }
+                        Rectangle { background: @linear-gradient(135deg, pr.c1, pr.c2); }
+                    }
+                    Tile {
+                        x: 4 * (72px + 5px);
+                        y: 72px + 8px;
+                        selected: AppearanceState.dlg-kind == 2;
+                        clicked => { AppearanceState.choose-image(); }
+                        Rectangle { background: Theme.input-bg; }
+                        if AppearanceState.dlg-kind == 2 && !AppearanceState.dlg-busy: Image {
+                            width: parent.width;
+                            height: parent.height;
+                            source: AppearanceState.dlg-image;
+                            image-fit: cover;
+                        }
+                        Text {
+                            width: parent.width;
+                            height: parent.height;
+                            text: AppearanceState.dlg-busy ? "Working\u{2026}" : (AppearanceState.dlg-kind == 2 ? "" : "Image\u{2026}");
+                            color: Theme.secondary;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+                if AppearanceState.dlg-kind == 2: VerticalLayout {
+                    spacing: 4px;
+                    HorizontalLayout {
+                        Text {
+                            text: "Dim in dark mode";
+                            color: Theme.text;
+                            font-size: 14px;
+                        }
+                        Rectangle { }
+                        Text {
+                            text: AppearanceState.dlg-dim + "%";
+                            color: Theme.secondary;
+                            font-size: 14px;
+                        }
+                    }
+                    Slider {
+                        minimum: 0;
+                        maximum: 60;
+                        value: AppearanceState.dlg-dim;
+                        changed(v) => { AppearanceState.set-dim(Math.round(v)); }
+                    }
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+                    if AppearanceState.dialog-chat: Button {
+                        text: "Use default";
+                        enabled: AppearanceState.dlg-override;
+                        clicked => { AppearanceState.use-default(); }
+                    }
+                    Button {
+                        text: "Done";
+                        primary: true;
+                        clicked => { AppearanceState.close-dialog(); }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -557,6 +557,8 @@ pub enum UiEvent {
         chat_jid: String,
         title: String,
         body: String,
+        /// The chat is muted; the UI shows it only for chats with an "always notify" exception.
+        muted: bool,
     },
     /// History sync progress, 0..=100.
     HistoryProgress { percent: u32 },

@@ -1,0 +1,420 @@
+import { Button, LineEdit, ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { IconClose } from "icons.slint";
+
+// One scheduled message as the list shows it.
+export struct SchedRow {
+    id: string,
+    chat: string,
+    // "Today 21:00", "Tomorrow 09:00", "Sat 28 Nov, 09:00".
+    when: string,
+    text: string,
+    // "Overdue ..." or "Couldn't send: ..."; empty when the item is just waiting.
+    status: string,
+}
+
+// A quick pick of the dialog; the app keeps the matching time.
+export struct QuickPick {
+    label: string,
+}
+
+// "Send later": locally scheduled text messages (WhatsApp has no server-side
+// scheduling, so WaClient itself sends them while it is running).
+export global Schedule {
+    // Dialog: 0 closed, 1 schedule the composer text, 2 change an item's time.
+    in-out property <int> dialog;
+    in property <string> preview;
+    in property <[QuickPick]> quick;
+    in-out property <string> date-text;
+    in-out property <string> time-text;
+    in property <string> error;
+    callback open-dialog(string);
+    callback pick-quick(int);
+    callback apply-custom(string, string);
+    callback close-dialog();
+
+    // List of scheduled messages (open chat or the whole profile).
+    in-out property <bool> list-open;
+    in property <string> list-title;
+    in property <bool> list-all;
+    in property <[SchedRow]> rows;
+    callback open-chat-list();
+    callback open-all-list();
+    callback close-list();
+    callback edit-time(string);
+    callback send-now(string);
+    callback delete(string);
+
+    // Scheduled messages of the open chat (header clock).
+    in property <int> chat-count;
+    // Items of the profile that were due while WaClient was closed.
+    in property <int> overdue-count;
+    in property <string> overdue-text;
+    callback overdue-send-all();
+    callback overdue-review();
+}
+
+// Pill-shaped quick pick.
+component Chip inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    height: 34px;
+    min-width: 96px;
+    border-radius: 17px;
+    border-width: 1px;
+    border-color: Theme.secondary;
+    background: ta.has-hover ? Theme.selected : transparent;
+    Text {
+        text: root.label;
+        color: Theme.text;
+        font-size: 13px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Small text action of a list row.
+component RowAction inherits Rectangle {
+    in property <string> label;
+    in property <bool> danger;
+    callback clicked();
+    width: lbl.preferred-width + 16px;
+    height: 26px;
+    border-radius: 13px;
+    background: ta.has-hover ? Theme.selected : transparent;
+    lbl := Text {
+        x: 8px;
+        text: root.label;
+        color: root.danger ? Theme.danger : Theme.accent;
+        font-size: 13px;
+        font-weight: 600;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Modal: quick picks plus a date and time (local time). Covers its parent.
+export component ScheduleDialog inherits Rectangle {
+    background: #000000b0;
+    TouchArea { }
+
+    FocusScope {
+        width: parent.width;
+        height: parent.height;
+        init => { self.focus(); }
+        capture-key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                Schedule.close-dialog();
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            width: min(420px, parent.width - 32px);
+            height: lay.preferred-height;
+            background: Theme.panel;
+            border-radius: 12px;
+
+            lay := VerticalLayout {
+                padding: 20px;
+                spacing: 10px;
+                Text {
+                    text: Schedule.dialog == 2 ? "Change time" : "Send later";
+                    color: Theme.text;
+                    font-size: 18px;
+                    font-weight: 600;
+                }
+                if Schedule.dialog == 1: Rectangle {
+                    height: 44px;
+                    background: Theme.input-bg;
+                    border-radius: 8px;
+                    Text {
+                        x: 12px;
+                        width: parent.width - 24px;
+                        height: parent.height;
+                        text: Schedule.preview;
+                        color: Theme.secondary;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    for q[i] in Schedule.quick: Chip {
+                        label: q.label;
+                        clicked => { Schedule.pick-quick(i); }
+                    }
+                }
+                Text {
+                    text: "Or pick a date and time (your local time)";
+                    color: Theme.secondary;
+                    font-size: 13px;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    LineEdit {
+                        placeholder-text: "YYYY-MM-DD";
+                        text <=> Schedule.date-text;
+                        accepted => { Schedule.apply-custom(Schedule.date-text, Schedule.time-text); }
+                    }
+                    LineEdit {
+                        width: 110px;
+                        placeholder-text: "HH:MM";
+                        text <=> Schedule.time-text;
+                        accepted => { Schedule.apply-custom(Schedule.date-text, Schedule.time-text); }
+                    }
+                }
+                if Schedule.error != "": Text {
+                    text: Schedule.error;
+                    color: Theme.danger;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "Scheduled messages are sent by WaClient at that time, so it must be running (the tray counts). WhatsApp itself cannot schedule messages.";
+                    color: Theme.secondary;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+                    Button {
+                        text: "Cancel";
+                        clicked => { Schedule.close-dialog(); }
+                    }
+                    Button {
+                        text: Schedule.dialog == 2 ? "Save" : "Schedule";
+                        primary: true;
+                        clicked => { Schedule.apply-custom(Schedule.date-text, Schedule.time-text); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Modal list of scheduled messages with Edit time / Send now / Delete.
+export component ScheduledList inherits Rectangle {
+    background: #000000b0;
+    TouchArea { }
+
+    FocusScope {
+        width: parent.width;
+        height: parent.height;
+        init => { self.focus(); }
+        capture-key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                Schedule.close-list();
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            width: min(520px, parent.width - 32px);
+            height: min(parent.height - 48px, 520px);
+            background: Theme.panel;
+            border-radius: 12px;
+            clip: true;
+
+            Rectangle {
+                x: 0px;
+                y: 0px;
+                height: 56px;
+                Text {
+                    x: 20px;
+                    width: parent.width - 72px;
+                    text: Schedule.list-title;
+                    color: Theme.text;
+                    font-size: 18px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Rectangle {
+                    x: parent.width - 48px;
+                    y: 10px;
+                    width: 36px;
+                    height: 36px;
+                    border-radius: 18px;
+                    background: close-ta.has-hover ? Theme.hover : transparent;
+                    IconClose {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        color: Theme.secondary;
+                    }
+                    close-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { Schedule.close-list(); }
+                    }
+                }
+            }
+            Text {
+                y: 56px;
+                height: 40px;
+                x: 20px;
+                width: parent.width - 40px;
+                text: "Sent by WaClient at the chosen time, only while it is running.";
+                color: Theme.secondary;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            if Schedule.rows.length == 0: Text {
+                y: 96px;
+                height: parent.height - 96px;
+                width: parent.width;
+                text: "No scheduled messages";
+                color: Theme.secondary;
+                font-size: 14px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            ListView {
+                y: 96px;
+                height: parent.height - 96px;
+                for r in Schedule.rows: Rectangle {
+                    height: r.status == "" ? 96px : 114px;
+                    Text {
+                        x: 20px;
+                        y: 8px;
+                        width: parent.width - 40px - 150px;
+                        text: Schedule.list-all ? r.chat : "";
+                        color: Theme.accent;
+                        font-size: 13px;
+                        font-weight: 600;
+                        overflow: elide;
+                    }
+                    Text {
+                        x: parent.width - 20px - 150px;
+                        y: 8px;
+                        width: 150px;
+                        text: r.when;
+                        color: Theme.text;
+                        font-size: 13px;
+                        font-weight: 600;
+                        horizontal-alignment: right;
+                    }
+                    Text {
+                        x: 20px;
+                        y: 28px;
+                        width: parent.width - 40px;
+                        height: 36px;
+                        text: r.text;
+                        color: Theme.text;
+                        font-size: 14px;
+                        wrap: word-wrap;
+                        overflow: elide;
+                    }
+                    if r.status != "": Text {
+                        x: 20px;
+                        y: 66px;
+                        width: parent.width - 40px;
+                        height: 18px;
+                        text: r.status;
+                        color: Theme.warn;
+                        font-size: 12px;
+                        overflow: elide;
+                    }
+                    HorizontalLayout {
+                        x: 12px;
+                        y: parent.height - 34px;
+                        width: parent.width - 24px;
+                        height: 26px;
+                        alignment: end;
+                        spacing: 4px;
+                        RowAction {
+                            label: "Edit time";
+                            clicked => { Schedule.edit-time(r.id); }
+                        }
+                        RowAction {
+                            label: "Send now";
+                            clicked => { Schedule.send-now(r.id); }
+                        }
+                        RowAction {
+                            label: "Delete";
+                            danger: true;
+                            clicked => { Schedule.delete(r.id); }
+                        }
+                    }
+                    Rectangle {
+                        y: parent.height - 1px;
+                        height: 1px;
+                        background: Theme.divider;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Shown after a start when scheduled messages came due while WaClient was
+// closed: nothing is sent silently, the user decides.
+export component OverdueBanner inherits Rectangle {
+    height: 44px;
+    background: Theme.warn;
+    Text {
+        x: 16px;
+        width: parent.width - 32px - 180px;
+        text: Schedule.overdue-text;
+        color: #111b21;
+        font-size: 14px;
+        font-weight: 600;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+    HorizontalLayout {
+        x: parent.width - 168px;
+        y: 6px;
+        width: 152px;
+        height: 32px;
+        spacing: 8px;
+        Rectangle {
+            width: 76px;
+            border-radius: 16px;
+            background: #111b21;
+            Text {
+                text: "Send now";
+                color: white;
+                font-size: 13px;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { Schedule.overdue-send-all(); }
+            }
+        }
+        Rectangle {
+            width: 68px;
+            border-radius: 16px;
+            border-width: 1px;
+            border-color: #111b21;
+            Text {
+                text: "Review";
+                color: #111b21;
+                font-size: 13px;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { Schedule.overdue-review(); }
+            }
+        }
+    }
+}
