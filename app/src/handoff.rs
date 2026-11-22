@@ -27,26 +27,64 @@ pub fn parse_wait_pid(args: &[OsString]) -> Option<u32> {
     None
 }
 
+pub const OPEN_PROFILE_FLAG: &str = "--open-profile";
+
+/// `--open-profile <id>` or `--open-profile=<id>`; an empty id is ignored.
+pub fn parse_open_profile(args: &[OsString]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        let value = if arg == OPEN_PROFILE_FLAG {
+            it.next()?.to_str()?
+        } else if let Some(v) = arg.to_str().and_then(|s| s.strip_prefix("--open-profile=")) {
+            v
+        } else {
+            continue;
+        };
+        return Some(value.to_string()).filter(|v| !v.is_empty());
+    }
+    None
+}
+
+/// The profile to activate at startup: the one named by `--open-profile` when
+/// it still exists, otherwise the one used last.
+pub fn startup_focus(
+    open: Option<String>,
+    last_active: Option<String>,
+    exists: impl Fn(&str) -> bool,
+) -> Option<String> {
+    open.filter(|id| exists(id)).or(last_active)
+}
+
 /// The arguments for the successor: ours without the autostart flag (so its
-/// window is shown) and without a stale `--wait-pid`, plus the pid to wait for.
-pub fn successor_args(args: &[OsString], minimized_flag: &str, own_pid: u32) -> Vec<OsString> {
+/// window is shown) and without stale `--wait-pid` / `--open-profile`, plus the
+/// pid to wait for and, when given, the profile to reopen.
+pub fn successor_args(
+    args: &[OsString],
+    minimized_flag: &str,
+    own_pid: u32,
+    open_profile: Option<&str>,
+) -> Vec<OsString> {
     let mut out = Vec::new();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         if arg == minimized_flag {
             continue;
         }
-        if arg == WAIT_PID_FLAG {
+        if arg == WAIT_PID_FLAG || arg == OPEN_PROFILE_FLAG {
             it.next();
             continue;
         }
-        if arg.to_str().is_some_and(|s| s.starts_with("--wait-pid=")) {
+        if arg.to_str().is_some_and(|s| s.starts_with("--wait-pid=") || s.starts_with("--open-profile=")) {
             continue;
         }
         out.push(arg.clone());
     }
     out.push(WAIT_PID_FLAG.into());
     out.push(own_pid.to_string().into());
+    if let Some(id) = open_profile {
+        out.push(OPEN_PROFILE_FLAG.into());
+        out.push(id.into());
+    }
     out
 }
 
@@ -140,9 +178,33 @@ mod tests {
     #[test]
     fn successor_args_drop_autostart_and_stale_pids_and_add_ours() {
         let args = os(&["--minimized", "--other", "--wait-pid", "1", "--wait-pid=2", "x"]);
-        let out = successor_args(&args, "--minimized", 99);
+        let out = successor_args(&args, "--minimized", 99, None);
         assert_eq!(out, os(&["--other", "x", "--wait-pid", "99"]));
         assert_eq!(parse_wait_pid(&out), Some(99));
+    }
+
+    #[test]
+    fn open_profile_is_parsed_replaced_and_validated() {
+        assert_eq!(parse_open_profile(&os(&["--open-profile", "p2"])), Some("p2".to_string()));
+        assert_eq!(parse_open_profile(&os(&["--open-profile=p3"])), Some("p3".to_string()));
+        assert_eq!(parse_open_profile(&os(&["--open-profile"])), None);
+        assert_eq!(parse_open_profile(&os(&["--open-profile="])), None);
+        assert_eq!(parse_open_profile(&os(&[])), None);
+
+        let args = os(&["--open-profile", "old", "--open-profile=older", "x"]);
+        let out = successor_args(&args, "--minimized", 7, Some("new"));
+        assert_eq!(out, os(&["x", "--wait-pid", "7", "--open-profile", "new"]));
+        assert_eq!(parse_open_profile(&out), Some("new".to_string()));
+        assert_eq!(parse_open_profile(&successor_args(&args, "--minimized", 7, None)), None);
+    }
+
+    #[test]
+    fn startup_focus_falls_back_to_last_active_when_the_profile_is_gone() {
+        let exists = |id: &str| id == "p2";
+        assert_eq!(startup_focus(Some("p2".into()), Some("p1".into()), exists), Some("p2".to_string()));
+        assert_eq!(startup_focus(Some("gone".into()), Some("p1".into()), exists), Some("p1".to_string()));
+        assert_eq!(startup_focus(None, Some("p1".into()), exists), Some("p1".to_string()));
+        assert_eq!(startup_focus(Some("gone".into()), None, exists), None);
     }
 
     #[test]

@@ -41,10 +41,28 @@ const EDGE_BYTES: u64 = 64 * 1024;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 
 static RELAUNCH: AtomicBool = AtomicBool::new(false);
+static RELAUNCH_PROFILE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 /// Asks `main` to start a fresh instance once this one has shut down.
 pub fn request_relaunch() {
     RELAUNCH.store(true, Ordering::SeqCst);
+}
+
+/// Like [`request_relaunch`], and the successor reopens profile `id`.
+pub fn request_relaunch_to_profile(id: &str) {
+    match RELAUNCH_PROFILE.lock() {
+        Ok(mut g) => *g = Some(id.to_string()),
+        Err(poisoned) => *poisoned.into_inner() = Some(id.to_string()),
+    }
+    request_relaunch();
+}
+
+/// The profile the successor should reopen, if one was requested.
+pub fn relaunch_profile() -> Option<String> {
+    match RELAUNCH_PROFILE.lock() {
+        Ok(g) => g.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    }
 }
 
 pub fn relaunch_requested() -> bool {

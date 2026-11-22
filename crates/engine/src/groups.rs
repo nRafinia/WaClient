@@ -42,6 +42,8 @@ struct State {
     negative: HashMap<String, Instant>,
     /// Groups known to have a name in the store.
     named: HashSet<String>,
+    /// Join-request notices: (group, text hash) -> (first, latest) timestamp of the run.
+    request_runs: HashMap<String, (i64, i64)>,
 }
 
 /// Per-generation bookkeeping of subject lookups.
@@ -434,14 +436,31 @@ fn is_request_action(action: &GroupNotificationAction) -> bool {
     )
 }
 
+/// Repeats of the same request text within this many seconds of the previous
+/// one belong to the same notice.
+const REQUEST_WINDOW_SECS: i64 = 5 * 60;
+
 /// The server may announce one join request in two notifications; both give
-/// the same text within moments, so a text-and-time-bucket id folds them into
-/// one row.
-fn request_notice_id(text: &str, ts: i64) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    text.hash(&mut h);
-    format!("GRP-REQ-{:x}-{}", h.finish(), ts.div_euclid(120))
+/// the same text within moments. The id is a stable hash of the text plus the
+/// timestamp that started a sliding run: a repeat within the window of the
+/// run's last-seen timestamp keeps the run's id (frozen at the first-seen
+/// timestamp, even for out-of-order repeats), a later one starts a new run.
+/// Runs idle for longer than the window are dropped so the map stays small.
+fn request_notice_id(runs: &mut HashMap<String, (i64, i64)>, group: &str, text: &str, ts: i64) -> String {
+    use sha2::{Digest as _, Sha256};
+    let mut h = Sha256::new();
+    h.update(group.as_bytes());
+    h.update([0]);
+    h.update(text.as_bytes());
+    let digest: String = h.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect();
+    runs.retain(|_, r| ts.saturating_sub(r.1) <= REQUEST_WINDOW_SECS);
+    let run = runs.entry(digest.clone()).or_insert((ts, ts));
+    if (ts - run.1).abs() > REQUEST_WINDOW_SECS {
+        *run = (ts, ts);
+    } else {
+        run.1 = run.1.max(ts);
+    }
+    format!("GRP-REQ-{digest}-{}", run.0)
 }
 
 /// Writes the in-chat notice for a group change, if it has one.
@@ -460,7 +479,7 @@ fn write_notice(sh: &Shared, u: &GroupUpdate) {
     };
     let ts = u.timestamp.timestamp();
     let id = if is_request_action(&u.action) {
-        request_notice_id(&text, ts)
+        request_notice_id(&mut lock(&sh.groups.state).request_runs, &u.group_jid.to_string(), &text, ts)
     } else {
         match u.notification_id.as_deref().filter(|n| !n.is_empty()) {
             Some(n) => format!("GRP-{n}-{}", u.action_index),
@@ -632,11 +651,52 @@ mod tests {
 
     #[test]
     fn duplicate_request_notifications_fold_into_one_row() {
-        let a = request_notice_id("Sara asked to join", 1000);
-        assert_eq!(a, request_notice_id("Sara asked to join", 1001));
-        assert_ne!(a, request_notice_id("Bob asked to join", 1000));
-        assert_ne!(a, request_notice_id("Sara asked to join", 1000 + 240));
-        assert!(a.starts_with("GRP-"));
+        let mut runs = HashMap::new();
+        let a = request_notice_id(&mut runs, "1@g.us", "Sara asked to join", 1000);
+        assert_eq!(a, request_notice_id(&mut runs, "1@g.us", "Sara asked to join", 1001));
+        assert_ne!(a, request_notice_id(&mut runs, "1@g.us", "Bob asked to join", 1000));
+        assert_ne!(a, request_notice_id(&mut runs, "2@g.us", "Sara asked to join", 1000));
+        assert!(a.starts_with("GRP-REQ-"));
+    }
+
+    #[test]
+    fn request_dedupe_slides_across_old_bucket_boundaries() {
+        let mut runs = HashMap::new();
+        // 119 and 121 fell into different fixed 120 s buckets before.
+        let a = request_notice_id(&mut runs, "1@g.us", "Sara asked to join", 119);
+        assert_eq!(a, request_notice_id(&mut runs, "1@g.us", "Sara asked to join", 121));
+        // Each repeat extends the window.
+        assert_eq!(a, request_notice_id(&mut runs, "1@g.us", "Sara asked to join", 121 + 290));
+        assert_eq!(a, request_notice_id(&mut runs, "1@g.us", "Sara asked to join", 121 + 290 + 290));
+        // A gap longer than the window starts a new notice.
+        let b = request_notice_id(&mut runs, "1@g.us", "Sara asked to join", 121 + 290 + 290 + 301);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn out_of_order_duplicate_keeps_the_run_id() {
+        let mut runs = HashMap::new();
+        let a = request_notice_id(&mut runs, "1@g.us", "Sara asked to join", 1000);
+        assert_eq!(a, request_notice_id(&mut runs, "1@g.us", "Sara asked to join", 1100));
+        assert_eq!(a, request_notice_id(&mut runs, "1@g.us", "Sara asked to join", 990));
+        assert!(a.ends_with("-1000"));
+    }
+
+    #[test]
+    fn idle_runs_are_pruned() {
+        let mut runs = HashMap::new();
+        for i in 0..100 {
+            request_notice_id(&mut runs, "1@g.us", &format!("user {i} asked to join"), i * (REQUEST_WINDOW_SECS + 1));
+        }
+        assert_eq!(runs.len(), 1);
+    }
+
+    #[test]
+    fn request_notice_hash_is_fixed() {
+        let mut runs = HashMap::new();
+        let id = request_notice_id(&mut runs, "1@g.us", "Sara asked to join", 7);
+        assert_eq!(id.len(), "GRP-REQ-".len() + 16 + "-7".len());
+        assert!(id.ends_with("-7"));
     }
 
     #[test]

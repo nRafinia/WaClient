@@ -22,6 +22,9 @@ export global ProxyState {
     // The saved proxy cannot be used, so nothing connected (see ProxyBlockedView).
     in-out property <bool> blocked;
     in property <string> blocked-reason;
+    // The proxy form is open as a modal on the login (QR) screen. Saving a changed
+    // proxy there restarts the app at once (nothing to lose before pairing).
+    in-out property <bool> login-open;
     callback connect-direct();
     callback save();
     callback cancel();
@@ -280,7 +283,10 @@ export component ProxySection inherits VerticalLayout {
         }
         ProxyButton {
             text: "Cancel";
-            clicked => { ProxyState.cancel(); }
+            clicked => {
+                ProxyState.cancel();
+                ProxyState.login-open = false;
+            }
         }
     }
     if ProxyState.status != "": ProxyNote {
@@ -373,6 +379,42 @@ export component ProxyBlockedView inherits Rectangle {
             content-height: sec.preferred-height;
             sec := ProxySection {
                 width: parent.width;
+            }
+        }
+    }
+}
+
+// The proxy form as a modal over the login (QR) screen, for people who cannot
+// reach WhatsApp without a proxy and so never get to Settings.
+export component ProxyModal inherits Rectangle {
+    background: #000000b3;
+
+    TouchArea {
+        clicked => {
+            ProxyState.cancel();
+            ProxyState.login-open = false;
+        }
+    }
+    Rectangle {
+        width: min(parent.width - 32px, 440px);
+        height: min(parent.height - 32px, 600px);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.bg;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.divider;
+        clip: true;
+        TouchArea { }
+        VerticalLayout {
+            padding-top: 12px;
+            padding-bottom: 12px;
+            spacing: 4px;
+            Flickable {
+                content-height: sec.preferred-height;
+                sec := ProxySection {
+                    width: parent.width;
+                }
             }
         }
     }

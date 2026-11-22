@@ -540,4 +540,41 @@ mod tests {
         let groups = store.statuses_since(0).expect("groups");
         assert_eq!(groups.iter().map(|g| g.items.len()).sum::<usize>(), 2);
     }
+
+    #[test]
+    fn conversation_of_only_business_or_unsupported_messages_lists_the_chat() {
+        // The steps of process_conversation: chat row, convert each history
+        // message, bulk insert. Unconvertible messages used to leave the chat
+        // with no rows, which the chat list hides.
+        const BIZ: &str = "9@s.whatsapp.net";
+        let store = Store::open_in_memory().expect("store");
+        store.upsert_chat(BIZ, ChatKind::Dm, Some("Shop")).expect("chat");
+        let template = wa::Message {
+            template_message: MessageField::some(wa::message::TemplateMessage {
+                format: Some(wa::message::template_message::Format::HydratedFourRowTemplate(Box::new(
+                    wa::message::template_message::HydratedFourRowTemplate {
+                        hydrated_content_text: Some("Your code is 123".into()),
+                        ..Default::default()
+                    },
+                ))),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let unknown = wa::Message {
+            group_invite_message: MessageField::some(wa::message::GroupInviteMessage::default()),
+            ..Default::default()
+        };
+        let mut rows = Vec::new();
+        for (id, msg, ts) in [("T1", template, 100), ("U1", unknown, 200)] {
+            let mut w = wmi(id, false, None, ts, None);
+            w.message = MessageField::some(msg);
+            rows.push(convert::from_web_message_info(&w, BIZ, OWN, &|j| j.to_string()).expect("converted"));
+        }
+        store.insert_messages_bulk(&rows).expect("insert");
+        let chats = store.list_chats(false).expect("chats");
+        assert_eq!(chats.len(), 1);
+        assert_eq!(chats[0].jid, BIZ);
+        assert_eq!(store.chat(BIZ).expect("q").map(|c| c.last_ts), Some(200));
+    }
 }

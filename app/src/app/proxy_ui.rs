@@ -38,6 +38,38 @@ pub fn in_use() -> bool {
     IN_USE.load(Ordering::Relaxed)
 }
 
+/// How long the login screen waits for a QR code before it suggests a proxy.
+pub const HINT_AFTER: Duration = Duration::from_secs(15);
+
+/// Whether the login screen should suggest a proxy: still no QR code, not
+/// paired, and no proxy in use (with one, the problem is something else).
+pub fn hint_due(has_qr: bool, logged_in: bool, proxy_in_use: bool) -> bool {
+    !has_qr && !logged_in && !proxy_in_use
+}
+
+/// What happens after a successful save of the proxy form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyPath {
+    /// The engines already run with this proxy.
+    Nothing,
+    /// Show "Restart now" and let the user choose when.
+    Prompt,
+    /// Relaunch at once.
+    Relaunch,
+}
+
+/// The engines read the proxy once at start and there is no way to restart a
+/// single profile's engine in this process, so applying always means a
+/// relaunch. On the login screen it happens at once (nothing is unsaved before
+/// pairing); in Settings the user chooses the moment.
+pub fn apply_path(on_login_screen: bool, can_relaunch: bool, changed: bool) -> ApplyPath {
+    match (changed, on_login_screen && can_relaunch) {
+        (false, _) => ApplyPath::Nothing,
+        (true, true) => ApplyPath::Relaunch,
+        (true, false) => ApplyPath::Prompt,
+    }
+}
+
 // ---- pure functions: links --------------------------------------------------
 
 /// What a pasted proxy link carries. Empty strings mean "not given".
@@ -727,9 +759,15 @@ impl App {
                 return;
             }
         }
+        let changed = next.to_engine() != self.proxy.applied;
         *self.proxy.saved.borrow_mut() = next;
         *self.proxy.warning.borrow_mut() = None;
         self.proxy_push();
+        let path = apply_path(g.get_login_open(), self.proxy.path.is_some(), changed);
+        if path == ApplyPath::Relaunch {
+            g.set_login_open(false);
+            self.proxy_restart();
+        }
     }
 
     pub(super) fn proxy_cancel(&self) {
@@ -807,7 +845,8 @@ impl App {
         if self.proxy.path.is_none() {
             return;
         }
-        crate::location::request_relaunch();
+        // The profile on screen (e.g. the QR of one being added) is reopened.
+        crate::location::request_relaunch_to_profile(&self.p().id);
         self.quit();
     }
 }
@@ -827,6 +866,22 @@ impl App {
         g.set_status_ok(true);
         g.set_status("Connected in 230 ms".into());
         g.set_needs_restart(true);
+    }
+
+    /// Demo (`WACLIENT_DEMO_UI=login-proxy|login-proxy-hint`): the active
+    /// profile's login screen, with the proxy modal open or the hint shown.
+    pub(super) fn demo_login_proxy(&self, hint: bool) {
+        let p = self.p();
+        self.leave_main(&p, "Connecting…");
+        if hint {
+            p.login.borrow_mut().show_hint = true;
+            self.render_login(&p);
+        } else {
+            self.demo_proxy();
+            if let Some(win) = self.win() {
+                win.global::<ProxyState>().set_login_open(true);
+            }
+        }
     }
 
     /// Demo (`WACLIENT_DEMO_UI=proxy-blocked`): the "nothing connected" screen.
@@ -1090,6 +1145,24 @@ mod tests {
         assert_eq!(engine_proxy(&StartupProxy::NoProxy), Ok(None));
         assert_eq!(engine_proxy(&StartupProxy::Proxy(sample().config)), Ok(Some(sample().config)));
         assert!(engine_proxy(&StartupProxy::Blocked("x")).is_err());
+    }
+
+    #[test]
+    fn the_hint_waits_for_a_missing_qr_and_no_proxy() {
+        assert!(hint_due(false, false, false));
+        assert!(!hint_due(true, false, false), "a QR code is showing");
+        assert!(!hint_due(false, true, false), "already paired");
+        assert!(!hint_due(false, false, true), "a proxy is set: not a blocking problem");
+        assert_eq!(HINT_AFTER, Duration::from_secs(15));
+    }
+
+    #[test]
+    fn a_changed_proxy_relaunches_on_the_login_screen_only() {
+        assert_eq!(apply_path(true, true, true), ApplyPath::Relaunch);
+        assert_eq!(apply_path(false, true, true), ApplyPath::Prompt);
+        assert_eq!(apply_path(true, false, true), ApplyPath::Prompt, "the demo never relaunches");
+        assert_eq!(apply_path(true, true, false), ApplyPath::Nothing);
+        assert_eq!(apply_path(false, false, false), ApplyPath::Nothing);
     }
 
     #[test]

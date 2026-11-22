@@ -368,6 +368,25 @@ thread_local! {
     static THUMB: RefCell<Option<(PathBuf, image::RgbImage, u32)>> = const { RefCell::new(None) };
 }
 
+/// The wallpaper layer of a chat view (`AppearanceState.wp-*`).
+pub(super) struct WallpaperLook {
+    kind: i32,
+    c1: Color,
+    c2: Color,
+    image: Image,
+    dim: f32,
+}
+
+impl WallpaperLook {
+    pub(super) fn apply(self, g: &AppearanceState<'_>) {
+        g.set_wp_kind(self.kind);
+        g.set_wp_c1(self.c1);
+        g.set_wp_c2(self.c2);
+        g.set_wp_image(self.image);
+        g.set_wp_dim(self.dim);
+    }
+}
+
 pub(super) fn wire(win: &MainWindow) {
     let g = win.global::<AppearanceState>();
     let accents: Vec<Color> = ACCENTS.iter().map(|a| a.1.color()).collect();
@@ -519,6 +538,7 @@ impl App {
         if p.id == self.p().id {
             self.appearance_apply(&p);
         }
+        self.popouts_wallpaper_changed(&p.id);
     }
 
     /// The dialog's image with the blur applied to a small thumbnail (fast enough to follow the slider).
@@ -585,7 +605,15 @@ impl App {
 
         // Layer behind the open chat.
         let chat = Self::selected_chat(p);
-        let pref = Self::wallpaper_pref(&a, chat.as_deref());
+        self.wallpaper_look(p, chat.as_deref(), dark).apply(&g);
+
+        self.wallpaper_sync_dialog(&win, p, &a);
+    }
+
+    /// The wallpaper behind `chat` (its own or the profile's) as the layer shows it.
+    pub(super) fn wallpaper_look(&self, p: &ProfileState, chat: Option<&str>, dark: bool) -> WallpaperLook {
+        let a = p.settings.borrow().appearance.clone();
+        let pref = Self::wallpaper_pref(&a, chat);
         let image = self.wallpaper_image(p, pref);
         let (kind, c1, c2) = match pref.kind {
             1 => {
@@ -596,14 +624,14 @@ impl App {
             2 if image.is_some() => (2, Color::default(), Color::default()),
             _ => (0, Color::default(), Color::default()),
         };
-        g.set_wp_kind(kind);
-        g.set_wp_c1(c1);
-        g.set_wp_c2(c2);
-        g.set_wp_image(image.unwrap_or_default());
         // Only dark mode dims an image.
-        g.set_wp_dim(if dark { f32::from(pref.dim) / 100.0 } else { 0.0 });
+        let dim = if dark { f32::from(pref.dim) / 100.0 } else { 0.0 };
+        WallpaperLook { kind, c1, c2, image: image.unwrap_or_default(), dim }
+    }
 
-        self.wallpaper_sync_dialog(&win, p, &a);
+    /// The wallpaper preference in force for `chat`; changes when the user edits it.
+    pub(super) fn wallpaper_pref_of(p: &ProfileState, chat: &str) -> WallpaperPref {
+        Self::wallpaper_pref(&p.settings.borrow().appearance, Some(chat)).clone()
     }
 
     fn wallpaper_summary(pref: &WallpaperPref) -> String {

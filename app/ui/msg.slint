@@ -12,6 +12,17 @@ export struct ContactEntry {
     tint: color,
 }
 
+// One paragraph of a message whose lines run in different directions: each is
+// aligned by its own direction (models.rs fills this only for such messages).
+export struct ParaItem {
+    text: string,
+    styled: styled-text,
+    // true when `styled` carries formatting or links (else `text` is shown).
+    formatted: bool,
+    rtl: bool,
+    blank: bool,
+}
+
 export struct MsgItem {
     id: string,
     is-sep: bool,
@@ -54,6 +65,8 @@ export struct MsgItem {
     // Text with clickable links (only when the text has links).
     styled: styled-text,
     has-links: bool,
+    // Per-paragraph body, only for messages whose lines mix directions (else empty).
+    paras: [ParaItem],
     // 1..3 when the message is only that many emoji (shown large, no bubble); 0 otherwise.
     big-emoji: int,
     can-copy: bool,

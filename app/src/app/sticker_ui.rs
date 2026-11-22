@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::io::Read as _;
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use sha2::{Digest, Sha256};
 use slint::{ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
@@ -85,7 +85,7 @@ struct StickerRef {
 type Thumb = (StickerRef, SharedPixelBuffer<Rgba8Pixel>);
 
 /// Both lists, decoded; built off the UI thread.
-struct Loaded {
+pub(super) struct Loaded {
     favs: Vec<Thumb>,
     recent: Vec<Thumb>,
 }
@@ -111,6 +111,16 @@ fn load(store: &Store) -> Result<Loaded, String> {
     Ok(Loaded { favs, recent })
 }
 
+/// Loads both lists on a worker thread; `done` runs on it, so it must hand
+/// the result over to the UI thread itself.
+pub(super) fn load_async(store: Arc<Store>, done: impl FnOnce(Result<Loaded, String>) + Send + 'static) -> bool {
+    let spawned = std::thread::Builder::new().name("sticker-load".into()).spawn(move || done(load(&store)));
+    if let Err(e) = &spawned {
+        log::error!("could not start the sticker loader: {e}");
+    }
+    spawned.is_ok()
+}
+
 pub(super) struct StickerUi {
     favs: Rc<VecModel<StickerItem>>,
     recent: Rc<VecModel<StickerItem>>,
@@ -132,9 +142,57 @@ impl StickerUi {
     }
 
     pub(super) fn attach(&self, win: &MainWindow) {
-        let g = win.global::<StickerState>();
+        self.attach_to(&win.global::<StickerState>());
+    }
+
+    /// Hooks the lists up to the `StickerState` of any window (pop-outs have their own).
+    pub(super) fn attach_to(&self, g: &StickerState<'_>) {
         g.set_favs(ModelRc::from(self.favs.clone()));
         g.set_recent(ModelRc::from(self.recent.clone()));
+    }
+
+    /// Starts a new load; answers of older ones are dropped by [`Self::is_current`].
+    pub(super) fn next_generation(&self) -> u64 {
+        let generation = self.generation.get() + 1;
+        self.generation.set(generation);
+        generation
+    }
+
+    pub(super) fn is_current(&self, generation: u64) -> bool {
+        self.generation.get() == generation
+    }
+
+    /// Shows a finished load (a failed one shows empty lists).
+    pub(super) fn show_loaded(&self, loaded: Result<Loaded, String>) {
+        let loaded = loaded.unwrap_or_else(|e| {
+            log::warn!("{e}");
+            Loaded { favs: Vec::new(), recent: Vec::new() }
+        });
+        self.show(&loaded.favs, &self.favs, &self.fav_refs);
+        self.show(&loaded.recent, &self.recent, &self.recent_refs);
+    }
+
+    fn get(&self, from_favs: bool, index: i32) -> Option<StickerRef> {
+        let refs = if from_favs { &self.fav_refs } else { &self.recent_refs };
+        refs.borrow().get(usize::try_from(index).ok()?).cloned()
+    }
+
+    /// The command that sends a grid sticker to `chat_jid`.
+    pub(super) fn send_command(&self, from_favs: bool, index: i32, chat_jid: &str, quoted_id: Option<String>) -> Option<Command> {
+        let sticker = self.get(from_favs, index)?;
+        Some(Command::SendSticker {
+            chat_jid: chat_jid.to_string(),
+            source_chat: sticker.chat_jid,
+            source_id: sticker.id,
+            quoted_id,
+        })
+    }
+
+    /// Right-click in a grid: adds a recent sticker to, or removes a favourite
+    /// from, the favourites of `store`; true when the lists should reload.
+    pub(super) fn toggle_fav(&self, store: &Store, from_favs: bool, index: i32) -> bool {
+        let Some(sticker) = self.get(from_favs, index) else { return false };
+        App::set_sticker_fav_in(store, &sticker, !from_favs)
     }
 
     fn show(&self, items: &[Thumb], model: &VecModel<StickerItem>, refs: &RefCell<Vec<StickerRef>>) {
@@ -170,11 +228,9 @@ impl App {
         let Some(win) = self.win() else { return };
         let p = self.p();
         let (store, profile) = (p.store.clone(), p.id.clone());
-        let generation = self.stickers.generation.get() + 1;
-        self.stickers.generation.set(generation);
+        let generation = self.stickers.next_generation();
         win.global::<StickerState>().set_loading(true);
-        let spawned = std::thread::Builder::new().name("sticker-load".into()).spawn(move || {
-            let loaded = load(&store);
+        let started = load_async(store, move |loaded| {
             let queued = slint::invoke_from_event_loop(move || {
                 with_app(|a| a.stickers_loaded(&profile, generation, loaded));
             });
@@ -182,30 +238,22 @@ impl App {
                 log::error!("could not deliver the stickers to the UI: {e}");
             }
         });
-        if let Err(e) = spawned {
-            log::error!("could not start the sticker loader: {e}");
+        if !started {
             win.global::<StickerState>().set_loading(false);
         }
     }
 
     fn stickers_loaded(&self, profile: &str, generation: u64, loaded: Result<Loaded, String>) {
-        if self.p().id != profile || self.stickers.generation.get() != generation {
+        if self.p().id != profile || !self.stickers.is_current(generation) {
             return;
         }
         let Some(win) = self.win() else { return };
         win.global::<StickerState>().set_loading(false);
-        let loaded = loaded.unwrap_or_else(|e| {
-            log::warn!("{e}");
-            Loaded { favs: Vec::new(), recent: Vec::new() }
-        });
-        let ui = &self.stickers;
-        ui.show(&loaded.favs, &ui.favs, &ui.fav_refs);
-        ui.show(&loaded.recent, &ui.recent, &ui.recent_refs);
+        self.stickers.show_loaded(loaded);
     }
 
     fn sticker_ref(&self, from_favs: bool, index: i32) -> Option<StickerRef> {
-        let refs = if from_favs { &self.stickers.fav_refs } else { &self.stickers.recent_refs };
-        refs.borrow().get(usize::try_from(index).ok()?).cloned()
+        self.stickers.get(from_favs, index)
     }
 
     /// Sends a grid sticker to the open chat (as a reply while the reply bar is up).
@@ -274,22 +322,27 @@ impl App {
         self.set_sticker_fav(&sticker, add);
     }
 
-    /// Adds or removes a favourite, telling the user; `false` on failure.
+    /// Adds or removes a favourite of the active profile, telling the user; `false` on failure.
     fn set_sticker_fav(&self, sticker: &StickerRef, add: bool) -> bool {
-        let store = &self.p().store;
+        let done = Self::set_sticker_fav_in(&self.p().store, sticker, add);
+        self.show_toast(match (done, add) {
+            (true, true) => "Added to favourites",
+            (true, false) => "Removed from favourites",
+            (false, _) => "Could not change the favourite stickers",
+        });
+        done
+    }
+
+    fn set_sticker_fav_in(store: &Store, sticker: &StickerRef, add: bool) -> bool {
         let done = if add {
             store.add_sticker_fav(&sticker.sha, &sticker.chat_jid, &sticker.id, chrono::Utc::now().timestamp())
         } else {
             store.remove_sticker_fav(&sticker.sha).map(|_| ())
         };
         match done {
-            Ok(()) => {
-                self.show_toast(if add { "Added to favourites" } else { "Removed from favourites" });
-                true
-            }
+            Ok(()) => true,
             Err(e) => {
                 log::error!("changing the favourite stickers failed: {e}");
-                self.show_toast("Could not change the favourite stickers");
                 false
             }
         }

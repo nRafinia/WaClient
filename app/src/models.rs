@@ -7,7 +7,7 @@ use wa_store::{ChatKind, ChatRow, MessageKind, MessageRow, MessageStatus};
 use crate::audio::PlayState;
 use crate::emoji::ReactionChip;
 use crate::status_view::{PollViewModel, QuizMark, QuizReveal, quiz_reveal};
-use crate::{ChatItem, ContactEntry, MsgItem, PollOptionItem, ReactionChipItem};
+use crate::{ChatItem, ContactEntry, MsgItem, ParaItem, PollOptionItem, ReactionChipItem};
 
 const PALETTE: [(u8, u8, u8); 8] = [
     (0x00, 0xa8, 0x84),
@@ -439,6 +439,38 @@ pub fn voice_view(m: &MessageRow, play: Option<&PlayView>) -> (i32, f32, String)
     }
 }
 
+/// The paragraphs of a message whose lines run in different directions (each is
+/// aligned on its own); empty for every other message, which keeps the single
+/// text element.
+fn mixed_paras(text: &str, formatting: bool) -> Vec<ParaItem> {
+    if !text.contains(['\n', '\r']) {
+        return Vec::new();
+    }
+    let paras = crate::format::paragraphs(text);
+    if !crate::format::mixed_direction(&paras) {
+        return Vec::new();
+    }
+    paras
+        .into_iter()
+        .map(|p| {
+            let styled = if p.blank || !formatting { None } else { crate::format::styled_text(&p.text) };
+            ParaItem {
+                formatted: styled.is_some(),
+                styled: styled.unwrap_or_default(),
+                text: p.text.into(),
+                rtl: p.rtl,
+                blank: p.blank,
+            }
+        })
+        .collect()
+}
+
+/// Per-paragraph model for plain text shown verbatim (group description); empty
+/// unless its lines mix directions.
+pub fn plain_paras(text: &str) -> ModelRc<ParaItem> {
+    ModelRc::new(VecModel::from(mixed_paras(text, false)))
+}
+
 pub fn msg_item(m: &MessageRow, is_group: bool, images: MsgImages, ui: RowUi<'_>) -> MsgItem {
     // A deleted message keeps its kind but has no content to show.
     let media = is_media(m.kind) && !m.revoked;
@@ -473,6 +505,7 @@ pub fn msg_item(m: &MessageRow, is_group: bool, images: MsgImages, ui: RowUi<'_>
     };
     let has_links = styled.is_some();
     let styled = styled.unwrap_or_default();
+    let paras = if m.revoked || ui.poll.is_some() || is_contact { Vec::new() } else { mixed_paras(m.text.as_deref().unwrap_or(""), true) };
     let link_url = m.link_url.as_deref().filter(|u| !m.revoked && crate::links::is_safe_link(u));
     // Replies, media, polls, contacts, locations and link cards keep the normal bubble.
     let big_emoji = if media
@@ -535,6 +568,7 @@ pub fn msg_item(m: &MessageRow, is_group: bool, images: MsgImages, ui: RowUi<'_>
         reactions: reaction_chips(if m.revoked { &[] } else { ui.reactions }),
         styled,
         has_links,
+        paras: if big_emoji.is_some() { ModelRc::default() } else { ModelRc::new(VecModel::from(paras)) },
         big_emoji: big_emoji.map_or(0, i32::from),
         can_copy: !m.revoked && ui.poll.is_none() && m.text.as_deref().is_some_and(|t| !t.trim().is_empty()),
         can_delete_everyone: can_delete_for_everyone(m, chrono::Utc::now().timestamp()),
@@ -665,6 +699,7 @@ pub fn separator_item(ts: i64, now: DateTime<Local>) -> MsgItem {
         reactions: ModelRc::default(),
         styled: StyledText::default(),
         has_links: false,
+        paras: ModelRc::default(),
         big_emoji: 0,
         can_copy: false,
         can_delete_everyone: false,

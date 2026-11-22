@@ -30,6 +30,7 @@ mod contact_info;
 mod emoji_ui;
 mod esc;
 mod folders_ui;
+mod paging;
 mod global_search;
 mod group_admin_ui;
 mod group_new_ui;
@@ -131,7 +132,6 @@ pub fn with_app(f: impl FnOnce(&App)) {
 #[derive(Clone, Copy)]
 enum LayoutFix {
     Bottom,
-    Restore { y: f32, h: f32 },
 }
 
 /// A running scroll correction (see [`App::schedule_fix`]).
@@ -156,6 +156,8 @@ struct State {
     msgs: Vec<MessageRow>,
     limit: usize,
     exhausted: bool,
+    /// Scroll-driven history loads: one at a time, see `paging`.
+    pager: paging::Pager,
     conn: ConnState,
     typing: HashMap<String, Instant>,
     /// Last online / last-seen report per contact.
@@ -207,6 +209,7 @@ impl State {
             msgs: Vec::new(),
             limit: PAGE,
             exhausted: false,
+            pager: paging::Pager::default(),
             conn: ConnState::Connecting,
             typing: HashMap::new(),
             presence: HashMap::new(),
@@ -241,6 +244,8 @@ struct Login {
     qr: Option<Image>,
     status: String,
     show_retry: bool,
+    /// No QR code for a while and no proxy: offer the proxy form.
+    show_hint: bool,
     /// Paired: the main screen is shown instead of the QR code.
     logged_in: bool,
 }
@@ -268,6 +273,7 @@ struct ProfileState {
     /// Unread messages in chats that are neither muted nor archived.
     unread: Cell<u32>,
     qr_timer: Timer,
+    hint_timer: Timer,
     remove_timer: Timer,
     removal: Cell<Removal>,
     fatal_msg: RefCell<Option<String>>,
@@ -358,11 +364,13 @@ fn new_state(
             qr: None,
             status: "Connecting…".to_string(),
             show_retry: false,
+            show_hint: false,
             logged_in: false,
         }),
         sync_text: RefCell::new(String::new()),
         unread: Cell::new(unread),
         qr_timer: Timer::default(),
+        hint_timer: Timer::default(),
         remove_timer: Timer::default(),
         removal: Cell::new(Removal::No),
         fatal_msg: RefCell::new(None),
@@ -487,7 +495,13 @@ impl App {
             }
             // The profile used last time goes first so it becomes the active one.
             let mut order: Vec<Profile> = registry.profiles.clone();
-            if let Some(last) = registry.last_active.clone() {
+            let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+            let focus = crate::handoff::startup_focus(
+                crate::handoff::parse_open_profile(&args),
+                registry.last_active.clone(),
+                |id| registry.get(id).is_some(),
+            );
+            if let Some(last) = focus {
                 order.sort_by_key(|p| p.id != last);
             }
             for profile in &order {
@@ -933,6 +947,7 @@ impl App {
         }
         win.set_login_status(l.status.as_str().into());
         win.set_show_retry_qr(l.show_retry);
+        win.set_show_proxy_hint(l.show_hint && !proxy_ui::in_use());
         let name = if self.multi() { p.name() } else { String::new() };
         win.set_login_profile(name.into());
     }
@@ -1211,6 +1226,7 @@ impl App {
     fn finalize_remove(&self, p: &Rc<ProfileState>) {
         p.remove_timer.stop();
         p.qr_timer.stop();
+        p.hint_timer.stop();
         if self.profs.borrow().len() <= 1 {
             // The app always keeps one profile: start a fresh one first.
             self.add_profile();
@@ -1451,14 +1467,15 @@ impl App {
             return;
         }
         self.total_unread.set(Some(total));
-        if let Some(d) = self.desktop.borrow().as_ref() {
-            d.set_unread_badge(total);
-        }
         self.refresh_title();
     }
 
     /// "WaClient — <active profile>", plus the unread total when above zero ("WaClient" while locked).
     fn refresh_title(&self) {
+        // The tray tooltip and badge are visible on the taskbar: no count while locked.
+        if let Some(d) = self.desktop.borrow().as_ref() {
+            d.set_unread_badge(if self.is_locked() { 0 } else { self.total_unread.get().unwrap_or(0) });
+        }
         let Some(win) = self.win() else { return };
         // The title is visible in the taskbar and Alt+Tab: nothing private while locked.
         if self.is_locked() {
@@ -1483,6 +1500,22 @@ impl App {
             return;
         }
         p.login.borrow_mut().show_retry = true;
+        if self.is_active(&p) {
+            self.render_login(&p);
+        }
+    }
+
+    /// The hint timer fired: still no QR code and no proxy.
+    fn offer_proxy_hint(&self, id: &str) {
+        let Some(p) = self.find(id) else { return };
+        let due = {
+            let l = p.login.borrow();
+            proxy_ui::hint_due(l.qr.is_some(), l.logged_in, proxy_ui::in_use())
+        };
+        if !due {
+            return;
+        }
+        p.login.borrow_mut().show_hint = true;
         if self.is_active(&p) {
             self.render_login(&p);
         }
@@ -1525,9 +1558,11 @@ impl App {
 
     fn enter_main(&self, p: &Rc<ProfileState>) {
         p.qr_timer.stop();
+        p.hint_timer.stop();
         {
             let mut l = p.login.borrow_mut();
             l.show_retry = false;
+            l.show_hint = false;
             l.logged_in = true;
         }
         if self.is_active(p) {
@@ -1636,6 +1671,7 @@ impl App {
                         l.qr = Some(img);
                         l.show_retry = false;
                         l.logged_in = false;
+                        l.show_hint = false;
                     }
                     arm_qr_timer(&p);
                     if active {
@@ -2439,8 +2475,9 @@ impl App {
         let Some(win) = self.win() else { return };
         let (jid, before) = {
             let p = self.p();
-            let st = p.st.borrow();
-            if st.exhausted || (!fill && Instant::now() < st.guard_until) {
+            let mut st = p.st.borrow_mut();
+            // A running scroll correction (opening a chat, a new message) owns the position.
+            if st.exhausted || (!fill && (Instant::now() < st.guard_until || self.fix_run.borrow().is_some())) {
                 return;
             }
             let (Some(jid), Some(first)) = (st.selected.clone(), st.msgs.first()) else {
@@ -2451,7 +2488,12 @@ impl App {
                     return;
                 }
             }
-            (jid, (first.ts, first.id.clone()))
+            let before = (first.ts, first.id.clone());
+            // One scroll load at a time: while the previous page settles, further scroll events are ignored.
+            if !fill && !st.pager.request(false) {
+                return;
+            }
+            (jid, before)
         };
         let page = self.p().store.messages_page_before(&jid, Some(before), PAGE as u32);
         let mut page = match page {
@@ -2459,31 +2501,118 @@ impl App {
             Err(e) => {
                 log::error!("load older messages: {e}");
                 // Backing off also rate-limits the banner: it shows once per window.
-                self.p().st.borrow_mut().older_backoff = Some((jid, Instant::now() + OLDER_BACKOFF));
+                let p = self.p();
+                let mut st = p.st.borrow_mut();
+                st.older_backoff = Some((jid, Instant::now() + OLDER_BACKOFF));
+                st.pager.cancel();
+                drop(st);
                 self.show_banner(1, &format!("load older messages: {e}"));
                 return;
             }
         };
-        let y = win.invoke_scroll_y();
-        let h = win.invoke_content_h();
+        let off = win.invoke_scroll_y();
+        let added;
         {
             let p = self.p();
             let mut st = p.st.borrow_mut();
             if st.selected.as_deref() != Some(jid.as_str()) {
+                st.pager.cancel();
                 return;
             }
             if page.len() < PAGE {
                 st.exhausted = true;
             }
             if page.is_empty() {
+                st.pager.cancel();
                 return;
             }
             st.limit += page.len();
+            added = page.len();
             page.append(&mut st.msgs);
             st.msgs = page;
         }
-        self.rebuild_rows();
-        self.schedule_fix(if fill { LayoutFix::Bottom } else { LayoutFix::Restore { y, h } });
+        if fill {
+            self.rebuild_rows();
+            self.schedule_fix(LayoutFix::Bottom);
+            return;
+        }
+        let rows_before = self.msgs_model.row_count();
+        let seam_continues_day = self.prepend_rows(added);
+        let rows_after = self.msgs_model.row_count();
+        // Pin the row that was first before to where it was on screen. The rows
+        // already in the list were not touched, so nothing is re-rendered.
+        let idx = paging::anchor_index(rows_before, rows_after, seam_continues_day);
+        win.invoke_anchor_begin(idx as i32, rows_after as i32, off);
+        Timer::single_shot(paging::SETTLE, move || with_app(move |a| a.older_settled(&jid)));
+    }
+
+    /// Puts the rows of the `added` oldest messages in front of the existing
+    /// ones; the rows already there are not re-rendered. Returns whether the
+    /// new page ends on the same day as the old first message (its day
+    /// separator is then dropped).
+    fn prepend_rows(&self, added: usize) -> bool {
+        self.prepare_rows();
+        let now = Local::now();
+        let mut items = Vec::new();
+        let seam_continues_day = {
+            let p = self.p();
+            let mut st = p.st.borrow_mut();
+            let st = &mut *st;
+            let is_group = st
+                .selected
+                .as_deref()
+                .is_some_and(|j| ChatKind::from_jid(j) == ChatKind::Group);
+            let mut prev_ts = None;
+            for m in &st.msgs[..added] {
+                if models::new_day(prev_ts, m.ts) {
+                    items.push(models::separator_item(m.ts, now));
+                }
+                prev_ts = Some(m.ts);
+                let images = images_for(&mut st.media, &mut st.decoding, &self.pool, m);
+                let ui = RowUi {
+                    downloading: st.downloading.contains(&m.id),
+                    failed: st.failed.contains(&m.id),
+                    play: st.play.as_ref(),
+                    poll: st.polls.get(&m.id),
+                    reactions: st.reactions.get(&m.id).map_or(&[], Vec::as_slice),
+                };
+                items.push(models::msg_item(m, is_group, images, ui));
+            }
+            st.guard_until = Instant::now() + LAYOUT_GUARD;
+            st.msgs.get(added).is_some_and(|next| !models::new_day(prev_ts, next.ts))
+        };
+        self.ops_decorate(&mut items);
+        self.translate_decorate(&mut items);
+        if seam_continues_day && self.msgs_model.row_data(0).is_some_and(|r| r.is_sep) {
+            self.msgs_model.remove(0);
+        }
+        for (i, item) in items.into_iter().enumerate() {
+            self.msgs_model.insert(i, item);
+        }
+        seam_continues_day
+    }
+
+    /// The anchored row has settled: release the view and, if it is still near
+    /// the top, carry on with the next page (see [`paging::Pager::settled`]).
+    fn older_settled(&self, jid: &str) {
+        let Some(win) = self.win() else { return };
+        win.invoke_anchor_end();
+        let again = {
+            let p = self.p();
+            let mut st = p.st.borrow_mut();
+            if st.selected.as_deref() != Some(jid) {
+                st.pager.cancel();
+                false
+            } else {
+                let exhausted = st.exhausted;
+                st.pager.settled(win.invoke_scroll_y(), exhausted)
+            }
+        };
+        if again {
+            // `settled` already took the slot for this load; hand it back, `load_older` takes it again.
+            self.p().st.borrow_mut().pager.cancel();
+            self.load_older(false);
+        }
     }
 
     /// The ListView only knows real row heights after layout (a tall last row,
@@ -2518,7 +2647,6 @@ impl App {
                 run.stable = if unchanged { run.stable + 1 } else { 0 };
                 match run.fix {
                     LayoutFix::Bottom => win.invoke_scroll_to_bottom(),
-                    LayoutFix::Restore { y, h } => win.invoke_restore_scroll(y, h),
                 }
                 run.set_y = Some(win.invoke_scroll_y());
                 run.last_h = Some(h);
@@ -2590,9 +2718,7 @@ impl App {
         let send_now = {
             let p = self.p();
             let mut st = p.st.borrow_mut();
-            let due = st
-                .last_typing_sent
-                .is_none_or(|t| t.elapsed() >= TYPING_RESEND);
+            let due = composer::typing_due(st.last_typing_sent.map(|t| t.elapsed()));
             if due {
                 st.last_typing_sent = Some(Instant::now());
                 st.composing_in = Some(jid.clone());
@@ -3170,6 +3296,7 @@ impl App {
             "locked" => self.demo_lock(),
             "lock-damaged" => self.demo_lock_damaged(),
             "proxy-blocked" => self.demo_proxy_blocked(),
+            "login-proxy" | "login-proxy-hint" => self.demo_login_proxy(what == "login-proxy-hint"),
             "settings-storage" | "settings-storage-dialog" => {
                 self.demo_storage();
                 self.open_settings();
@@ -3235,7 +3362,7 @@ impl App {
             "poll-votes" | "quiz-create" | "quiz-result" => self.demo_quiz(what),
             "new-group" => self.demo_new_group(),
             "join-preview" => self.demo_join_preview(),
-            "popout" | "popout-send" | "popout-lock" => self.demo_popout(what),
+            w if w.starts_with("popout") => self.demo_popout(w),
             "delete" | "delete-own" => {
                 self.select_chat("111@s.whatsapp.net");
                 win.invoke_show_delete("a17".into(), what == "delete-own");
@@ -3308,6 +3435,8 @@ impl App {
                 self.search_input(q);
             }
             "esc" => self.demo_esc(),
+            // Scrolls the message list to its very top (history paging demo).
+            "scroll-top" => win.invoke_restore_scroll(1.0e9, 0.0),
             "jump-date" => self.demo_jump_date(),
             "jump-pick" => self.demo_jump_pick(),
             a if a.starts_with("search-filters") => self.demo_search_filters(a),
@@ -3463,6 +3592,12 @@ fn unread_total(rows: &[ChatRow]) -> u32 {
 
 /// Without a fresh QR code for [`QR_STALE`] the login screen offers a reload.
 fn arm_qr_timer(p: &ProfileState) {
+    // Callers hold no borrow of `login` here.
+    p.login.borrow_mut().show_hint = false;
+    let hint_id = p.id.clone();
+    p.hint_timer.start(TimerMode::SingleShot, proxy_ui::HINT_AFTER, move || {
+        with_app(|a| a.offer_proxy_hint(&hint_id));
+    });
     let id = p.id.clone();
     p.qr_timer.start(TimerMode::SingleShot, QR_STALE, move || {
         with_app(|a| a.offer_qr_retry(&id));

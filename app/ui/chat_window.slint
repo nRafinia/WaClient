@@ -35,6 +35,7 @@ export component ChatWindow inherits Window {
     in property <[string]> emoji-recents;
 
     callback send-message(string);
+    callback composing(string);
     callback reply-to(string);
     callback cancel-reply();
     callback react(string, string);
@@ -57,7 +58,10 @@ export component ChatWindow inherits Window {
     public pure function scroll-y() -> length { return view.scroll-y(); }
     public pure function content-h() -> length { return view.content-h(); }
     public function restore-scroll(y: length, h: length) { view.restore-scroll(y, h); }
+    public function anchor-begin(idx: int, total: int, off: length) { view.anchor-begin(idx, total, off); }
+    public function anchor-end() { view.anchor-end(); }
     public function focus-composer() { view.focus-composer(); }
+    public function show-emoji-picker() { view.show-emoji-picker(); }
     public function clear-composer() { view.clear-composer(); }
     public pure function composer-text() -> string { return view.composer-text(); }
     public pure function composer-cursor() -> int { return view.composer-cursor(); }
@@ -86,6 +90,7 @@ export component ChatWindow inherits Window {
         emoji-tabs: root.emoji-tabs;
         emoji-recents: root.emoji-recents;
         send-message(t) => { root.send-message(t); }
+        composing(t) => { root.composing(t); }
         reply-to(id) => { root.reply-to(id); }
         cancel-reply => { root.cancel-reply(); }
         react(id, e) => { root.react(id, e); }

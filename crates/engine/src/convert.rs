@@ -21,6 +21,9 @@ struct Parsed<'a> {
     thumbnail: Option<Vec<u8>>,
     geo: Option<(f64, f64)>,
     context: Option<&'a wa::ContextInfo>,
+    /// Message to store as `raw` instead of the original, so media nested in a
+    /// business message can be downloaded like top-level media.
+    lifted: Option<wa::Message>,
 }
 
 impl Parsed<'_> {
@@ -35,6 +38,7 @@ impl Parsed<'_> {
             thumbnail: None,
             geo: None,
             context: None,
+            lifted: None,
         }
     }
 }
@@ -176,8 +180,22 @@ fn classify(base: &wa::Message) -> Option<Parsed<'_>> {
         p.context = poll.context_info.as_option();
         return Some(p);
     }
-    None
+    if let Some(p) = business::classify(base) {
+        return Some(p);
+    }
+    // Anything that is not intentionally hidden still gets a row, so a chat whose
+    // messages we cannot render yet appears and keeps its order (like the
+    // official clients' "this message isn't supported").
+    if business::is_hidden_only(base) {
+        return None;
+    }
+    let mut p = Parsed::new(MessageKind::Other);
+    p.text = Some(UNSUPPORTED_TEXT.to_string());
+    Some(p)
 }
+
+/// Text of the row shown for a message type WaClient cannot render yet.
+pub const UNSUPPORTED_TEXT: &str = "This message type isn't supported in WaClient yet.";
 
 /// Coordinates of a location message; `None` when missing or out of range.
 fn geo_of(lat: Option<f64>, lon: Option<f64>) -> Option<(f64, f64)> {
@@ -418,6 +436,14 @@ fn base_message(msg: &wa::Message) -> &wa::Message {
             current.view_once_message_v2_extension.as_option().map(|w| &w.message),
             current.document_with_caption_message.as_option().map(|w| &w.message),
             current.edited_message.as_option().map(|w| &w.message),
+            current.group_mentioned_message.as_option().map(|w| &w.message),
+            current.bot_invoke_message.as_option().map(|w| &w.message),
+            current.bot_forwarded_message.as_option().map(|w| &w.message),
+            current.spoiler_message.as_option().map(|w| &w.message),
+            current.question_message.as_option().map(|w| &w.message),
+            current.question_reply_message.as_option().map(|w| &w.message),
+            current.limit_sharing_message.as_option().map(|w| &w.message),
+            current.associated_child_message.as_option().map(|w| &w.message),
         ]
         .into_iter()
         .flatten()
@@ -759,7 +785,7 @@ fn build(
         media_duration: parsed.duration,
         thumbnail: parsed.thumbnail,
         local_path: None,
-        raw: Some(raw_without_view_once_quotes(msg)),
+        raw: Some(raw_without_view_once_quotes(parsed.lifted.as_ref().unwrap_or(msg))),
         link_url: link.as_ref().map(|l| l.url.clone()),
         link_title: link.as_ref().map(|l| l.title.clone()).filter(|t| !t.is_empty()),
         link_desc: link.as_ref().map(|l| l.description.clone()).filter(|d| !d.is_empty()),
@@ -964,9 +990,398 @@ pub fn mentioned_jids(msg: &wa::Message) -> Vec<String> {
     context_info_of(msg).map(|c| c.mentioned_jid.clone()).unwrap_or_default()
 }
 
+/// Business / structured messages (templates, interactive, buttons, lists,
+/// products, orders and their replies), rendered as plain text plus an optional
+/// media header, the way WhatsApp Web shows them. Buttons are not clickable;
+/// they are listed as `[label]` lines with their URL, phone number or code.
+mod business {
+    use super::{non_empty, size_of, Parsed, UNSUPPORTED_TEXT};
+    use wa::message as m;
+    use whatsapp_rust::buffa::Message as _;
+    use whatsapp_rust::buffa::MessageField;
+    use whatsapp_rust::prelude::wa;
+    use wa_store::MessageKind;
+
+    /// Media header of a business message.
+    enum Header<'a> {
+        Image(&'a m::ImageMessage),
+        Video(&'a m::VideoMessage),
+        Document(&'a m::DocumentMessage),
+    }
+
+    #[derive(Default)]
+    struct Card<'a> {
+        blocks: Vec<String>,
+        buttons: Vec<String>,
+        media: Option<Header<'a>>,
+        context: Option<&'a wa::ContextInfo>,
+    }
+
+    impl<'a> Card<'a> {
+        fn block(&mut self, text: Option<&str>) {
+            if let Some(t) = text.map(str::trim).filter(|t| !t.is_empty()) {
+                self.blocks.push(t.to_string());
+            }
+        }
+
+        fn button(&mut self, label: Option<&str>, detail: Option<&str>) {
+            let Some(label) = label.map(str::trim).filter(|l| !l.is_empty()) else {
+                return;
+            };
+            match detail.map(str::trim).filter(|d| !d.is_empty()) {
+                Some(d) => self.buttons.push(format!("[{label}] {d}")),
+                None => self.buttons.push(format!("[{label}]")),
+            }
+        }
+
+        fn media(&mut self, media: Header<'a>) {
+            if self.media.is_none() {
+                self.media = Some(media);
+            }
+        }
+
+        fn text(&self) -> String {
+            let mut parts = self.blocks.clone();
+            if !self.buttons.is_empty() {
+                parts.push(self.buttons.join("\n"));
+            }
+            parts.join("\n\n")
+        }
+
+        fn into_parsed(self) -> Parsed<'a> {
+            let text = self.text();
+            let text = (!text.is_empty()).then_some(text);
+            let mut p = match &self.media {
+                Some(Header::Image(img)) => {
+                    let mut p = Parsed::new(MessageKind::Image);
+                    p.mime = img.mimetype.clone();
+                    p.size = size_of(img.file_length);
+                    p.thumbnail = img.jpeg_thumbnail.clone();
+                    p.lifted = Some(wa::Message {
+                        image_message: MessageField::some((*img).clone()),
+                        ..Default::default()
+                    });
+                    p
+                }
+                Some(Header::Video(vid)) => {
+                    let mut p = Parsed::new(MessageKind::Video);
+                    p.mime = vid.mimetype.clone();
+                    p.size = size_of(vid.file_length);
+                    p.duration = vid.seconds.map(i64::from);
+                    p.thumbnail = vid.jpeg_thumbnail.clone();
+                    p.lifted = Some(wa::Message {
+                        video_message: MessageField::some((*vid).clone()),
+                        ..Default::default()
+                    });
+                    p
+                }
+                Some(Header::Document(doc)) => {
+                    let mut p = Parsed::new(MessageKind::Document);
+                    p.mime = doc.mimetype.clone();
+                    p.name = non_empty(&doc.file_name).or_else(|| non_empty(&doc.title));
+                    p.size = size_of(doc.file_length);
+                    p.thumbnail = doc.jpeg_thumbnail.clone();
+                    p.lifted = Some(wa::Message {
+                        document_message: MessageField::some((*doc).clone()),
+                        ..Default::default()
+                    });
+                    p
+                }
+                None => Parsed::new(MessageKind::Other),
+            };
+            p.text = match (text, p.kind) {
+                (Some(t), _) => Some(t),
+                (None, MessageKind::Other) => Some(UNSUPPORTED_TEXT.to_string()),
+                (None, _) => None,
+            };
+            p.context = self.context;
+            p
+        }
+    }
+
+    pub(super) fn classify(base: &wa::Message) -> Option<Parsed<'_>> {
+        let mut card = Card::default();
+        if let Some(t) = base.template_message.as_option() {
+            template(&mut card, t);
+        } else if let Some(i) = base.interactive_message.as_option() {
+            interactive(&mut card, i, 0);
+        } else if let Some(b) = base.buttons_message.as_option() {
+            buttons(&mut card, b);
+        } else if let Some(l) = base.list_message.as_option() {
+            list(&mut card, l);
+        } else if let Some(h) = base.highly_structured_message.as_option() {
+            card.block(hsm(h).as_deref());
+        } else if let Some(pr) = base.product_message.as_option() {
+            product(&mut card, pr);
+        } else if let Some(o) = base.order_message.as_option() {
+            order(&mut card, o);
+        } else if let Some(r) = base.buttons_response_message.as_option() {
+            let shown = match &r.response {
+                Some(m::buttons_response_message::Response::SelectedDisplayText(t)) => Some(t.as_str()),
+                None => None,
+            };
+            card.block(shown.or(r.selected_button_id.as_deref()).or(Some("Selected an option")));
+            card.context = r.context_info.as_option();
+        } else if let Some(r) = base.list_response_message.as_option() {
+            card.block(r.title.as_deref().or(Some("Selected an option")));
+            card.block(r.description.as_deref());
+            card.context = r.context_info.as_option();
+        } else if let Some(r) = base.template_button_reply_message.as_option() {
+            card.block(
+                r.selected_display_text
+                    .as_deref()
+                    .or(r.selected_id.as_deref())
+                    .or(Some("Selected an option")),
+            );
+            card.context = r.context_info.as_option();
+        } else if let Some(r) = base.interactive_response_message.as_option() {
+            let body = r.body.as_option().and_then(|b| b.text.as_deref());
+            card.block(body.or(Some("Selected an option")));
+            card.context = r.context_info.as_option();
+        } else {
+            return None;
+        }
+        Some(card.into_parsed())
+    }
+
+    /// Messages that carry no content for the user and must not get a row.
+    /// Everything else not recognised becomes an "unsupported" row.
+    pub(super) fn is_hidden_only(base: &wa::Message) -> bool {
+        let mut rest = base.clone();
+        rest.conversation = None;
+        rest.sender_key_distribution_message = MessageField::none();
+        rest.fast_ratchet_key_sender_key_distribution_message = MessageField::none();
+        rest.protocol_message = MessageField::none();
+        rest.reaction_message = MessageField::none();
+        rest.enc_reaction_message = MessageField::none();
+        rest.poll_update_message = MessageField::none();
+        rest.keep_in_chat_message = MessageField::none();
+        rest.pin_in_chat_message = MessageField::none();
+        rest.message_context_info = MessageField::none();
+        rest.placeholder_message = MessageField::none();
+        rest.secret_encrypted_message = MessageField::none();
+        rest.enc_event_response_message = MessageField::none();
+        rest.enc_comment_message = MessageField::none();
+        rest.root_secret_distribute_message = MessageField::none();
+        rest.encode_to_vec().is_empty()
+    }
+
+    fn hsm(h: &m::HighlyStructuredMessage) -> Option<String> {
+        non_empty(&h.fallback_lg)
+            .or_else(|| non_empty(&h.fallback_lc))
+            .or_else(|| non_empty(&h.deterministic_lg))
+            .or_else(|| {
+                h.hydrated_hsm.as_option().and_then(|t| {
+                    let mut c = Card::default();
+                    template(&mut c, t);
+                    let text = c.text();
+                    (!text.is_empty()).then_some(text)
+                })
+            })
+    }
+
+    fn template<'a>(card: &mut Card<'a>, t: &'a m::TemplateMessage) {
+        use m::template_message::{four_row_template::Title as FourTitle, hydrated_four_row_template::Title, Format};
+        card.context = t.context_info.as_option();
+        let hydrated = |card: &mut Card<'a>, h: &'a m::template_message::HydratedFourRowTemplate| {
+            match &h.title {
+                Some(Title::HydratedTitleText(s)) => card.block(Some(s)),
+                Some(Title::ImageMessage(i)) => card.media(Header::Image(i)),
+                Some(Title::VideoMessage(v)) => card.media(Header::Video(v)),
+                Some(Title::DocumentMessage(d)) => card.media(Header::Document(d)),
+                _ => {}
+            }
+            card.block(h.hydrated_content_text.as_deref());
+            card.block(h.hydrated_footer_text.as_deref());
+            hydrated_buttons(card, &h.hydrated_buttons);
+        };
+        match &t.format {
+            Some(Format::HydratedFourRowTemplate(h)) => hydrated(card, h),
+            Some(Format::FourRowTemplate(f)) => {
+                match &f.title {
+                    Some(FourTitle::HighlyStructuredMessage(h)) => card.block(hsm(h).as_deref()),
+                    Some(FourTitle::ImageMessage(i)) => card.media(Header::Image(i)),
+                    Some(FourTitle::VideoMessage(v)) => card.media(Header::Video(v)),
+                    Some(FourTitle::DocumentMessage(d)) => card.media(Header::Document(d)),
+                    _ => {}
+                }
+                card.block(f.content.as_option().and_then(hsm).as_deref());
+                card.block(f.footer.as_option().and_then(hsm).as_deref());
+                for b in &f.buttons {
+                    use wa::template_button::Button;
+                    match &b.button {
+                        Some(Button::QuickReplyButton(q)) => {
+                            card.button(q.display_text.as_option().and_then(hsm).as_deref(), None)
+                        }
+                        Some(Button::UrlButton(u)) => card.button(
+                            u.display_text.as_option().and_then(hsm).as_deref(),
+                            u.url.as_option().and_then(hsm).as_deref(),
+                        ),
+                        Some(Button::CallButton(c)) => card.button(
+                            c.display_text.as_option().and_then(hsm).as_deref(),
+                            c.phone_number.as_option().and_then(hsm).as_deref(),
+                        ),
+                        None => {}
+                    }
+                }
+            }
+            Some(Format::InteractiveMessageTemplate(i)) => interactive(card, i, 0),
+            None => {}
+        }
+        // Older senders put the hydrated template in its own field.
+        if t.format.is_none()
+            && let Some(h) = t.hydrated_template.as_option()
+        {
+            hydrated(card, h);
+        }
+    }
+
+    fn hydrated_buttons(card: &mut Card<'_>, buttons: &[wa::HydratedTemplateButton]) {
+        use wa::hydrated_template_button::HydratedButton;
+        for b in buttons {
+            match &b.hydrated_button {
+                Some(HydratedButton::QuickReplyButton(q)) => card.button(q.display_text.as_deref(), None),
+                Some(HydratedButton::UrlButton(u)) => card.button(u.display_text.as_deref(), u.url.as_deref()),
+                Some(HydratedButton::CallButton(c)) => {
+                    card.button(c.display_text.as_deref(), c.phone_number.as_deref())
+                }
+                None => {}
+            }
+        }
+    }
+
+    fn interactive<'a>(card: &mut Card<'a>, i: &'a m::InteractiveMessage, depth: usize) {
+        use m::interactive_message::{header::Media, InteractiveMessage as Body};
+        if card.context.is_none() {
+            card.context = i.context_info.as_option();
+        }
+        if let Some(h) = i.header.as_option() {
+            card.block(h.title.as_deref());
+            card.block(h.subtitle.as_deref());
+            match &h.media {
+                Some(Media::ImageMessage(x)) => card.media(Header::Image(x)),
+                Some(Media::VideoMessage(x)) => card.media(Header::Video(x)),
+                Some(Media::DocumentMessage(x)) => card.media(Header::Document(x)),
+                Some(Media::ProductMessage(p)) => product(card, p),
+                _ => {}
+            }
+        }
+        card.block(i.body.as_option().and_then(|b| b.text.as_deref()));
+        card.block(i.footer.as_option().and_then(|f| f.text.as_deref()));
+        match &i.interactive_message {
+            Some(Body::NativeFlowMessage(n)) => {
+                for b in &n.buttons {
+                    native_flow_button(card, b.name.as_deref(), b.button_params_json.as_deref());
+                }
+            }
+            Some(Body::CarouselMessage(c)) if depth < 2 => {
+                for slide in &c.cards {
+                    let mut inner = Card::default();
+                    interactive(&mut inner, slide, depth + 1);
+                    if let Some(media) = inner.media.take() {
+                        card.media(media);
+                    }
+                    let text = inner.text();
+                    card.block(Some(&text));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// One native-flow button: `buttonParamsJson` holds the label and target.
+    fn native_flow_button(card: &mut Card<'_>, name: Option<&str>, params: Option<&str>) {
+        let Some(v) = params.and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok()) else {
+            return;
+        };
+        let get = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+        let label = get("display_text").or_else(|| get("title"));
+        let detail = match name {
+            Some("cta_url") => get("url").or_else(|| get("merchant_url")),
+            Some("cta_call") => get("phone_number"),
+            Some("cta_copy") => get("copy_code"),
+            _ => None,
+        };
+        card.button(label.as_deref(), detail.as_deref());
+    }
+
+    fn buttons<'a>(card: &mut Card<'a>, b: &'a m::ButtonsMessage) {
+        use m::buttons_message::Header as H;
+        card.context = b.context_info.as_option();
+        match &b.header {
+            Some(H::Text(t)) => card.block(Some(t)),
+            Some(H::ImageMessage(x)) => card.media(Header::Image(x)),
+            Some(H::VideoMessage(x)) => card.media(Header::Video(x)),
+            Some(H::DocumentMessage(x)) => card.media(Header::Document(x)),
+            _ => {}
+        }
+        card.block(b.content_text.as_deref());
+        card.block(b.footer_text.as_deref());
+        for btn in &b.buttons {
+            let label = btn.button_text.as_option().and_then(|t| t.display_text.as_deref());
+            match (label, btn.native_flow_info.as_option()) {
+                (Some(_), _) => card.button(label, None),
+                (None, Some(nf)) => native_flow_button(card, nf.name.as_deref(), nf.params_json.as_deref()),
+                (None, None) => {}
+            }
+        }
+    }
+
+    fn list<'a>(card: &mut Card<'a>, l: &'a m::ListMessage) {
+        card.context = l.context_info.as_option();
+        card.block(l.title.as_deref());
+        card.block(l.description.as_deref());
+        let mut rows = Vec::new();
+        for s in &l.sections {
+            if let Some(t) = non_empty(&s.title) {
+                rows.push(t);
+            }
+            for r in &s.rows {
+                match (non_empty(&r.title), non_empty(&r.description)) {
+                    (Some(t), Some(d)) => rows.push(format!("• {t} - {d}")),
+                    (Some(t), None) => rows.push(format!("• {t}")),
+                    (None, Some(d)) => rows.push(format!("• {d}")),
+                    (None, None) => {}
+                }
+            }
+        }
+        card.block(Some(&rows.join("\n")));
+        card.block(l.footer_text.as_deref());
+        card.button(l.button_text.as_deref(), None);
+    }
+
+    fn product(card: &mut Card<'_>, p: &m::ProductMessage) {
+        if let Some(s) = p.product.as_option() {
+            card.block(s.title.as_deref());
+            card.block(s.description.as_deref());
+            if let Some(amount) = s.price_amount1000 {
+                let code = s.currency_code.as_deref().unwrap_or_default();
+                card.block(Some(&format!("{code} {:.2}", amount as f64 / 1000.0)));
+            }
+            card.block(s.url.as_deref());
+        }
+        card.block(p.body.as_deref());
+        card.block(p.footer.as_deref());
+    }
+
+    fn order<'a>(card: &mut Card<'a>, o: &'a m::OrderMessage) {
+        card.context = o.context_info.as_option();
+        card.block(Some(&format!("🛒 {}", o.order_title.as_deref().unwrap_or("Order"))));
+        if let Some(n) = o.item_count {
+            card.block(Some(&format!("{n} item(s)")));
+        }
+        card.block(o.message.as_deref());
+        if let Some(total) = o.total_amount1000 {
+            let code = o.total_currency_code.as_deref().unwrap_or_default();
+            card.block(Some(&format!("Total: {code} {:.2}", total as f64 / 1000.0)));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use whatsapp_rust::prelude::MessageExt as _;
     use whatsapp_rust::buffa::MessageField;
 
     fn info(id: &str, from_me: bool) -> MessageInfo {
@@ -1259,6 +1674,344 @@ mod tests {
         let long = "a".repeat(500);
         let nm = convert(&wa::Message::text(long)).expect("converted");
         assert_eq!(preview(&nm).chars().count(), PREVIEW_MAX_CHARS + 1);
+    }
+
+    // ---- business / structured messages and unknown types ----
+
+    fn field<T: Default>(v: T) -> MessageField<T> {
+        MessageField::some(v)
+    }
+
+    fn hydrated_template() -> wa::message::TemplateMessage {
+        use wa::message::template_message::{hydrated_four_row_template::Title, Format, HydratedFourRowTemplate};
+        use wa::hydrated_template_button::{HydratedButton, HydratedQuickReplyButton, HydratedURLButton};
+        wa::message::TemplateMessage {
+            format: Some(Format::HydratedFourRowTemplate(Box::new(HydratedFourRowTemplate {
+                hydrated_content_text: Some("Your order has shipped".into()),
+                hydrated_footer_text: Some("Thanks for shopping".into()),
+                hydrated_buttons: vec![
+                    wa::HydratedTemplateButton {
+                        hydrated_button: Some(HydratedButton::UrlButton(Box::new(HydratedURLButton {
+                            display_text: Some("Track order".into()),
+                            url: Some("https://example.com/track".into()),
+                            ..Default::default()
+                        }))),
+                        ..Default::default()
+                    },
+                    wa::HydratedTemplateButton {
+                        hydrated_button: Some(HydratedButton::QuickReplyButton(Box::new(
+                            HydratedQuickReplyButton {
+                                display_text: Some("Stop".into()),
+                                ..Default::default()
+                            },
+                        ))),
+                        ..Default::default()
+                    },
+                ],
+                title: Some(Title::HydratedTitleText("Order update".into())),
+                ..Default::default()
+            }))),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn hydrated_template_shows_text_footer_and_buttons_with_urls() {
+        let msg = wa::Message {
+            template_message: field(hydrated_template()),
+            ..Default::default()
+        };
+        let nm = convert(&msg).expect("template is displayed");
+        assert_eq!(nm.kind, MessageKind::Other);
+        assert_eq!(
+            nm.text.as_deref(),
+            Some("Order update\n\nYour order has shipped\n\nThanks for shopping\n\n[Track order] https://example.com/track\n[Stop]")
+        );
+    }
+
+    #[test]
+    fn template_with_image_header_is_an_image_row_whose_raw_is_downloadable() {
+        use wa::message::template_message::{hydrated_four_row_template::Title, Format, HydratedFourRowTemplate};
+        let image = wa::message::ImageMessage {
+            mimetype: Some("image/jpeg".into()),
+            file_length: Some(1234),
+            jpeg_thumbnail: Some(vec![1, 2, 3]),
+            media_key: Some(vec![9; 32]),
+            ..Default::default()
+        };
+        let msg = wa::Message {
+            template_message: field(wa::message::TemplateMessage {
+                format: Some(Format::HydratedFourRowTemplate(Box::new(HydratedFourRowTemplate {
+                    hydrated_content_text: Some("Sale".into()),
+                    title: Some(Title::ImageMessage(Box::new(image))),
+                    ..Default::default()
+                }))),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let nm = convert(&msg).expect("converted");
+        assert_eq!(nm.kind, MessageKind::Image);
+        assert_eq!(nm.text.as_deref(), Some("Sale"));
+        assert_eq!(nm.media_mime.as_deref(), Some("image/jpeg"));
+        assert_eq!(nm.media_size, Some(1234));
+        assert_eq!(nm.thumbnail, Some(vec![1, 2, 3]));
+        let raw = wa::Message::decode_from_slice(&nm.raw.expect("raw")).expect("decodes");
+        assert_eq!(raw.get_base_message().image_message.as_option().and_then(|i| i.media_key.clone()), Some(vec![9; 32]));
+    }
+
+    #[test]
+    fn legacy_hydrated_template_field_is_read() {
+        let hydrated = match hydrated_template().format {
+            Some(wa::message::template_message::Format::HydratedFourRowTemplate(h)) => *h,
+            _ => unreachable!(),
+        };
+        let msg = wa::Message {
+            template_message: field(wa::message::TemplateMessage {
+                hydrated_template: field(hydrated),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let nm = convert(&msg).expect("converted");
+        assert!(nm.text.as_deref().is_some_and(|t| t.contains("Your order has shipped")));
+    }
+
+    #[test]
+    fn interactive_message_shows_header_body_footer_and_native_flow_buttons() {
+        use wa::message::interactive_message::{
+            native_flow_message::NativeFlowButton, Body, Footer, Header, InteractiveMessage, NativeFlowMessage,
+        };
+        let msg = wa::Message {
+            interactive_message: field(wa::message::InteractiveMessage {
+                header: field(Header {
+                    title: Some("Hello".into()),
+                    ..Default::default()
+                }),
+                body: field(Body { text: Some("Big sale today".into()) }),
+                footer: field(Footer {
+                    text: Some("Reply STOP to opt out".into()),
+                    ..Default::default()
+                }),
+                interactive_message: Some(InteractiveMessage::NativeFlowMessage(Box::new(NativeFlowMessage {
+                    buttons: vec![
+                        NativeFlowButton {
+                            name: Some("cta_url".into()),
+                            button_params_json: Some(r#"{"display_text":"Visit website","url":"https://shop.example"}"#.into()),
+                        },
+                        NativeFlowButton {
+                            name: Some("quick_reply".into()),
+                            button_params_json: Some(r#"{"display_text":"Later","id":"1"}"#.into()),
+                        },
+                    ],
+                    ..Default::default()
+                }))),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let nm = convert(&msg).expect("converted");
+        assert_eq!(
+            nm.text.as_deref(),
+            Some("Hello\n\nBig sale today\n\nReply STOP to opt out\n\n[Visit website] https://shop.example\n[Later]")
+        );
+    }
+
+    #[test]
+    fn buttons_message_and_list_message_are_displayed() {
+        use wa::message::buttons_message::{button::ButtonText, Button};
+        let buttons = wa::Message {
+            buttons_message: field(wa::message::ButtonsMessage {
+                content_text: Some("Pick one".into()),
+                footer_text: Some("Footer".into()),
+                buttons: vec![Button {
+                    button_text: field(ButtonText { display_text: Some("Yes".into()) }),
+                    ..Default::default()
+                }],
+                header: Some(wa::message::buttons_message::Header::Text("Title".into())),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(convert(&buttons).expect("converted").text.as_deref(), Some("Title\n\nPick one\n\nFooter\n\n[Yes]"));
+
+        let list = wa::Message {
+            list_message: field(wa::message::ListMessage {
+                title: Some("Menu".into()),
+                description: Some("Choose".into()),
+                button_text: Some("Open".into()),
+                sections: vec![wa::message::list_message::Section {
+                    title: Some("Drinks".into()),
+                    rows: vec![wa::message::list_message::Row {
+                        title: Some("Tea".into()),
+                        description: Some("hot".into()),
+                        ..Default::default()
+                    }],
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            convert(&list).expect("converted").text.as_deref(),
+            Some("Menu\n\nChoose\n\nDrinks\n• Tea - hot\n\n[Open]")
+        );
+    }
+
+    #[test]
+    fn product_order_and_highly_structured_messages_are_displayed() {
+        let product = wa::Message {
+            product_message: field(wa::message::ProductMessage {
+                product: field(wa::message::product_message::ProductSnapshot {
+                    title: Some("Shoe".into()),
+                    currency_code: Some("USD".into()),
+                    price_amount1000: Some(12_500),
+                    ..Default::default()
+                }),
+                body: Some("Limited".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(convert(&product).expect("converted").text.as_deref(), Some("Shoe\n\nUSD 12.50\n\nLimited"));
+
+        let order = wa::Message {
+            order_message: field(wa::message::OrderMessage {
+                order_title: Some("Order #1".into()),
+                item_count: Some(2),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(convert(&order).expect("converted").text.as_deref().is_some_and(|t| t.contains("Order #1")));
+
+        let hsm = wa::Message {
+            highly_structured_message: field(wa::message::HighlyStructuredMessage {
+                fallback_lg: Some("Hi there".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(convert(&hsm).expect("converted").text.as_deref(), Some("Hi there"));
+    }
+
+    #[test]
+    fn button_and_list_replies_show_the_selection() {
+        let button = wa::Message {
+            buttons_response_message: field(wa::message::ButtonsResponseMessage {
+                selected_button_id: Some("b1".into()),
+                response: Some(wa::message::buttons_response_message::Response::SelectedDisplayText("Yes".into())),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(convert(&button).expect("converted").text.as_deref(), Some("Yes"));
+        let list = wa::Message {
+            list_response_message: field(wa::message::ListResponseMessage {
+                title: Some("Tea".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(convert(&list).expect("converted").text.as_deref(), Some("Tea"));
+        let template = wa::Message {
+            template_button_reply_message: field(wa::message::TemplateButtonReplyMessage {
+                selected_display_text: Some("Stop".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(convert(&template).expect("converted").text.as_deref(), Some("Stop"));
+    }
+
+    #[test]
+    fn business_message_inside_wrappers_is_unwrapped() {
+        let inner = wa::Message {
+            template_message: field(hydrated_template()),
+            ..Default::default()
+        };
+        let wrapped = wa::Message {
+            ephemeral_message: field(wa::message::FutureProofMessage {
+                message: field(wa::Message {
+                    bot_invoke_message: field(wa::message::FutureProofMessage {
+                        message: field(wa::Message {
+                            document_with_caption_message: field(wa::message::FutureProofMessage {
+                                message: field(inner),
+                            }),
+                            ..Default::default()
+                        }),
+                    }),
+                    ..Default::default()
+                }),
+            }),
+            ..Default::default()
+        };
+        let nm = convert(&wrapped).expect("converted");
+        assert!(nm.text.as_deref().is_some_and(|t| t.contains("Your order has shipped")));
+    }
+
+    #[test]
+    fn unknown_message_types_still_get_a_row() {
+        let unknown = wa::Message {
+            group_invite_message: field(wa::message::GroupInviteMessage::default()),
+            ..Default::default()
+        };
+        let nm = convert(&unknown).expect("an unsupported row is created");
+        assert_eq!(nm.kind, MessageKind::Other);
+        assert_eq!(nm.text.as_deref(), Some(UNSUPPORTED_TEXT));
+        // A template without any visible text is not dropped either.
+        let empty_template = wa::Message {
+            template_message: field(wa::message::TemplateMessage::default()),
+            ..Default::default()
+        };
+        assert_eq!(convert(&empty_template).expect("row").text.as_deref(), Some(UNSUPPORTED_TEXT));
+    }
+
+    #[test]
+    fn hidden_system_messages_do_not_get_a_row() {
+        for msg in [
+            wa::Message {
+                message_context_info: field(wa::MessageContextInfo::default()),
+                ..Default::default()
+            },
+            wa::Message {
+                sender_key_distribution_message: field(wa::message::SenderKeyDistributionMessage::default()),
+                ..Default::default()
+            },
+            wa::Message {
+                pin_in_chat_message: field(wa::message::PinInChatMessage::default()),
+                ..Default::default()
+            },
+            wa::Message {
+                keep_in_chat_message: field(wa::message::KeepInChatMessage::default()),
+                ..Default::default()
+            },
+            wa::Message {
+                enc_reaction_message: field(wa::message::EncReactionMessage::default()),
+                ..Default::default()
+            },
+        ] {
+            assert!(convert(&msg).is_none());
+        }
+    }
+
+    #[test]
+    fn history_message_with_a_business_template_converts() {
+        let mut wmi = web_info(false, None);
+        wmi.message = field(wa::Message {
+            template_message: field(hydrated_template()),
+            ..Default::default()
+        });
+        let nm = from_web_message_info(&wmi, "5@s.whatsapp.net", "me@s.whatsapp.net", &|j| j.to_string())
+            .expect("history template is kept");
+        assert!(nm.text.as_deref().is_some_and(|t| t.contains("Track order")));
+        wmi.message = field(wa::Message {
+            group_invite_message: field(wa::message::GroupInviteMessage::default()),
+            ..Default::default()
+        });
+        let nm = from_web_message_info(&wmi, "5@s.whatsapp.net", "me@s.whatsapp.net", &|j| j.to_string())
+            .expect("history unknown type is kept");
+        assert_eq!(nm.text.as_deref(), Some(UNSUPPORTED_TEXT));
     }
 }
 

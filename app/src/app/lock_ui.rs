@@ -197,6 +197,12 @@ pub fn app_idle(window_active: bool, system_idle: Duration, since_last_input: Du
     if window_active { system_idle } else { since_last_input }
 }
 
+/// "Lock when minimized to the tray" applies only when no WaClient window
+/// (main or pop-out) is shown.
+pub fn tray_should_lock(lock_on_tray: bool, main_shown: bool, popout_shown: bool) -> bool {
+    lock_on_tray && !main_shown && !popout_shown
+}
+
 // ---- stored settings --------------------------------------------------------
 
 /// `applock.json`. Absent file = no lock.
@@ -402,8 +408,9 @@ impl App {
         if self.lock.cfg.borrow().passcode.is_none() || self.lock.locked.replace(true) {
             return;
         }
-        // Pop-out chat windows would keep showing messages: they close.
-        self.popouts_close_all();
+        // Pop-out chat windows would keep showing messages: they close, and
+        // come back after the next successful unlock.
+        self.popouts_lock();
         if let Some(win) = self.win() {
             close_open_popups(&win);
             let g = win.global::<LockState>();
@@ -474,6 +481,7 @@ impl App {
             }
             self.refresh_title();
             self.calls_render();
+            self.popouts_reopen();
             return;
         }
         {
@@ -522,11 +530,13 @@ impl App {
             (cfg.lock_on_tray, cfg.auto_lock)
         };
         let w = win.window();
-        if on_tray && (!w.is_visible() || w.is_minimized()) {
+        let main_shown = w.is_visible() && !w.is_minimized();
+        if tray_should_lock(on_tray, main_shown, self.popout_shown()) {
             self.lock_now();
             return;
         }
-        let active = self.window_active();
+        // Typing in a pop-out is activity too.
+        let active = self.window_active() || self.popout_in_front();
         let now = Instant::now();
         let system = system_idle().unwrap_or_default();
         if active {
@@ -638,6 +648,11 @@ impl App {
         self.lock_push();
         self.lock_now();
     }
+
+    /// Demo: the passcode was accepted (what the worker's answer does).
+    pub(super) fn demo_unlock(&self) {
+        self.lock_unlock_done(true);
+    }
 }
 
 #[cfg(test)]
@@ -735,6 +750,14 @@ mod tests {
         let since = Duration::from_secs(400);
         assert_eq!(app_idle(true, sys, since), sys);
         assert_eq!(app_idle(false, sys, since), since);
+    }
+
+    #[test]
+    fn tray_lock_needs_every_window_hidden() {
+        assert!(tray_should_lock(true, false, false));
+        assert!(!tray_should_lock(true, false, true), "a pop-out in use keeps the app unlocked");
+        assert!(!tray_should_lock(true, true, false));
+        assert!(!tray_should_lock(false, false, false));
     }
 
     #[test]
