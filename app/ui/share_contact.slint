@@ -1,5 +1,6 @@
 import { Button, ListView } from "std-widgets.slint";
 import { Theme, Avatar } from "theme.slint";
+import { TextDir } from "chat_search.slint";
 
 // One pickable row: a contact (name and number) or a chat (name only).
 export struct ShareRow {
@@ -93,6 +94,7 @@ export component SharePicker inherits Rectangle {
                     color: Theme.text;
                     font-size: 14px;
                     single-line: true;
+                    horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                     init => { self.focus(); }
                     edited => { ShareState.search(self.text); }
                 }
@@ -197,6 +199,7 @@ export component SharePicker inherits Rectangle {
                         color: Theme.text;
                         font-size: 14px;
                         single-line: true;
+                        horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                         text <=> ShareState.edit-name;
                         edited => { ShareState.rename(self.text); }
                     }

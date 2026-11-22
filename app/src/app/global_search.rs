@@ -23,6 +23,8 @@ const PAGE_HITS: u32 = 40;
 const SENDER_LIMIT: usize = 60;
 /// Characters of context kept on each side of the match in a result line.
 const SNIPPET_RADIUS: usize = 12;
+/// Quiet period before shown results are re-queried after new messages arrive.
+const REFRESH_AFTER: Duration = Duration::from_secs(1);
 /// `SearchFilters.range-index` of the custom range.
 const RANGE_CUSTOM: i32 = 4;
 /// Sentinel `jid` of the own account in the sender picker.
@@ -37,6 +39,10 @@ struct Gs {
     cursor: Option<(i64, String, String)>,
     /// Bumped by every new query so a late answer is dropped.
     generation: u64,
+    /// The running query is a refresh: the old rows stay until its answer replaces them.
+    replace_on_done: bool,
+    /// New messages arrived while a query was running; refresh once it is done.
+    refresh_pending: bool,
     model: Rc<VecModel<SearchHitItem>>,
 }
 
@@ -48,9 +54,12 @@ thread_local! {
         range: DateRange::Any,
         cursor: None,
         generation: 0,
+        replace_on_done: false,
+        refresh_pending: false,
         model: Rc::new(VecModel::default()),
     });
     static DEBOUNCE: Timer = Timer::default();
+    static REFRESH: Timer = Timer::default();
 }
 
 /// One hit with everything the worker thread could resolve.
@@ -117,7 +126,64 @@ fn list_mode(filter: &GlobalFilter) -> i32 {
     }
 }
 
+/// Whether new messages should re-run the search: only while results are shown
+/// (`mode` > 0) and no query is in flight.
+fn refresh_wanted(mode: i32, loading: bool) -> bool {
+    mode > 0 && !loading
+}
+
+/// What new messages mean for the search.
+#[derive(Debug, PartialEq, Eq)]
+enum RefreshStep {
+    Ignore,
+    Schedule,
+    /// A query is in flight: re-arm the refresh when it completes.
+    Defer,
+}
+
+fn refresh_step(mode: i32, loading: bool) -> RefreshStep {
+    if mode == 0 {
+        RefreshStep::Ignore
+    } else if loading {
+        RefreshStep::Defer
+    } else {
+        RefreshStep::Schedule
+    }
+}
+
+/// A refresh keeps every row already loaded, so "Load more" pages do not vanish.
+fn refresh_limit(rows: usize) -> u32 {
+    u32::try_from(rows).unwrap_or(u32::MAX).max(PAGE_HITS)
+}
+
 impl App {
+    /// New chats or messages arrived: refreshes shown results after a quiet second.
+    pub(super) fn gsearch_changed(&self) {
+        let Some(win) = self.win() else { return };
+        let g = win.global::<SearchFilters>();
+        match refresh_step(list_mode(&self.gsearch_filter()), g.get_loading()) {
+            RefreshStep::Ignore => {}
+            RefreshStep::Defer => GS.with(|s| s.borrow_mut().refresh_pending = true),
+            RefreshStep::Schedule => Self::gsearch_arm_refresh(),
+        }
+    }
+
+    fn gsearch_arm_refresh() {
+        REFRESH.with(|t| {
+            if !t.running() {
+                t.start(TimerMode::SingleShot, REFRESH_AFTER, || with_app(App::gsearch_refresh));
+            }
+        });
+    }
+
+    fn gsearch_refresh(&self) {
+        let Some(win) = self.win() else { return };
+        if !refresh_wanted(list_mode(&self.gsearch_filter()), win.global::<SearchFilters>().get_loading()) {
+            return;
+        }
+        self.gsearch_start(true, true);
+    }
+
     /// A keystroke in the chat-list search box.
     pub(super) fn gsearch_text_changed(&self, text: &str) {
         GS.with(|s| s.borrow_mut().text = text.trim().to_string());
@@ -221,6 +287,7 @@ impl App {
             s.range = DateRange::Any;
             s.cursor = None;
             s.generation += 1;
+            s.refresh_pending = false;
             s.model.set_vec(Vec::new());
         });
         if let Some(win) = self.win() {
@@ -233,34 +300,50 @@ impl App {
 
     /// Runs the query for the current filters: from the top (`fresh`) or the next page.
     fn gsearch_run(&self, fresh: bool) {
+        self.gsearch_start(fresh, false);
+    }
+
+    /// `quiet`: a refresh of the shown results, which keeps them (and the
+    /// scroll position) until the answer arrives.
+    fn gsearch_start(&self, fresh: bool, quiet: bool) {
         let Some(win) = self.win() else { return };
         let filter = self.gsearch_filter();
-        let (generation, cursor) = GS.with(|s| {
+        let (generation, cursor, limit) = GS.with(|s| {
             let mut s = s.borrow_mut();
+            s.replace_on_done = quiet;
+            if quiet {
+                // This refresh sees everything stored so far.
+                s.refresh_pending = false;
+            }
+            let limit = if quiet { refresh_limit(s.model.row_count()) } else { PAGE_HITS };
+            // Every start supersedes an answer still on its way (a refresh must
+            // not land on top of a "Load more" page).
+            s.generation += 1;
             if fresh {
                 s.cursor = None;
-                s.generation += 1;
                 if filter.is_empty() {
                     s.model.set_vec(Vec::new());
                 }
             }
-            (s.generation, s.cursor.clone())
+            (s.generation, s.cursor.clone(), limit)
         });
         if filter.is_empty() {
             self.gsearch_publish(&win, false, false);
             return;
         }
-        if fresh {
+        if fresh && !quiet {
             GS.with(|s| s.borrow().model.set_vec(Vec::new()));
         }
-        self.gsearch_publish(&win, true, false);
+        if !quiet {
+            self.gsearch_publish(&win, true, false);
+        }
         let p = self.p();
         let store = p.store.clone();
         let profile = p.id.clone();
         let spawned = std::thread::Builder::new().name("global-search".into()).spawn(move || {
             let key = cursor.as_ref().map(|(t, c, i)| (*t, c.as_str(), i.as_str()));
-            let result = store.search_everywhere(&filter, key, PAGE_HITS).map_err(|e| e.to_string()).map(|rows| {
-                let more = rows.len() >= PAGE_HITS as usize;
+            let result = store.search_everywhere(&filter, key, limit).map_err(|e| e.to_string()).map(|rows| {
+                let more = rows.len() >= limit as usize;
                 let hits = rows
                     .into_iter()
                     .map(|row| {
@@ -338,6 +421,9 @@ impl App {
             .collect();
         GS.with(|s| {
             let mut s = s.borrow_mut();
+            if std::mem::take(&mut s.replace_on_done) {
+                s.model.set_vec(Vec::new());
+            }
             if let Some(last) = page.hits.last() {
                 s.cursor = Some((last.row.ts, last.row.chat_jid.clone(), last.row.id.clone()));
             }
@@ -346,6 +432,9 @@ impl App {
             }
         });
         self.gsearch_publish(&win, false, page.more);
+        if GS.with(|s| std::mem::take(&mut s.borrow_mut().refresh_pending)) {
+            self.gsearch_changed();
+        }
     }
 
     /// Pushes the chip labels, the list mode and the loading state to the window.
@@ -431,6 +520,29 @@ mod tests {
         assert_eq!(hit_body(&doc), "Invoice.pdf");
         assert_eq!(hit_body(&row(MessageKind::Document, None)), "Document");
         assert!(hit_body(&row(MessageKind::Voice, None)).contains("Voice"));
+    }
+
+    #[test]
+    fn refresh_only_while_results_are_shown_and_idle() {
+        assert!(!refresh_wanted(0, false));
+        assert!(refresh_wanted(1, false));
+        assert!(refresh_wanted(2, false));
+        assert!(!refresh_wanted(2, true));
+    }
+
+    #[test]
+    fn refresh_during_a_query_is_deferred_not_dropped() {
+        assert_eq!(refresh_step(0, false), RefreshStep::Ignore);
+        assert_eq!(refresh_step(0, true), RefreshStep::Ignore);
+        assert_eq!(refresh_step(1, false), RefreshStep::Schedule);
+        assert_eq!(refresh_step(2, true), RefreshStep::Defer);
+    }
+
+    #[test]
+    fn refresh_keeps_the_loaded_pages() {
+        assert_eq!(refresh_limit(0), PAGE_HITS);
+        assert_eq!(refresh_limit(10), PAGE_HITS);
+        assert_eq!(refresh_limit(120), 120);
     }
 
     #[test]

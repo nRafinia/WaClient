@@ -35,7 +35,10 @@ export global AppearanceState {
     in property <int> dlg-kind;
     in property <int> dlg-preset;
     in property <int> dlg-dim;
+    in property <int> dlg-blur;
     in property <image> dlg-image;
+    // The image with the blur applied to a small copy, for the live preview.
+    in property <image> dlg-preview;
     in property <bool> dlg-busy;
 
     callback set-theme-mode(int);
@@ -48,6 +51,7 @@ export global AppearanceState {
     callback pick-preset(int);
     callback choose-image();
     callback set-dim(int);
+    callback set-blur(int);
     callback use-default();
     callback close-dialog();
 }
@@ -410,6 +414,40 @@ export component WallpaperDialog inherits Rectangle {
                         maximum: 60;
                         value: AppearanceState.dlg-dim;
                         changed(v) => { AppearanceState.set-dim(Math.round(v)); }
+                    }
+                }
+                if AppearanceState.dlg-kind == 2: VerticalLayout {
+                    spacing: 4px;
+                    Rectangle {
+                        height: 96px;
+                        border-radius: 8px;
+                        clip: true;
+                        background: Theme.input-bg;
+                        Image {
+                            width: parent.width;
+                            height: parent.height;
+                            source: AppearanceState.dlg-preview;
+                            image-fit: cover;
+                        }
+                    }
+                    HorizontalLayout {
+                        Text {
+                            text: "Blur";
+                            color: Theme.text;
+                            font-size: 14px;
+                        }
+                        Rectangle { }
+                        Text {
+                            text: AppearanceState.dlg-blur == 0 ? "Off" : AppearanceState.dlg-blur;
+                            color: Theme.secondary;
+                            font-size: 14px;
+                        }
+                    }
+                    Slider {
+                        minimum: 0;
+                        maximum: 20;
+                        value: AppearanceState.dlg-blur;
+                        changed(v) => { AppearanceState.set-blur(Math.round(v)); }
                     }
                 }
                 HorizontalLayout {

@@ -3,6 +3,12 @@ import { ListView } from "std-widgets.slint";
 import { IconArrowUp, IconArrowDown, IconClose } from "icons.slint";
 import { CalendarState } from "calendar.slint";
 
+// Base direction of a text field's content (undo.rs `paragraph_is_rtl`): the
+// fields right-align while the text starts with a right-to-left letter.
+export global TextDir {
+    pure callback is-rtl(string) -> bool;
+}
+
 // One row of the optional result list. The snippet is pre-split by the glue
 // code so the match can be drawn in a different colour.
 export struct SearchResultItem {
@@ -62,6 +68,7 @@ export component ChatSearchBar inherits Rectangle {
             color: Theme.text;
             font-size: 14px;
             vertical-alignment: center;
+            horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
             text <=> root.query;
             edited => { root.search(self.text); }
             key-pressed(e) => {

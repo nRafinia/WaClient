@@ -52,6 +52,8 @@ pub(super) struct GroupControls {
     pub announce_only: bool,
     pub locked: bool,
     pub approval_required: bool,
+    /// People waiting for approval (admins only).
+    pub pending_requests: u32,
 }
 
 pub(super) fn group_controls(g: &GroupInfo, complete: bool) -> GroupControls {
@@ -71,6 +73,7 @@ pub(super) fn group_controls(g: &GroupInfo, complete: bool) -> GroupControls {
         is_admin: g.i_am_admin,
         can_edit_info: g.i_am_admin || !g.locked,
         can_leave: true,
+        pending_requests: if g.i_am_admin && g.approval_required { g.pending_requests } else { 0 },
         ..settings
     }
 }
@@ -737,6 +740,18 @@ mod tests {
         let c = controls(true, false, false, true);
         assert!(c.left);
         assert!(!c.is_admin && !c.can_edit_info && !c.can_leave);
+    }
+
+    #[test]
+    fn pending_requests_are_for_admins_of_approving_groups() {
+        let mut g = group_info(true, true, false);
+        g.pending_requests = 4;
+        assert_eq!(group_controls(&g, true).pending_requests, 0, "approval is off");
+        g.approval_required = true;
+        assert_eq!(group_controls(&g, true).pending_requests, 4);
+        assert_eq!(group_controls(&g, false).pending_requests, 0, "not before the answer is complete");
+        g.i_am_admin = false;
+        assert_eq!(group_controls(&g, true).pending_requests, 0);
     }
 
     #[test]

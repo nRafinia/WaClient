@@ -127,7 +127,8 @@ impl ChatNotifyPref {
 }
 
 /// Chat background. `kind`: 0 none, 1 preset, 2 image (`file` inside the
-/// profile's wallpapers folder). `dim` (percent) darkens an image in dark mode.
+/// profile's wallpapers folder). `dim` (percent) darkens an image in dark mode;
+/// `blur` (0 = off) softens it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WallpaperPref {
@@ -135,16 +136,18 @@ pub struct WallpaperPref {
     pub preset: u8,
     pub dim: u8,
     pub file: String,
+    pub blur: u8,
 }
 
 impl Default for WallpaperPref {
     fn default() -> Self {
-        WallpaperPref { kind: 0, preset: 0, dim: 25, file: String::new() }
+        WallpaperPref { kind: 0, preset: 0, dim: 25, file: String::new(), blur: 0 }
     }
 }
 
 pub const WALLPAPER_PRESETS: u8 = 8;
 pub const WALLPAPER_DIM_MAX: u8 = 60;
+pub const WALLPAPER_BLUR_MAX: u8 = 20;
 pub const ACCENT_COUNT: u8 = 8;
 const MINUTES_PER_DAY: u16 = 24 * 60;
 
@@ -153,6 +156,7 @@ impl WallpaperPref {
         self.kind = self.kind.min(2);
         self.preset = self.preset.min(WALLPAPER_PRESETS - 1);
         self.dim = self.dim.min(WALLPAPER_DIM_MAX);
+        self.blur = self.blur.min(WALLPAPER_BLUR_MAX);
         if self.kind == 2 && self.file.is_empty() {
             self.kind = 0;
         }
@@ -422,12 +426,13 @@ mod tests {
         s.appearance.theme_mode = 3;
         s.appearance.accent = 200;
         s.appearance.night_from = 5000;
-        s.appearance.wallpaper = WallpaperPref { kind: 2, preset: 99, dim: 99, file: "g.jpg".into() };
+        s.appearance.wallpaper = WallpaperPref { kind: 2, preset: 99, dim: 99, file: "g.jpg".into(), blur: 99 };
         s.appearance.chat_wallpapers.insert("a@s.whatsapp.net".into(), WallpaperPref { kind: 2, ..WallpaperPref::default() });
         save(&t.0, &s).expect("save");
         let l = load(&t.0).appearance;
         assert_eq!((l.theme_mode, l.accent, l.night_from), (3, ACCENT_COUNT - 1, 24 * 60 - 1));
         assert_eq!((l.wallpaper.preset, l.wallpaper.dim), (WALLPAPER_PRESETS - 1, WALLPAPER_DIM_MAX));
+        assert_eq!(l.wallpaper.blur, WALLPAPER_BLUR_MAX);
         // An image wallpaper without a file falls back to none.
         assert_eq!(l.chat_wallpapers["a@s.whatsapp.net"].kind, 0);
         assert_eq!(l.wallpaper.file, "g.jpg");

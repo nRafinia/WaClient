@@ -137,6 +137,26 @@ pub fn shareable_ids(msgs: &[MessageRow], selected: &[String]) -> Vec<String> {
     msgs.iter().filter(|m| selected.contains(&m.id) && models::can_share(m)).map(|m| m.id.clone()).collect()
 }
 
+/// Short reason shown under a chat in the forward picker when the composer's
+/// send gate (`composer::send_gate` notice, empty when open) forbids sending.
+pub fn gate_label(notice: &str) -> &'static str {
+    if notice.is_empty() {
+        ""
+    } else if notice.starts_with("Only admins") {
+        "Only admins can send"
+    } else {
+        "You're no longer a participant"
+    }
+}
+
+/// Splits the picked chats into those that accept messages and how many do not.
+pub fn split_gated(picked: Vec<String>, gated: impl Fn(&str) -> bool) -> (Vec<String>, usize) {
+    let total = picked.len();
+    let open: Vec<String> = picked.into_iter().filter(|j| !gated(j)).collect();
+    let dropped = total - open.len();
+    (open, dropped)
+}
+
 /// Toast for picked messages that were left out of a forward or star.
 fn left_out_text(picked: usize, kept: usize) -> Option<String> {
     let dropped = picked.checked_sub(kept).filter(|d| *d > 0)?;
@@ -536,6 +556,7 @@ impl App {
         let Some(model) = model else { return };
         let p = self.p();
         let blocked = self.blocked_matcher(&p);
+        let profile = p.id.clone();
         let rows: Vec<ChatRow> = {
             let st = p.st.borrow();
             // Blocked contacts cannot be written to, so they are not offered.
@@ -554,6 +575,7 @@ impl App {
                     has_avatar: avatar.is_some(),
                     avatar: avatar.unwrap_or_default(),
                     selected: picked.contains(&r.jid),
+                    note: gate_label(self.gate_notice(&profile, &r.jid)).into(),
                 });
             }
         }
@@ -587,6 +609,11 @@ impl App {
 
     fn forward_toggle(&self, jid: &str) {
         let Some(win) = self.win() else { return };
+        let gated = self.gate_notice(&self.p().id, jid);
+        if !gated.is_empty() {
+            self.show_toast(gate_label(gated));
+            return;
+        }
         let outcome = OPS.with(|o| {
             o.borrow_mut().forward.as_mut().map(|f| toggle_limited(&mut f.picked, jid, MAX_FORWARD_CHATS))
         });
@@ -618,11 +645,25 @@ impl App {
             OPS.with(|o| o.borrow_mut().forward = Some(d));
             return;
         }
-        let count = d.picked.len();
+        // A group's send gate can become known after it was picked.
+        let profile = self.p().id.clone();
+        let (open, dropped) = split_gated(d.picked.clone(), |j| !self.gate_notice(&profile, j).is_empty());
+        if open.is_empty() {
+            self.show_toast("None of the picked chats accepts messages from you");
+            OPS.with(|o| o.borrow_mut().forward = Some(d));
+            return;
+        }
+        let count = open.len();
         self.close_forward_ui();
-        self.send(Command::ForwardMessages { from_chat: d.from, ids: d.ids, to_chats: d.picked });
+        self.send(Command::ForwardMessages { from_chat: d.from, ids: d.ids, to_chats: open });
         self.select_cancel();
-        self.show_toast(&if count == 1 { "Forwarding…".to_string() } else { format!("Forwarding to {count} chats…") });
+        self.show_toast(&if dropped > 0 {
+            format!("Forwarding to {count} chat(s); {dropped} skipped (you can't send there)")
+        } else if count == 1 {
+            "Forwarding…".to_string()
+        } else {
+            format!("Forwarding to {count} chats…")
+        });
     }
 
     fn forward_cancel(&self) {
@@ -1435,5 +1476,22 @@ mod tests {
         assert_eq!(names(""), ["Bob", "Alicia Group", "Alice"]);
         assert_eq!(names("ali"), ["Alicia Group", "Alice"]);
         assert!(names("zzz").is_empty());
+    }
+
+    #[test]
+    fn gate_labels_name_the_reason() {
+        assert_eq!(gate_label(""), "");
+        assert_eq!(gate_label("Only admins can send messages"), "Only admins can send");
+        assert_eq!(gate_label("You can't send messages to this group because you're no longer a participant."), "You're no longer a participant");
+    }
+
+    #[test]
+    fn gated_chats_are_skipped_on_forward() {
+        let (open, dropped) = split_gated(ids(&["a@g.us", "b@s.whatsapp.net", "c@g.us"]), |j| j == "a@g.us");
+        assert_eq!(open, ids(&["b@s.whatsapp.net", "c@g.us"]));
+        assert_eq!(dropped, 1);
+        let (open, dropped) = split_gated(ids(&["a@g.us"]), |_| true);
+        assert!(open.is_empty());
+        assert_eq!(dropped, 1);
     }
 }

@@ -11,7 +11,7 @@ use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio::time::Instant;
 use whatsapp_rust::prelude::{Client, Jid};
-use whatsapp_rust::wacore::stanza::groups::{GroupNotificationAction, GroupParticipantInfo};
+use whatsapp_rust::wacore::stanza::groups::{GroupNotificationAction, GroupParticipantInfo, MembershipRequestMethod};
 use whatsapp_rust::wacore::types::events::GroupUpdate;
 use wa_store::{ChatKind, MessageKind, NewMessage, Store};
 
@@ -335,6 +335,24 @@ fn notice_text(action: &GroupNotificationAction, actor: Option<&Who>, targets: &
             by(&format!("turned {state} admin approval to join this group"))
         }
         GroupNotificationAction::RevokeInvite => by("reset this group's invite link"),
+        // The people asking are the targets; a plain request has only the actor.
+        GroupNotificationAction::MembershipApprovalRequest { .. } => match actor {
+            Some(a) => format!("{} asked to join", a.label(true)),
+            None => return None,
+        },
+        GroupNotificationAction::CreatedMembershipRequests { request_method, .. } => match (actor, targets) {
+            (None, []) => return None,
+            (Some(a), []) => format!("{} asked to join", a.label(true)),
+            (Some(a), _)
+                if *request_method == MembershipRequestMethod::NonAdminAdd
+                    && !targets.iter().all(|t| t.same_person(a)) =>
+            {
+                format!("{} asked to add {}", a.label(true), join_names(targets, false))
+            }
+            (_, _) => format!("{} asked to join", join_names(targets, true)),
+        },
+        // A cancelled or rejected request is not worth a line in the chat; the
+        // pending count is refreshed instead (see `on_group_update`).
         _ => return None,
     };
     Some(text)
@@ -404,8 +422,26 @@ fn participants_of(action: &GroupNotificationAction) -> &[GroupParticipantInfo] 
         | GroupNotificationAction::Remove { participants, .. }
         | GroupNotificationAction::Promote { participants }
         | GroupNotificationAction::Demote { participants } => participants,
+        GroupNotificationAction::CreatedMembershipRequests { requests, .. } => requests,
         _ => &[],
     }
+}
+
+fn is_request_action(action: &GroupNotificationAction) -> bool {
+    matches!(
+        action,
+        GroupNotificationAction::MembershipApprovalRequest { .. } | GroupNotificationAction::CreatedMembershipRequests { .. }
+    )
+}
+
+/// The server may announce one join request in two notifications; both give
+/// the same text within moments, so a text-and-time-bucket id folds them into
+/// one row.
+fn request_notice_id(text: &str, ts: i64) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    format!("GRP-REQ-{:x}-{}", h.finish(), ts.div_euclid(120))
 }
 
 /// Writes the in-chat notice for a group change, if it has one.
@@ -423,9 +459,13 @@ fn write_notice(sh: &Shared, u: &GroupUpdate) {
         return;
     };
     let ts = u.timestamp.timestamp();
-    let id = match u.notification_id.as_deref().filter(|n| !n.is_empty()) {
-        Some(n) => format!("GRP-{n}-{}", u.action_index),
-        None => format!("GRP-{ts}-{}", u.action_index),
+    let id = if is_request_action(&u.action) {
+        request_notice_id(&text, ts)
+    } else {
+        match u.notification_id.as_deref().filter(|n| !n.is_empty()) {
+            Some(n) => format!("GRP-{n}-{}", u.action_index),
+            None => format!("GRP-{ts}-{}", u.action_index),
+        }
     };
     let chat = u.group_jid.to_string();
     match insert_notice(&sh.store, &notice_row(&chat, id, ts, text)) {
@@ -447,6 +487,15 @@ pub fn on_group_update(sh: &Shared, u: &GroupUpdate) {
         sh.emit(UiEvent::ChatsChanged);
     }
     write_notice(sh, u);
+    if matches!(
+        u.action,
+        GroupNotificationAction::MembershipApprovalRequest { .. }
+            | GroupNotificationAction::CreatedMembershipRequests { .. }
+            | GroupNotificationAction::RevokedMembershipRequests { .. }
+            | GroupNotificationAction::MembershipApprovalMode { .. }
+    ) {
+        sh.emit(UiEvent::MembershipRequestsChanged { group_jid: u.group_jid.to_string() });
+    }
 }
 
 #[cfg(test)]
@@ -552,6 +601,42 @@ mod tests {
             "Ali reset this group's invite link"
         );
         assert_eq!(notice_text(&GroupNotificationAction::NoFrequentlyForwarded, Some(&ali), &[]), None);
+    }
+
+    #[test]
+    fn join_request_notices() {
+        let (ali, sara, bob, me) = (who("Ali", false), who("Sara", false), who("Bob", false), who("Me", true));
+        let plain = GroupNotificationAction::MembershipApprovalRequest {
+            request_method: MembershipRequestMethod::InviteLink,
+            parent_group_jid: None,
+        };
+        assert_eq!(notice_text(&plain, Some(&sara), &[]).unwrap(), "Sara asked to join");
+        assert_eq!(notice_text(&plain, None, &[]), None);
+        let created = |method| GroupNotificationAction::CreatedMembershipRequests {
+            request_method: method,
+            parent_group_jid: None,
+            requests: vec![],
+        };
+        let link = created(MembershipRequestMethod::InviteLink);
+        assert_eq!(notice_text(&link, Some(&sara), &[sara.clone()]).unwrap(), "Sara asked to join");
+        assert_eq!(notice_text(&link, None, &[sara.clone(), bob.clone()]).unwrap(), "Sara and Bob asked to join");
+        assert_eq!(notice_text(&link, Some(&sara), &[]).unwrap(), "Sara asked to join");
+        assert_eq!(notice_text(&link, None, &[]), None);
+        let added = created(MembershipRequestMethod::NonAdminAdd);
+        assert_eq!(notice_text(&added, Some(&ali), &[sara.clone()]).unwrap(), "Ali asked to add Sara");
+        assert_eq!(notice_text(&added, Some(&sara), &[sara.clone()]).unwrap(), "Sara asked to join");
+        assert_eq!(notice_text(&added, Some(&ali), &[me]).unwrap(), "Ali asked to add you");
+        let revoked = GroupNotificationAction::RevokedMembershipRequests { participants: vec![] };
+        assert_eq!(notice_text(&revoked, Some(&ali), &[]), None, "cancelled requests make no notice");
+    }
+
+    #[test]
+    fn duplicate_request_notifications_fold_into_one_row() {
+        let a = request_notice_id("Sara asked to join", 1000);
+        assert_eq!(a, request_notice_id("Sara asked to join", 1001));
+        assert_ne!(a, request_notice_id("Bob asked to join", 1000));
+        assert_ne!(a, request_notice_id("Sara asked to join", 1000 + 240));
+        assert!(a.starts_with("GRP-"));
     }
 
     #[test]

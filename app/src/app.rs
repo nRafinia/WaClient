@@ -23,6 +23,7 @@ mod appearance_ui;
 mod attach_ui;
 mod call_ui;
 mod chat_search;
+mod chat_window;
 mod compose_translate;
 mod composer;
 mod contact_info;
@@ -54,6 +55,7 @@ mod shortcuts;
 mod status;
 mod status_post_ui;
 mod export_ui;
+mod sticker_ui;
 mod storage_ui;
 mod timer_ui;
 mod translate_ui;
@@ -326,6 +328,7 @@ pub struct App {
     focus_timer: Timer,
     status: status::StatusState,
     emoji: emoji_ui::EmojiState,
+    stickers: sticker_ui::StickerUi,
     search: search_ui::SearchState,
     staged: attach_ui::AttachState,
     close_to_tray: Cell<bool>,
@@ -334,6 +337,7 @@ pub struct App {
     settings_timer: Timer,
     lock: lock_ui::LockCtl,
     proxy: proxy_ui::ProxyCtl,
+    popouts: chat_window::Popouts,
 }
 
 fn new_state(
@@ -573,6 +577,7 @@ impl App {
             focus_timer: Timer::default(),
             status: status::StatusState::new(),
             emoji: emoji_ui::EmojiState::new(persist.then(|| root_for_recents.join("emoji_recents.json"))),
+            stickers: sticker_ui::StickerUi::new(),
             search: search_ui::SearchState::new(),
             staged: attach_ui::AttachState::new(),
             close_to_tray: Cell::new(true),
@@ -581,13 +586,16 @@ impl App {
             settings_timer: Timer::default(),
             lock: lock_ui::LockCtl::new(persist.then(|| root_for_recents.clone())),
             proxy,
+            popouts: chat_window::Popouts::new(),
         });
         app.status.attach(win);
         app.emoji.attach(win);
+        app.stickers.attach(win);
         app.staged.attach(win);
         composer::wire(win);
         compose_translate::wire(win);
         msgops_ui::wire(win);
+        sticker_ui::wire(win);
         share_ui::wire(win);
         group_admin_ui::wire(win);
         group_new_ui::wire(win);
@@ -610,6 +618,7 @@ impl App {
 
         win.on_search(|q| with_app(|a| a.search(q.as_str())));
         win.on_chat_selected(|jid| with_app(|a| a.select_chat(jid.as_str())));
+        win.on_open_popout(|jid| with_app(|a| a.popout_open(jid.as_str())));
         win.on_send_message(|t| with_app(|a| a.send_text(t.as_str())));
         win.on_composing(|t| with_app(|a| a.on_edit(t.as_str())));
         win.on_attach(|| with_app(App::attach));
@@ -1353,6 +1362,7 @@ impl App {
     /// Asks every engine to stop, hides the window and ends the event loop once
     /// the engines are gone (or after a short grace period).
     pub fn quit(&self) {
+        self.popouts_close_all();
         let dones = self.shutdown_all();
         if let Some(win) = self.win() {
             if let Err(e) = win.hide() {
@@ -1447,9 +1457,14 @@ impl App {
         self.refresh_title();
     }
 
-    /// "WaClient — <active profile>", plus the unread total when above zero.
+    /// "WaClient — <active profile>", plus the unread total when above zero ("WaClient" while locked).
     fn refresh_title(&self) {
         let Some(win) = self.win() else { return };
+        // The title is visible in the taskbar and Alt+Tab: nothing private while locked.
+        if self.is_locked() {
+            win.set_window_title("WaClient".into());
+            return;
+        }
         let name = self.active.borrow().meta.borrow().name.clone();
         let total = self.total_unread.get().unwrap_or(0);
         let title = if total > 0 {
@@ -1612,6 +1627,7 @@ impl App {
     pub fn on_event(&self, id: &str, ev: UiEvent) {
         let Some(p) = self.find(id) else { return };
         let active = self.is_active(&p);
+        let popout_note = chat_window::note_for(&ev);
         match ev {
             UiEvent::Qr { code } => match qr::render(&code) {
                 Some(img) => {
@@ -1694,6 +1710,7 @@ impl App {
             UiEvent::ChatsChanged => {
                 if active {
                     self.refresh_chats();
+                    self.gsearch_changed();
                 } else {
                     self.refresh_unread(&p);
                 }
@@ -1722,7 +1739,9 @@ impl App {
             UiEvent::MessagesChanged { chat_jid } => {
                 if active {
                     self.starred_changed(&chat_jid);
+                    self.poll_votes_changed(&chat_jid);
                     self.on_messages_changed(&chat_jid);
+                    self.gsearch_changed();
                 }
             }
             UiEvent::MessageStatus { chat_jid, id, status } => {
@@ -1780,6 +1799,13 @@ impl App {
             UiEvent::GroupMembersResult { group_jid, action, results } => {
                 self.on_group_members_result(&p, active, &group_jid, action, &results);
             }
+            UiEvent::MembershipRequests { group_jid, requests } => {
+                self.on_membership_requests(&p, active, &group_jid, requests);
+            }
+            UiEvent::MembershipRequestsAnswered { group_jid, approve, results } => {
+                self.on_membership_answered(&p, active, &group_jid, approve, &results);
+            }
+            UiEvent::MembershipRequestsChanged { group_jid } => self.on_membership_changed(&p, active, &group_jid),
             UiEvent::InviteLink { group_jid, link } => self.on_invite_link(&p, active, &group_jid, &link),
             UiEvent::GroupCreated { group_jid, failed } => self.on_group_created(&p, active, &group_jid, &failed),
             UiEvent::InvitePreview(preview) => self.on_invite_preview(&p, active, preview),
@@ -1814,6 +1840,10 @@ impl App {
                     self.show_banner(1, &format!("[{}] {message}", p.name()));
                 }
             }
+        }
+        // After the main view has taken the event: the pop-outs read its state (typing, presence).
+        if let Some(note) = popout_note {
+            self.popouts_note(&p.id, note);
         }
     }
 
@@ -2167,6 +2197,7 @@ impl App {
             win.set_selected_jid(SharedString::default());
             win.invoke_clear_composer();
         }
+        self.appearance_chat_changed();
     }
 
     fn select_chat(&self, jid: &str) {
@@ -3096,6 +3127,17 @@ impl App {
                     });
                 });
             }
+            "stickers" => self.demo_stickers(),
+            "rtl-bubbles" => {
+                self.select_chat("777@s.whatsapp.net");
+                Timer::single_shot(Duration::from_millis(1500), || {
+                    with_app(|a| {
+                        if let Some(w) = a.win() {
+                            w.invoke_scroll_to_bottom();
+                        }
+                    });
+                });
+            }
             "emoji-big" => {
                 self.select_chat("666@s.whatsapp.net");
                 Timer::single_shot(Duration::from_millis(1500), || {
@@ -3105,6 +3147,16 @@ impl App {
                         }
                     });
                 });
+            }
+            // The composer with Persian, mixed (Persian first) and English text.
+            "composer-rtl" | "composer-rtl-mixed" | "composer-ltr" => {
+                self.select_chat("111@s.whatsapp.net");
+                let text = match what {
+                    "composer-rtl" => "type:سلام، حالت چطوره؟ امروز هوا خیلی خوبه",
+                    "composer-rtl-mixed" => "type:سلام hello",
+                    _ => "type:Hello, how are you today?",
+                };
+                Timer::single_shot(Duration::from_millis(1200), move || with_app(|a| a.demo_composer(text)));
             }
             "group-announce" => self.demo_group_announce(),
             "compose-translate" | "compose-translate-error" | "compose-translate-busy" => {
@@ -3161,8 +3213,9 @@ impl App {
             w if w.starts_with("v04-") => self.demo_v04(w),
             w if w.starts_with("schedule") => self.demo_schedule(w),
             w if w.starts_with("translate-") => self.demo_translate(w),
-            w if w.starts_with("theme-") || w.starts_with("wallpaper") => self.demo_appearance(w),
+            w if w.starts_with("theme-") || w.starts_with("wallpaper") || w.starts_with("empty-wallpaper") => self.demo_appearance(w),
             w if w.starts_with("info") => self.demo_info(w),
+            "group-requests" => self.demo_info("info-group-requests"),
             "folders" | "folders-form" => self.demo_folders(what == "folders-form"),
             "archived" => {
                 win.set_archived_mode(true);
@@ -3179,8 +3232,10 @@ impl App {
             "jump-date" => self.demo_jump_date(),
             w if w.starts_with("search-filters") => self.demo_search_filters(w),
             "poll-create" => self.demo_poll_create(),
+            "poll-votes" | "quiz-create" | "quiz-result" => self.demo_quiz(what),
             "new-group" => self.demo_new_group(),
             "join-preview" => self.demo_join_preview(),
+            "popout" | "popout-send" | "popout-lock" => self.demo_popout(what),
             "delete" | "delete-own" => {
                 self.select_chat("111@s.whatsapp.net");
                 win.invoke_show_delete("a17".into(), what == "delete-own");

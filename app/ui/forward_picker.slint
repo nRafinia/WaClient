@@ -1,6 +1,8 @@
 import { Button, ListView } from "std-widgets.slint";
 import { Theme, Avatar } from "theme.slint";
 import { MsgOps } from "msgops.slint";
+import { TextDir } from "chat_search.slint";
+
 
 // Modal chat picker of "Forward": search box, chats (most recent first) with
 // a check mark, up to five picked. Covers its parent.
@@ -58,6 +60,8 @@ export component ForwardPicker inherits Rectangle {
                     color: Theme.text;
                     font-size: 14px;
                     single-line: true;
+                    horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+
                     init => { self.focus(); }
                     edited => { MsgOps.forward-search(self.text); }
                 }
@@ -70,6 +74,7 @@ export component ForwardPicker inherits Rectangle {
                 for c in MsgOps.forward-chats: Rectangle {
                     height: 56px;
                     background: row-ta.has-hover ? Theme.selected : transparent;
+                    opacity: c.note == "" ? 1.0 : 0.45;
                     Avatar {
                         x: 16px;
                         y: (parent.height - self.height) / 2;
@@ -81,14 +86,27 @@ export component ForwardPicker inherits Rectangle {
                     }
                     Text {
                         x: 66px;
+                        y: c.note == "" ? 0px : 8px;
                         width: parent.width - 66px - 60px;
+                        height: c.note == "" ? parent.height : 22px;
                         text: c.name;
                         color: Theme.text;
                         font-size: 15px;
                         overflow: elide;
                         vertical-alignment: center;
                     }
-                    Rectangle {
+                    if c.note != "": Text {
+                        x: 66px;
+                        y: 30px;
+                        width: parent.width - 66px - 60px;
+                        height: 18px;
+                        text: c.note;
+                        color: Theme.secondary;
+                        font-size: 12px;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                    if c.note == "": Rectangle {
                         x: parent.width - 40px;
                         y: (parent.height - self.height) / 2;
                         width: 22px;

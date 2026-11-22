@@ -6,8 +6,8 @@ import { ContactCard } from "contact_card.slint";
 import { LocationCard } from "location_card.slint";
 import { ReactionBar, QuickReactPopup } from "reactions.slint";
 import { MsgMenu, DeleteDialog, Chevron, MenuRow, SavedMessages } from "msg_menu.slint";
-import { EmojiPicker, EmojiRow, EmojiTab } from "emoji_picker.slint";
-import { ChatSearchBar } from "chat_search.slint";
+import { EmojiPicker, EmojiRow, EmojiTab, StickerState } from "emoji_picker.slint";
+import { ChatSearchBar, TextDir } from "chat_search.slint";
 import { MsgOps, SelectionBar, EditBar, PinnedBar, PinDialog, StarIcon } from "msgops.slint";
 import { ForwardPicker } from "forward_picker.slint";
 import { TranslateState } from "translate.slint";
@@ -191,6 +191,7 @@ component Bubble inherits Rectangle {
     callback phone-lookup(string);
     // The current in-chat search hit.
     in property <bool> highlighted;
+    in property <bool> compact;
     // Geometry of the chat view in window coordinates, to keep the menu inside it.
     in property <length> view-x;
     in property <length> view-y;
@@ -207,10 +208,14 @@ component Bubble inherits Rectangle {
     property <bool> can-save-saved: root.m.can-share && SavedMessages.jid != "" && SavedMessages.jid != SavedMessages.open-chat;
     property <string> translate-label: root.m.revoked || !root.m.can-translate ? "" : (root.m.tr-state == 2 ? "Show original" : (root.m.tr-state == 4 ? "Show translation" : "Translate"));
     property <bool> can-info: root.m.mine && !root.m.revoked && root.m.status > 1;
-    property <length> menu-h: 12px + 34px * ((root.m.revoked ? 0 : 4) + (root.m.can-copy ? 1 : 0) + (root.translate-label != "" ? 1 : 0) + (root.can-download ? 1 : 0) + (root.can-open ? 1 : 0) + (root.can-save ? 1 : 0) + (root.can-reveal ? 1 : 0) + (root.m.can-share ? 1 : 0) + (root.can-save-saved ? 1 : 0) + (root.m.can-edit ? 1 : 0) + (root.can-info ? 1 : 0) + 2);
+    // A sticker we have the file of can be added to / removed from the favourites.
+    property <bool> can-sticker-fav: root.m.media-kind == 2 && root.m.has-local && !root.m.revoked;
+    property <bool> sticker-fav;
+    property <length> menu-h: root.compact ? 12px + 34px * ((root.m.revoked ? 0 : 1) + (root.m.can-copy ? 1 : 0)) : 12px + 34px * ((root.m.revoked ? 0 : 4) + (root.m.can-copy ? 1 : 0) + (root.translate-label != "" ? 1 : 0) + (root.can-download ? 1 : 0) + (root.can-open ? 1 : 0) + (root.can-save ? 1 : 0) + (root.can-reveal ? 1 : 0) + (root.m.can-share ? 1 : 0) + (root.can-save-saved ? 1 : 0) + (root.m.can-edit ? 1 : 0) + (root.can-info ? 1 : 0) + (root.can-sticker-fav ? 1 : 0) + 2);
 
     // Opens the context menu with its corner at (px, py) of this bubble.
     function open-menu(px: length, py: length) {
+        root.sticker-fav = root.can-sticker-fav && StickerState.is-fav-message(root.m.id);
         root.menu-x = clamp(root.m.mine ? px - root.menu-w : px, 6px - (root.absolute-position.x - root.view-x), root.view-w - root.menu-w - 6px - (root.absolute-position.x - root.view-x));
         root.menu-y = (root.absolute-position.y - root.view-y) + py + root.menu-h > root.view-h - 8px ? max(py - root.menu-h, 64px - (root.absolute-position.y - root.view-y)) : py;
         menu.show();
@@ -283,6 +288,7 @@ component Bubble inherits Rectangle {
                 y: 6px;
                 width: parent.width - 20px;
                 text: root.m.quoted;
+                horizontal-alignment: TextDir.is-rtl(root.m.quoted) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                 color: Theme.secondary;
                 font-size: 13px * Theme.font-scale;
                 overflow: elide;
@@ -603,6 +609,8 @@ component Bubble inherits Rectangle {
             options: root.m.poll-options;
             total-votes: root.m.poll-total;
             multi: root.m.poll-multi;
+            quiz: root.m.poll-quiz;
+            correct-text: root.m.poll-correct;
             content-w: min(260px, root.max-w - 20px);
         }
         if root.m.contact && !root.m.revoked: ContactCard {
@@ -669,6 +677,7 @@ component Bubble inherits Rectangle {
         }
         if root.m.text != "" && !root.m.revoked && !root.m.poll && !root.m.has-links && !root.m.contact: Text {
             text: root.m.text;
+            horizontal-alignment: TextDir.is-rtl(root.m.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
             color: Theme.text;
             font-size: root.big ? (root.m.big-emoji == 1 ? 48px : (root.m.big-emoji == 2 ? 40px : 32px)) : 14.5px * Theme.font-scale;
             wrap: word-wrap;
@@ -678,6 +687,8 @@ component Bubble inherits Rectangle {
         // reachable from the rest of the bubble and from the footer arrow.
         if root.m.has-links && !root.m.revoked && !root.m.poll: StyledText {
             text: root.m.styled;
+            // The markup is not plain text: the direction comes from the source text.
+            horizontal-alignment: TextDir.is-rtl(root.m.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
             default-color: Theme.text;
             default-font-size: 14.5px * Theme.font-scale;
             link-color: Theme.tick-read;
@@ -704,6 +715,7 @@ component Bubble inherits Rectangle {
         }
         if root.m.tr-state == 2 && !root.m.revoked: Text {
             text: root.m.tr-text;
+            horizontal-alignment: TextDir.is-rtl(root.m.tr-text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
             color: Theme.text;
             font-size: 14.5px * Theme.font-scale;
             wrap: word-wrap;
@@ -921,7 +933,33 @@ component Bubble inherits Rectangle {
         width: root.menu-w;
         height: root.menu-h;
         close-policy: close-on-click-outside;
-        menu-body := MsgMenu {
+        if root.compact: Rectangle {
+            width: parent.width;
+            height: parent.height;
+            background: Theme.panel;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.divider;
+            VerticalLayout {
+                padding-top: 6px;
+                padding-bottom: 6px;
+                if !root.m.revoked: MenuRow {
+                    label: "Reply";
+                    clicked => {
+                        root.reply();
+                        menu.close();
+                    }
+                }
+                if root.m.can-copy: MenuRow {
+                    label: "Copy";
+                    clicked => {
+                        root.copy();
+                        menu.close();
+                    }
+                }
+            }
+        }
+        if !root.compact: menu-body := MsgMenu {
             can-reply: !root.m.revoked;
             can-react: !root.m.revoked;
             can-copy: root.m.can-copy;
@@ -938,6 +976,12 @@ component Bubble inherits Rectangle {
             can-star: !root.m.revoked;
             starred: root.m.starred;
             can-info: root.can-info;
+            can-sticker-fav: root.can-sticker-fav;
+            sticker-fav: root.sticker-fav;
+            sticker-fav-toggle => {
+                StickerState.toggle-fav-message(root.m.id);
+                menu.close();
+            }
             edit => {
                 MsgOps.begin-edit(root.m.id);
                 menu.close();
@@ -1079,6 +1123,7 @@ component Bubble inherits Rectangle {
 component MsgRow inherits VerticalLayout {
     in property <MsgItem> m;
     in property <length> list-w;
+    in property <bool> compact;
     callback reply(string);
     callback download(string);
     callback open(string);
@@ -1222,6 +1267,7 @@ component MsgRow inherits VerticalLayout {
             alignment: root.m.mine ? end : start;
             Bubble {
                 m: root.m;
+                compact: root.compact;
                 highlighted: root.targeted;
                 max-w: root.list-w * 0.65;
                 reply => { root.reply(root.m.id); }
@@ -1280,6 +1326,11 @@ component MsgRow inherits VerticalLayout {
 export component ChatView inherits Rectangle {
     in property <[MsgItem]> messages;
     in property <bool> has-chat;
+    // Pop-out window (chat_window.slint): no search, chat menu, attachments,
+    // voice notes, translation or send-later, and a message menu with just
+    // Reply and Copy.
+    in property <bool> compact;
+    callback pop-out();
     in property <string> header-name;
     in property <string> header-subtitle;
     // Read receipts are off for this chat / for the whole profile.
@@ -1381,6 +1432,8 @@ export component ChatView inherits Rectangle {
         root.delete-everyone-ok = everyone;
         root.delete-open = true;
     }
+    // Opens the emoji picker for the composer (demo and tests).
+    public function show-emoji-picker() { root.open-picker(0); }
     public function focus-composer() {
         input.focus();
     }
@@ -1467,6 +1520,11 @@ export component ChatView inherits Rectangle {
         root.picker-mode = mode;
         root.emoji-search("");
         root.picker-search = "";
+        if (mode != 0) {
+            StickerState.tab = 0;
+        } else if (StickerState.tab == 1) {
+            StickerState.refresh();
+        }
         picker.show();
     }
     function do-send() {
@@ -1483,12 +1541,27 @@ export component ChatView inherits Rectangle {
         Schedule.open-dialog(input.text);
     }
 
-    if !root.has-chat: Text {
-        text: "Select a chat to start messaging";
-        color: Theme.secondary;
-        font-size: 16px;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    if !root.has-chat: WallpaperLayer {
+        width: parent.width;
+        height: parent.height;
+    }
+    if !root.has-chat: Rectangle {
+        // A pill keeps the text readable on any wallpaper.
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: empty-text.preferred-width + 32px;
+        height: empty-text.preferred-height + 14px;
+        border-radius: self.height / 2;
+        background: AppearanceState.wp-kind == 0 ? transparent : Theme.panel;
+        empty-text := Text {
+            x: 16px;
+            y: 7px;
+            text: "Select a chat to start messaging";
+            color: Theme.secondary;
+            font-size: 16px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
     }
 
     Rectangle {
@@ -1549,6 +1622,7 @@ export component ChatView inherits Rectangle {
                 clicked => { root.header-clicked(); }
             }
             Rectangle {
+                visible: !root.compact;
                 x: parent.width - 88px;
                 y: 12px;
                 width: 36px;
@@ -1577,7 +1651,7 @@ export component ChatView inherits Rectangle {
                     x: parent.width + 40px - 260px;
                     y: 52px;
                     width: 260px;
-                    height: 12px + 34px * (root.receipts-global-off || root.header-receipts-off ? 5 : 4);
+                    height: 12px + 34px * (root.receipts-global-off || root.header-receipts-off ? 6 : 5);
                     close-policy: close-on-click-outside;
                     Rectangle {
                         width: parent.width;
@@ -1589,6 +1663,13 @@ export component ChatView inherits Rectangle {
                         VerticalLayout {
                             padding-top: 6px;
                             padding-bottom: 6px;
+                            MenuRow {
+                                label: "Open in new window";
+                                clicked => {
+                                    root.pop-out();
+                                    header-menu.close();
+                                }
+                            }
                             MenuRow {
                                 label: root.header-receipts-off ? "Turn on read receipts for this chat" : "Turn off read receipts for this chat";
                                 clicked => {
@@ -1629,6 +1710,7 @@ export component ChatView inherits Rectangle {
                 }
             }
             Rectangle {
+                visible: !root.compact;
                 x: parent.width - 48px;
                 y: 12px;
                 width: 36px;
@@ -1697,6 +1779,7 @@ export component ChatView inherits Rectangle {
             height: parent.height - 60px - search-bar.height - root.pin-h - composer.height - root.edit-h;
             for m in root.messages: MsgRow {
                 m: m;
+                compact: root.compact;
                 list-w: list.visible-width - 96px;
                 view-x: root.absolute-position.x;
                 view-y: root.absolute-position.y;
@@ -1823,6 +1906,7 @@ export component ChatView inherits Rectangle {
                     y: 25px;
                     width: parent.width - 54px;
                     text: root.reply-text;
+                    horizontal-alignment: TextDir.is-rtl(root.reply-text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                     color: Theme.secondary;
                     font-size: 13px;
                     overflow: elide;
@@ -1850,7 +1934,7 @@ export component ChatView inherits Rectangle {
                 height: composer.input-h;
                 spacing: 8px;
 
-                Rectangle {
+                if !root.compact: Rectangle {
                     width: 40px;
                     Text {
                         text: "📎";
@@ -2046,6 +2130,8 @@ export component ChatView inherits Rectangle {
                                 font-size: 15px * Theme.font-scale;
                                 wrap: word-wrap;
                                 single-line: false;
+                                // One alignment for the whole field: a TextInput cannot align per paragraph.
+                                horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                                 edited => {
                                     Mentions.note(self.text, self.cursor-position-byte-offset, false);
                                     root.composing(self.text);
@@ -2057,7 +2143,7 @@ export component ChatView inherits Rectangle {
                 }
                 // Translate the typed text into the chat's language. The chevron
                 // (or a right-click) picks the target language instead.
-                if input.text != "" && !root.gated && !root.recording && !MsgOps.editing: Rectangle {
+                if input.text != "" && !root.gated && !root.recording && !MsgOps.editing && !root.compact: Rectangle {
                     width: 52px;
                     property <bool> menu-shown: lang-menu.is-open;
                     changed menu-shown => { PopupState.open = max(0, PopupState.open + (self.menu-shown ? 1 : -1)); }
@@ -2171,7 +2257,7 @@ export component ChatView inherits Rectangle {
                         height: 36px;
                         border-radius: 18px;
                         background: Theme.accent;
-                        if input.text != "": Path {
+                        if input.text != "" || root.compact: Path {
                             x: (parent.width - self.width) / 2 + 1px;
                             y: (parent.height - self.height) / 2;
                             width: 16px;
@@ -2181,7 +2267,7 @@ export component ChatView inherits Rectangle {
                             commands: "M 0 0 L 16 8 L 0 16 L 3 8 Z";
                             fill: #111b21;
                         }
-                        if input.text == "": Text {
+                        if input.text == "" && !root.compact: Text {
                             text: "🎤";
                             font-size: 18px;
                             horizontal-alignment: center;
@@ -2192,19 +2278,19 @@ export component ChatView inherits Rectangle {
                     TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
-                            if (input.text == "") {
+                            if (input.text == "" && !root.compact) {
                                 root.start-record();
                             } else {
                                 root.do-send();
                             }
                         }
                         pointer-event(e) => {
-                            if (e.button == PointerEventButton.right && e.kind == PointerEventKind.down && input.text != "" && !root.gated) {
+                            if (e.button == PointerEventButton.right && e.kind == PointerEventKind.down && input.text != "" && !root.gated && !root.compact) {
                                 send-menu.show();
                             }
                         }
                     }
-                    if input.text != "" && !root.gated: Rectangle {
+                    if input.text != "" && !root.gated && !root.compact: Rectangle {
                         x: parent.width - 15px;
                         y: parent.height - 17px;
                         width: 16px;
@@ -2499,6 +2585,7 @@ export component ChatView inherits Rectangle {
             rows: root.emoji-rows;
             tabs: root.emoji-tabs;
             recents: root.emoji-recents;
+            stickers-available: root.picker-mode == 0;
             search-text <=> root.picker-search;
             search-changed(q) => { root.emoji-search(q); }
             closed => { picker.close(); }

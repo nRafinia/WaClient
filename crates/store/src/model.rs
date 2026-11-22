@@ -239,6 +239,8 @@ pub struct PollView {
     /// `(option name, votes, voted by us)` in the poll's own order.
     pub options: Vec<(String, u32, bool)>,
     pub selectable_count: u32,
+    /// Index into `options` of a quiz's correct answer; `None` for ordinary polls.
+    pub correct: Option<usize>,
 }
 
 /// Statuses of one poster, oldest item first.

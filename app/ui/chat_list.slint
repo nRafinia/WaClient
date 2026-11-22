@@ -9,6 +9,7 @@ import { LockState } from "lock.slint";
 import { GroupNew } from "group_new.slint";
 import { SearchFilters, SearchFilterBar, SearchResultsPanel } from "search_filters.slint";
 import { Schedule } from "schedule.slint";
+import { TextDir } from "chat_search.slint";
 
 component ChatRowItem inherits Rectangle {
     in property <ChatItem> chat;
@@ -25,6 +26,7 @@ component ChatRowItem inherits Rectangle {
     callback archive(bool);
     callback receipts(bool);
     callback read-now();
+    callback popout();
     // Read receipts are off for the whole profile.
     in property <bool> receipts-global-off;
     property <bool> can-read-now: root.receipts-global-off || root.chat.receipts-off;
@@ -37,7 +39,7 @@ component ChatRowItem inherits Rectangle {
     property <length> menu-x;
     property <length> menu-y;
     property <length> menu-w: 280px;
-    property <length> menu-h: 12px + 34px * (root.mute-picker ? 4 : (root.folder-picker ? 1 + min(FolderState.menu-rows.length, 8) : (root.chat.unread > 0 ? 1 : 0) + (root.chat.unread > 0 ? 0 : 1) + (root.chat.archived ? 0 : 1) + 3 + (root.can-read-now ? 1 : 0) + (root.chat.is-dm ? 1 : 0) + 1 + (FolderState.has-custom ? 1 : 0)));
+    property <length> menu-h: 12px + 34px * (root.mute-picker ? 4 : (root.folder-picker ? 1 + min(FolderState.menu-rows.length, 8) : (root.chat.unread > 0 ? 1 : 0) + (root.chat.unread > 0 ? 0 : 1) + (root.chat.archived ? 0 : 1) + 3 + (root.can-read-now ? 1 : 0) + (root.chat.is-dm ? 1 : 0) + 1 + (FolderState.has-custom ? 1 : 0) + 1));
 
     function open-menu(px: length, py: length) {
         root.mute-picker = false;
@@ -126,6 +128,7 @@ component ChatRowItem inherits Rectangle {
         y: 40px;
         width: parent.width - 77px - 64px - (root.chat.archived && root.show-archived-tag ? 64px : 0px);
         text: root.chat.preview;
+        horizontal-alignment: TextDir.is-rtl(root.chat.preview) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
         color: root.chat.draft ? Theme.danger : Theme.secondary;
         font-size: 14px;
         overflow: elide;
@@ -235,6 +238,13 @@ component ChatRowItem inherits Rectangle {
             VerticalLayout {
                 padding-top: 6px;
                 padding-bottom: 6px;
+                if root.main-menu: MenuRow {
+                    label: "Open in new window";
+                    clicked => {
+                        root.popout();
+                        menu.close();
+                    }
+                }
                 if root.main-menu && root.chat.unread > 0: MenuRow {
                     label: "Mark as read";
                     clicked => {
@@ -516,6 +526,7 @@ export component ChatList inherits Rectangle {
     callback archive(string, bool);
     callback receipts(string, bool);
     callback read-now(string);
+    callback open-popout(string);
     callback incognito-toggled();
     in property <bool> incognito;
     in property <bool> receipts-global-off;
@@ -832,6 +843,7 @@ export component ChatList inherits Rectangle {
                     font-size: 14px;
                     single-line: true;
                     vertical-alignment: center;
+                    horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                     edited => { root.search(self.text); }
                     changed has-focus => {
                         if (self.has-focus) {
@@ -1001,6 +1013,7 @@ export component ChatList inherits Rectangle {
                     receipts-global-off: root.receipts-global-off;
                     receipts(enabled) => { root.receipts(chat.jid, enabled); }
                     read-now => { root.read-now(chat.jid); }
+                    popout => { root.open-popout(chat.jid); }
                 }
             }
         }

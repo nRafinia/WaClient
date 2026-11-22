@@ -475,6 +475,46 @@ pub struct PollViewModel {
     pub options: Vec<PollOptionView>,
     pub total_votes: u32,
     pub multi: bool,
+    /// Index of a quiz's correct option; `None` for ordinary polls.
+    pub correct: Option<usize>,
+}
+
+/// How a quiz option is marked once the answer is revealed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuizMark {
+    None,
+    Correct,
+    /// The viewer's own wrong choice.
+    Wrong,
+}
+
+/// What a quiz shows after the viewer answered (or for their own quiz): a
+/// mark per option and the correct option's name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuizReveal {
+    pub marks: Vec<QuizMark>,
+    pub correct_name: String,
+}
+
+/// The revealed state of a quiz: `None` for ordinary polls and while the
+/// viewer has not voted on somebody else's quiz.
+pub fn quiz_reveal(p: &PollViewModel, own_poll: bool) -> Option<QuizReveal> {
+    let correct = p.correct?;
+    let correct_name = p.options.get(correct)?.name.clone();
+    if !own_poll && !p.options.iter().any(|o| o.mine) {
+        return None;
+    }
+    let marks = p
+        .options
+        .iter()
+        .enumerate()
+        .map(|(i, o)| match (i == correct, o.mine) {
+            (true, _) => QuizMark::Correct,
+            (false, true) => QuizMark::Wrong,
+            (false, false) => QuizMark::None,
+        })
+        .collect();
+    Some(QuizReveal { marks, correct_name })
 }
 
 pub fn poll_view_model(p: &PollView) -> PollViewModel {
@@ -497,8 +537,9 @@ pub fn poll_view_model(p: &PollView) -> PollViewModel {
         question: p.question.clone(),
         options,
         total_votes: total.min(u64::from(u32::MAX)) as u32,
-        // 0 means "no limit" in the protocol.
-        multi: p.selectable_count != 1,
+        // 0 means "no limit" in the protocol; quizzes take one answer.
+        multi: p.selectable_count != 1 && p.correct.is_none(),
+        correct: p.correct,
     }
 }
 
@@ -758,7 +799,37 @@ mod tests {
             question: "Q?".into(),
             options: opts.iter().map(|(n, v, m)| (n.to_string(), *v, *m)).collect(),
             selectable_count: sel,
+            correct: None,
         }
+    }
+
+    #[test]
+    fn quiz_is_single_answer_and_reveals_after_voting() {
+        let mut view = poll(&[("a", 1, false), ("b", 2, false), ("c", 0, false)], 0);
+        view.correct = Some(1);
+        let vm = poll_view_model(&view);
+        assert!(!vm.multi, "a quiz never allows several answers");
+        assert_eq!(quiz_reveal(&vm, false), None, "hidden until the viewer votes");
+        let own = quiz_reveal(&vm, true).expect("own quiz");
+        assert_eq!(own.marks, [QuizMark::None, QuizMark::Correct, QuizMark::None]);
+        assert_eq!(own.correct_name, "b");
+
+        view.options[0].2 = true;
+        let wrong = quiz_reveal(&poll_view_model(&view), false).expect("voted");
+        assert_eq!(wrong.marks, [QuizMark::Wrong, QuizMark::Correct, QuizMark::None]);
+        view.options[0].2 = false;
+        view.options[1].2 = true;
+        let right = quiz_reveal(&poll_view_model(&view), false).expect("voted");
+        assert_eq!(right.marks, [QuizMark::None, QuizMark::Correct, QuizMark::None]);
+    }
+
+    #[test]
+    fn ordinary_poll_and_stale_correct_index_have_no_reveal() {
+        let vm = poll_view_model(&poll(&[("a", 1, true), ("b", 0, false)], 1));
+        assert_eq!(quiz_reveal(&vm, true), None);
+        let mut view = poll(&[("a", 1, true)], 1);
+        view.correct = Some(5);
+        assert_eq!(quiz_reveal(&poll_view_model(&view), true), None);
     }
 
     #[test]

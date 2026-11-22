@@ -453,6 +453,7 @@ async fn run_generation(
                     | Command::PostTextStatus { .. }
                     | Command::PostMediaStatus { .. }
                     | Command::ForwardMessages { .. }
+                    | Command::SendSticker { .. }
                     | Command::VotePoll { .. }
                     | Command::CreatePoll { .. }),
                 ) => {

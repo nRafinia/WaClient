@@ -1128,6 +1128,12 @@ pub fn record_poll(store: &Store, msg: &wa_store::NewMessage) {
         poll.selectable_count,
     ) {
         log::error!("storing poll failed: {e}");
+        return;
+    }
+    if let Some(correct) = &poll.correct
+        && let Err(e) = store.set_poll_correct(&msg.chat_jid, &msg.id, Some(correct))
+    {
+        log::error!("storing the quiz answer failed: {e}");
     }
 }
 
@@ -1162,6 +1168,7 @@ pub(crate) fn load_poll_secrets(
                 return Ok(None);
             };
             store.upsert_poll(chat, poll_id, &p.question, &p.options, p.selectable_count)?;
+            store.set_poll_correct(chat, poll_id, p.correct.as_deref())?;
             p.options
         }
     };

@@ -21,10 +21,10 @@ use wa_store::ChatKind;
 use super::contact_info::format_phone;
 use super::{App, with_app};
 use crate::models::{initials, tint_for};
-use crate::{MainWindow, MentionItem, Mentions, MsgOps};
+use crate::{MainWindow, MentionItem, Mentions, MsgOps, TextDir};
 
 #[path = "undo.rs"]
-mod undo;
+pub(super) mod undo;
 
 /// Group members are reloaded when older than this.
 const MEMBERS_FRESH: Duration = Duration::from_secs(10 * 60);
@@ -362,6 +362,8 @@ pub(super) fn wire(win: &MainWindow) {
         }
         snap.map_or(text, |s| s.text.into())
     });
+    // Right-aligned text fields for right-to-left text (composer and search boxes).
+    win.global::<TextDir>().on_is_rtl(|text| undo::paragraph_is_rtl(text.as_str()));
     // Home / End in right-to-left paragraphs (undo.rs `rtl_home_end`).
     let weak = win.as_weak();
     m.on_line_nav(move |text, anchor, cursor, home, shift| {

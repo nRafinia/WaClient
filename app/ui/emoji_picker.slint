@@ -1,5 +1,7 @@
 import { ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { MenuRow } from "msg_menu.slint";
+import { TextDir } from "chat_search.slint";
 
 // One row of the grid. A non-empty `header` makes it a section title row
 // (cells ignored); otherwise `cells` holds up to 8 emoji.
@@ -12,6 +14,198 @@ export struct EmojiRow {
 export struct EmojiTab {
     icon: string,
     row: int,
+}
+
+// One sticker of the Stickers tab.
+export struct StickerItem {
+    img: image,
+    key: string,
+}
+
+// The Stickers tab of the picker and the "favourite" toggle of the message menu.
+export global StickerState {
+    // 0: emoji, 1: stickers.
+    in-out property <int> tab;
+    in property <[StickerItem]> favs;
+    in property <[StickerItem]> recent;
+    in property <bool> loading;
+    // The tab was opened (or the picker opened on it): reload the lists.
+    callback refresh();
+    // (from favourites, index): send it to the open chat / flip its favourite state.
+    callback send(bool, int);
+    callback toggle-fav(bool, int);
+    // Sticker message of the open chat: is it a favourite, and flip that.
+    callback is-fav-message(string) -> bool;
+    callback toggle-fav-message(string);
+}
+
+component PickerTab inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    callback clicked();
+
+    border-radius: 15px;
+    background: root.active ? Theme.selected : (ta.has-hover ? Theme.hover : transparent);
+    Text {
+        text: root.label;
+        color: root.active ? Theme.text : Theme.secondary;
+        font-size: 13px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component StickerCell inherits Rectangle {
+    in property <image> img;
+    callback clicked();
+    // Position of the right click inside this cell.
+    callback context(length, length);
+
+    background: ta.has-hover ? Theme.selected : transparent;
+    border-radius: 8px;
+    Image {
+        x: 4px;
+        y: 4px;
+        width: parent.width - 8px;
+        height: parent.height - 8px;
+        source: root.img;
+        image-fit: contain;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.up) {
+                if (e.button == PointerEventButton.left) {
+                    root.clicked();
+                } else if (e.button == PointerEventButton.right) {
+                    root.context(self.mouse-x, self.mouse-y);
+                }
+            }
+        }
+    }
+}
+
+component StickerPage inherits Rectangle {
+    // A sticker was picked: the picker can close.
+    callback sent();
+    property <int> columns: 4;
+    property <length> cell: (self.width - 4px) / root.columns;
+    property <length> title-h: 24px;
+    property <length> favs-h: StickerState.favs.length > 0 ? root.title-h + Math.ceil(StickerState.favs.length / root.columns) * root.cell : 0px;
+    property <length> recent-h: StickerState.recent.length > 0 ? root.title-h + Math.ceil(StickerState.recent.length / root.columns) * root.cell : 0px;
+    // The right-click menu: which list, which sticker and where (page coordinates).
+    property <bool> ctx-open;
+    property <bool> ctx-fav;
+    property <int> ctx-index;
+    property <length> ctx-x;
+    property <length> ctx-y;
+
+    clip: true;
+
+    flick := Flickable {
+        content-height: root.favs-h + root.recent-h;
+        if StickerState.favs.length > 0: Text {
+            x: 2px;
+            y: 0px;
+            width: root.width - 4px;
+            height: root.title-h;
+            text: "Favourites";
+            color: Theme.secondary;
+            font-size: 12px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+        for it[i] in StickerState.favs: StickerCell {
+            x: Math.mod(i, root.columns) * root.cell;
+            y: root.title-h + Math.floor(i / root.columns) * root.cell;
+            width: root.cell;
+            height: root.cell;
+            img: it.img;
+            clicked => {
+                StickerState.send(true, i);
+                root.sent();
+            }
+            context(px, py) => {
+                root.ctx-fav = true;
+                root.ctx-index = i;
+                root.ctx-x = self.x + px;
+                root.ctx-y = self.y + py + flick.content-y;
+                root.ctx-open = true;
+            }
+        }
+        if StickerState.recent.length > 0: Text {
+            x: 2px;
+            y: root.favs-h;
+            width: root.width - 4px;
+            height: root.title-h;
+            text: "Recent";
+            color: Theme.secondary;
+            font-size: 12px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+        for it[i] in StickerState.recent: StickerCell {
+            x: Math.mod(i, root.columns) * root.cell;
+            y: root.favs-h + root.title-h + Math.floor(i / root.columns) * root.cell;
+            width: root.cell;
+            height: root.cell;
+            img: it.img;
+            clicked => {
+                StickerState.send(false, i);
+                root.sent();
+            }
+            context(px, py) => {
+                root.ctx-fav = false;
+                root.ctx-index = i;
+                root.ctx-x = self.x + px;
+                root.ctx-y = self.y + py + flick.content-y;
+                root.ctx-open = true;
+            }
+        }
+    }
+    if StickerState.favs.length == 0 && StickerState.recent.length == 0: Text {
+        width: parent.width - 32px;
+        x: 16px;
+        text: StickerState.loading ? "Loading\u{2026}" : "No stickers yet. Stickers you send or receive show up here.";
+        color: Theme.secondary;
+        font-size: 14px;
+        wrap: word-wrap;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    if root.ctx-open: TouchArea {
+        // Any click outside the little menu closes it.
+        clicked => { root.ctx-open = false; }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.up && e.button == PointerEventButton.right) {
+                root.ctx-open = false;
+            }
+        }
+    }
+    if root.ctx-open: Rectangle {
+        x: min(root.ctx-x, root.width - 200px - 4px);
+        y: min(root.ctx-y, root.height - 38px - 4px);
+        width: 200px;
+        height: 38px;
+        background: Theme.panel;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: Theme.divider;
+        MenuRow {
+            y: 2px;
+            width: parent.width;
+            label: root.ctx-fav ? "Remove from favourites" : "Add to favourites";
+            clicked => {
+                StickerState.toggle-fav(root.ctx-fav, root.ctx-index);
+                root.ctx-open = false;
+            }
+        }
+    }
 }
 
 component EmojiCell inherits Rectangle {
@@ -39,6 +233,8 @@ export component EmojiPicker inherits Rectangle {
     in property <[EmojiTab]> tabs;
     in property <[string]> recents;
     in property <string> empty-text: "No emoji found";
+    // Offer the Stickers tab (not when picking a reaction).
+    in property <bool> stickers-available;
     in-out property <string> search-text;
 
     callback picked(string);
@@ -47,6 +243,7 @@ export component EmojiPicker inherits Rectangle {
 
     property <length> row-h: 38px;
     property <bool> searching: root.search-text != "";
+    property <bool> sticker-view: root.stickers-available && StickerState.tab == 1;
 
     width: 340px;
     height: 380px;
@@ -69,98 +266,131 @@ export component EmojiPicker inherits Rectangle {
             padding: 8px;
             spacing: 6px;
 
-            Rectangle {
-                height: 34px;
-                background: Theme.input-bg;
-                border-radius: 17px;
-
-                if search-input.text == "": Text {
-                    x: 14px;
-                    text: "Search emoji";
-                    color: Theme.secondary;
-                    font-size: 14px;
-                    vertical-alignment: center;
+            if root.stickers-available: HorizontalLayout {
+                height: 30px;
+                spacing: 6px;
+                PickerTab {
+                    label: "Emoji";
+                    active: !root.sticker-view;
+                    clicked => { StickerState.tab = 0; }
                 }
-                search-input := TextInput {
-                    x: 14px;
-                    width: parent.width - 28px;
+                PickerTab {
+                    label: "Stickers";
+                    active: root.sticker-view;
+                    clicked => {
+                        StickerState.tab = 1;
+                        StickerState.refresh();
+                    }
+                }
+            }
+
+            Rectangle {
+                if root.sticker-view: StickerPage {
+                    width: parent.width;
                     height: parent.height;
-                    vertical-alignment: center;
-                    color: Theme.text;
-                    font-size: 14px;
-                    text <=> root.search-text;
-                    edited => { root.search-changed(self.text); }
+                    sent => { root.closed(); }
                 }
-            }
+                VerticalLayout {
+                    visible: !root.sticker-view;
+                    width: parent.width;
+                    height: parent.height;
+                    spacing: 6px;
 
-            if !root.searching: HorizontalLayout {
-                height: 32px;
-                spacing: 2px;
-                for tab in root.tabs: Rectangle {
-                    border-radius: 6px;
-                    background: tab-ta.has-hover ? Theme.hover : transparent;
-                    Text {
-                        text: tab.icon;
-                        font-size: 18px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                    tab-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { grid.content-y = -tab.row * root.row-h; }
-                    }
-                }
-            }
+                    Rectangle {
+                        height: 34px;
+                        background: Theme.input-bg;
+                        border-radius: 17px;
 
-            if !root.searching && root.recents.length > 0: Rectangle {
-                height: root.row-h + 18px;
-                Text {
-                    y: 0px;
-                    text: "Recent";
-                    color: Theme.secondary;
-                    font-size: 12px;
-                    font-weight: 600;
-                }
-                for e[i] in root.recents: EmojiCell {
-                    x: Math.mod(i, 8) * (parent.width / 8);
-                    y: 18px;
-                    width: parent.width / 8;
-                    height: root.row-h;
-                    emoji: e;
-                    visible: i < 8;
-                    clicked => { root.picked(e); }
-                }
-            }
-
-            Rectangle {
-                grid := ListView {
-                    for row in root.rows: Rectangle {
-                        height: root.row-h;
-                        if row.header != "": Text {
-                            x: 2px;
-                            text: row.header;
+                        if search-input.text == "": Text {
+                            x: 14px;
+                            text: "Search emoji";
                             color: Theme.secondary;
-                            font-size: 12px;
-                            font-weight: 600;
+                            font-size: 14px;
                             vertical-alignment: center;
                         }
-                        if row.header == "": Rectangle {
-                            for e[i] in row.cells: EmojiCell {
-                                x: i * (parent.width / 8);
-                                width: parent.width / 8;
-                                height: root.row-h;
-                                emoji: e;
-                                clicked => { root.picked(e); }
+                        search-input := TextInput {
+                            x: 14px;
+                            width: parent.width - 28px;
+                            height: parent.height;
+                            vertical-alignment: center;
+                            color: Theme.text;
+                            font-size: 14px;
+                            horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+                            text <=> root.search-text;
+                            edited => { root.search-changed(self.text); }
+                        }
+                    }
+
+                    if !root.searching: HorizontalLayout {
+                        height: 32px;
+                        spacing: 2px;
+                        for tab in root.tabs: Rectangle {
+                            border-radius: 6px;
+                            background: tab-ta.has-hover ? Theme.hover : transparent;
+                            Text {
+                                text: tab.icon;
+                                font-size: 18px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            tab-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { grid.content-y = -tab.row * root.row-h; }
                             }
                         }
                     }
-                }
-                if root.rows.length == 0: Text {
-                    text: root.empty-text;
-                    color: Theme.secondary;
-                    font-size: 14px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+
+                    if !root.searching && root.recents.length > 0: Rectangle {
+                        height: root.row-h + 18px;
+                        Text {
+                            y: 0px;
+                            text: "Recent";
+                            color: Theme.secondary;
+                            font-size: 12px;
+                            font-weight: 600;
+                        }
+                        for e[i] in root.recents: EmojiCell {
+                            x: Math.mod(i, 8) * (parent.width / 8);
+                            y: 18px;
+                            width: parent.width / 8;
+                            height: root.row-h;
+                            emoji: e;
+                            visible: i < 8;
+                            clicked => { root.picked(e); }
+                        }
+                    }
+
+                    Rectangle {
+                        grid := ListView {
+                            for row in root.rows: Rectangle {
+                                height: root.row-h;
+                                if row.header != "": Text {
+                                    x: 2px;
+                                    text: row.header;
+                                    color: Theme.secondary;
+                                    font-size: 12px;
+                                    font-weight: 600;
+                                    vertical-alignment: center;
+                                }
+                                if row.header == "": Rectangle {
+                                    for e[i] in row.cells: EmojiCell {
+                                        x: i * (parent.width / 8);
+                                        width: parent.width / 8;
+                                        height: root.row-h;
+                                        emoji: e;
+                                        clicked => { root.picked(e); }
+                                    }
+                                }
+                            }
+                        }
+                        if root.rows.length == 0: Text {
+                            text: root.empty-text;
+                            color: Theme.secondary;
+                            font-size: 14px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
             }
         }

@@ -394,7 +394,7 @@ pub enum Command {
     /// Create and send a poll (2..=12 distinct non-empty options).
     /// `multi = false` allows one answer, `true` any number. Stored like any
     /// sent message, so its votes can be decrypted later.
-    CreatePoll { chat_jid: String, question: String, options: Vec<String>, multi: bool },
+    CreatePoll { chat_jid: String, question: String, options: Vec<String>, multi: bool, quiz_correct: Option<usize> },
     // ---- GROUPS ----
     /// Create a group with us as admin. `participants` are user JIDs;
     /// `picture` an optional JPEG/PNG for the group photo. Answered with
@@ -404,6 +404,14 @@ pub enum Command {
     /// Answered with [`UiEvent::GroupMembersResult`]; refreshes the info
     /// panel with a new [`UiEvent::ContactInfo`].
     UpdateGroupMembers { group_jid: String, jids: Vec<String>, action: MemberAction },
+    /// List the people waiting for admin approval to join (we must be an
+    /// admin). Answered with [`UiEvent::MembershipRequests`].
+    FetchMembershipRequests { group_jid: String },
+    /// Approve or reject pending join requests (`jids` as listed in
+    /// [`UiEvent::MembershipRequests`]). Answered with
+    /// [`UiEvent::MembershipRequestsAnswered`], then a fresh list and a
+    /// refreshed info panel.
+    AnswerMembershipRequests { group_jid: String, jids: Vec<String>, approve: bool },
     /// Rename the group (1..=100 characters).
     SetGroupSubject { group_jid: String, subject: String },
     /// Set (Some) or clear (None) the group description.
@@ -423,6 +431,9 @@ pub enum Command {
     /// Join a group via an invite link (or bare code). Answered with
     /// [`UiEvent::GroupJoined`] (or [`UiEvent::GroupJoinFailed`]).
     JoinGroup { link: String },
+    /// Send the sticker of a stored message (`source_chat`/`source_id`, possibly
+    /// from another chat) to `chat_jid`, reusing its upload when possible.
+    SendSticker { chat_jid: String, source_chat: String, source_id: String, quoted_id: Option<String> },
     /// Disconnect cleanly and stop the engine.
     Shutdown,
 }
@@ -482,6 +493,8 @@ impl Command {
             Command::CreatePoll { chat_jid, .. } => ("CreatePoll", Some(chat_jid)),
             Command::CreateGroup { .. } => ("CreateGroup", None),
             Command::UpdateGroupMembers { group_jid, .. } => ("UpdateGroupMembers", Some(group_jid)),
+            Command::FetchMembershipRequests { group_jid } => ("FetchMembershipRequests", Some(group_jid)),
+            Command::AnswerMembershipRequests { group_jid, .. } => ("AnswerMembershipRequests", Some(group_jid)),
             Command::SetGroupSubject { group_jid, .. } => ("SetGroupSubject", Some(group_jid)),
             Command::SetGroupDescription { group_jid, .. } => ("SetGroupDescription", Some(group_jid)),
             Command::SetGroupPicture { group_jid, .. } => ("SetGroupPicture", Some(group_jid)),
@@ -491,6 +504,7 @@ impl Command {
             // Invite codes grant access to the group: never log them.
             Command::PreviewInvite { .. } => ("PreviewInvite", None),
             Command::JoinGroup { .. } => ("JoinGroup", None),
+            Command::SendSticker { chat_jid, .. } => ("SendSticker", Some(chat_jid)),
             Command::Shutdown => ("Shutdown", None),
         };
         match jid {
@@ -626,6 +640,16 @@ pub enum UiEvent {
     GroupCreated { group_jid: String, failed: Vec<MemberChangeResult> },
     /// Reply to [`Command::UpdateGroupMembers`], one entry per requested JID.
     GroupMembersResult { group_jid: String, action: MemberAction, results: Vec<MemberChangeResult> },
+    /// Reply to [`Command::FetchMembershipRequests`] (also sent after every
+    /// [`Command::AnswerMembershipRequests`]); `None` when the list could not
+    /// be loaded (an [`UiEvent::Error`] accompanies it).
+    MembershipRequests { group_jid: String, requests: Option<Vec<MembershipRequest>> },
+    /// Reply to [`Command::AnswerMembershipRequests`], one entry per JID.
+    MembershipRequestsAnswered { group_jid: String, approve: bool, results: Vec<MemberChangeResult> },
+    /// Join requests of the group changed (someone asked, cancelled, or the
+    /// approval setting was toggled): the pending count and an open request
+    /// list are stale.
+    MembershipRequestsChanged { group_jid: String },
     /// Reply to [`Command::FetchInviteLink`]: full `https://chat.whatsapp.com/…` link.
     InviteLink { group_jid: String, link: String },
     /// Reply to [`Command::PreviewInvite`].
@@ -735,6 +759,9 @@ pub struct GroupInfo {
     pub i_am_admin: bool,
     /// We are still a participant (false after leaving or being removed).
     pub i_am_member: bool,
+    /// People waiting for approval; only filled for admins of a group that
+    /// requires approval (0 otherwise or when the count could not be loaded).
+    pub pending_requests: u32,
 }
 
 /// A translated message.
@@ -795,6 +822,32 @@ pub struct MemberChangeResult {
     /// Their privacy settings block direct adds; the UI can offer to send
     /// them the group's invite link in a private chat instead.
     pub invite_instead: bool,
+}
+
+/// How a pending join request came about.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RequestMethod {
+    /// The listing does not say (the server only reports it in notifications).
+    #[default]
+    Unknown,
+    InviteLink,
+    /// A member who is not an admin added the person.
+    AddedByMember,
+    Other,
+}
+
+/// A person waiting for admin approval to join a group.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MembershipRequest {
+    /// The address to answer with (a LID in LID-addressed groups).
+    pub jid: String,
+    /// Address-book or push name, else "+phone"; `None` for an unknown LID.
+    pub name: Option<String>,
+    /// Phone digits when known.
+    pub phone: Option<String>,
+    /// Unix seconds.
+    pub requested_at: Option<i64>,
+    pub method: RequestMethod,
 }
 
 /// What an invite link leads to (reply to [`Command::PreviewInvite`]).

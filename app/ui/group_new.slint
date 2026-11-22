@@ -2,6 +2,7 @@ import { Button, ListView } from "std-widgets.slint";
 import { Theme, Avatar } from "theme.slint";
 import { IconCamera } from "icons.slint";
 import { ShareRow } from "share_contact.slint";
+import { TextDir } from "chat_search.slint";
 
 // State of the "new group" and "join group by link" dialogs (Rust:
 // app/group_new_ui.rs). The member picker of the first step is the share
@@ -68,6 +69,7 @@ component GroupInput inherits Rectangle {
         color: Theme.text;
         font-size: 14px;
         single-line: true;
+        horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
         init => { self.focus(); }
         edited => { root.edited(self.text); }
         accepted => { root.accepted(self.text); }

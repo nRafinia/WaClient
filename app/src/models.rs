@@ -6,7 +6,7 @@ use wa_store::{ChatKind, ChatRow, MessageKind, MessageRow, MessageStatus};
 
 use crate::audio::PlayState;
 use crate::emoji::ReactionChip;
-use crate::status_view::PollViewModel;
+use crate::status_view::{PollViewModel, QuizMark, QuizReveal, quiz_reveal};
 use crate::{ChatItem, ContactEntry, MsgItem, PollOptionItem, ReactionChipItem};
 
 const PALETTE: [(u8, u8, u8); 8] = [
@@ -325,12 +325,18 @@ pub fn is_poll_row(m: &MessageRow) -> bool {
     m.kind == MessageKind::Other && m.text.as_deref().is_some_and(|t| t.starts_with("📊 "))
 }
 
-fn poll_options(poll: Option<&PollViewModel>) -> ModelRc<PollOptionItem> {
+fn poll_options(poll: Option<&PollViewModel>, reveal: Option<&QuizReveal>) -> ModelRc<PollOptionItem> {
     let items: Vec<PollOptionItem> = poll
         .map(|p| {
             p.options
                 .iter()
-                .map(|o| PollOptionItem {
+                .enumerate()
+                .map(|(i, o)| PollOptionItem {
+                    mark: match reveal.and_then(|r| r.marks.get(i)) {
+                        Some(QuizMark::Correct) => 1,
+                        Some(QuizMark::Wrong) => 2,
+                        _ => 0,
+                    },
                     name: o.name.as_str().into(),
                     votes: i32::try_from(o.votes).unwrap_or(i32::MAX),
                     percent: i32::try_from(o.percent).unwrap_or(100),
@@ -482,6 +488,7 @@ pub fn msg_item(m: &MessageRow, is_group: bool, images: MsgImages, ui: RowUi<'_>
     } else {
         m.text.as_deref().and_then(crate::emoji::emoji_only_count)
     };
+    let reveal = ui.poll.and_then(|p| quiz_reveal(p, m.from_me));
     MsgItem {
         id: m.id.as_str().into(),
         is_sep: false,
@@ -520,9 +527,11 @@ pub fn msg_item(m: &MessageRow, is_group: bool, images: MsgImages, ui: RowUi<'_>
         edited: m.edited && !m.revoked,
         poll: ui.poll.is_some() && !m.revoked,
         poll_question: ui.poll.map(|p| p.question.as_str()).unwrap_or_default().into(),
-        poll_options: poll_options(ui.poll),
+        poll_options: poll_options(ui.poll, reveal.as_ref()),
         poll_total: ui.poll.map_or(0, |p| i32::try_from(p.total_votes).unwrap_or(i32::MAX)),
         poll_multi: ui.poll.is_some_and(|p| p.multi),
+        poll_quiz: ui.poll.is_some_and(|p| p.correct.is_some()),
+        poll_correct: reveal.map(|r| format!("Correct answer: {}", r.correct_name)).unwrap_or_default().into(),
         reactions: reaction_chips(if m.revoked { &[] } else { ui.reactions }),
         styled,
         has_links,
@@ -651,6 +660,8 @@ pub fn separator_item(ts: i64, now: DateTime<Local>) -> MsgItem {
         poll_options: ModelRc::default(),
         poll_total: 0,
         poll_multi: false,
+        poll_quiz: false,
+        poll_correct: SharedString::default(),
         reactions: ModelRc::default(),
         styled: StyledText::default(),
         has_links: false,

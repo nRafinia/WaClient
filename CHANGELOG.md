@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.10.0
+
+### Added
+
+- Open a chat in its own window: "Open in new window" in the chat-list row menu and in the chat
+  header menu. The pop-out shows the messages live and has the composer (formatting shortcuts,
+  emoji, undo, reply), reactions, media opening and mark-as-read; up to 4 windows, one per chat
+  (opening again brings it to the front). It follows the theme and closes when the app locks.
+  Search, info panel, polls voting, translation, stickers, attachments and voice notes stay in the
+  main window.
+- Chat wallpaper: a Blur slider (0-20) for custom images with a live preview in the dialog. The
+  original image is kept, so blur can go back to off. The empty "Select a chat" pane now shows the
+  default wallpaper too.
+- Group admins: with "Approve new members" on, the group info shows "Pending requests (N)"; the
+  list shows each person (name, phone, when they asked) with Approve / Reject, plus "Approve all" /
+  "Reject all" (asks first). "Sara asked to join" appears as a notice in the chat; a cancelled
+  request shows no notice.
+- Polls: "View votes" under a poll bubble opens a list of each option with its voters (avatar,
+  name, "You" for your own vote) and when they voted; it updates live while open.
+- Quizzes: the Create poll dialog has a "Quiz mode" switch (single answer, mark the correct
+  option; sent like WhatsApp Web's quizzes). Received and own quizzes show a green check on the
+  correct option, a red cross on your wrong choice and "Correct answer: ..." once you have voted
+  (always for your own quiz). The correct answer is stored with the poll (store migration 13).
+- Stickers: the emoji picker has an Emoji | Stickers switch. The Stickers tab shows your
+  favourites, then the stickers you recently received or sent (newest first, each file once); click
+  one to send it to the open chat (as a reply while the reply bar is up). Right-click a sticker in
+  the grid to add it to or remove it from the favourites; the message menu of a sticker has
+  "Add to favourites" / "Remove from favourites". A sticker is sent with its original upload when
+  it is less than 14 days old, otherwise its saved file is uploaded again. Favourites are stored
+  per profile (store migration 14).
+
+### Fixed
+
+- Re-sending a sticker or forwarding media counts the age of the upload itself (not of the message)
+  against the 14-day reuse limit, so a copy of an old upload is uploaded again instead of arriving
+  as a dead download. A chat-list search refresh requested while "Load more" runs now happens
+  after it finishes.
+- Messages in right-to-left languages (Persian, Arabic, Hebrew) are right-aligned in the chat
+  history like WhatsApp, including the quoted snippet, translation, caption, reply bar, pinned bar
+  and chat-list preview. Each message follows its own first strong letter; a Persian message with
+  an English word stays right-to-left.
+- Text fields now write from the right for right-to-left text (Persian, Arabic, Hebrew, Urdu...):
+  the message composer (also while editing a message), the chat-list search and the in-chat search
+  right-align when the text starts with a right-to-left letter and go back to the left for other
+  text. A multi-line message uses one alignment for the whole field. The same goes for polls and
+  quizzes (question, options, votes list, create dialog), group names, descriptions and member
+  names, the emoji search and global search snippets.
+- Passcode lock: a menu that was open when the app locked no longer shows above the lock screen,
+  and the window title is just "WaClient" while locked (no profile name or unread count).
+- Forwarding: groups where only admins can send, and groups you left, are greyed out in the forward
+  picker ("Only admins can send") and skipped when sending. A group's setting is known once it was
+  opened in this session.
+- Search: Esc in the chat-list search clears the text and filters and hides the filter row; shown
+  results refresh about a second after new messages arrive; the filter chips (Media, Links, Docs,
+  Voice) all fit without scrolling.
+- Settings: the Account (key) and Notifications (bell) icons are larger and thicker.
+
 ## 0.9.0
 
 ### Added

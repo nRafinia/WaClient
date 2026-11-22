@@ -186,8 +186,8 @@ pub async fn run(sh: Shared, client: Arc<Client>, cmd: Command) {
         Command::VotePoll { chat_jid, poll_id, options } => {
             crate::polls::vote(&sh, &client, &chat_jid, &poll_id, &options).await
         }
-        Command::CreatePoll { chat_jid, question, options, multi } => {
-            crate::polls::create(&sh, &client, &chat_jid, &question, &options, multi).await
+        Command::CreatePoll { chat_jid, question, options, multi, quiz_correct } => {
+            crate::polls::create(&sh, &client, &chat_jid, &question, &options, multi, quiz_correct).await
         }
         // ---- GROUP ADMIN ----
         Command::CreateGroup { subject, participants, picture } => {
@@ -195,6 +195,12 @@ pub async fn run(sh: Shared, client: Arc<Client>, cmd: Command) {
         }
         Command::UpdateGroupMembers { group_jid, jids, action } => {
             crate::group_admin::update_members(&sh, &client, &group_jid, &jids, action).await
+        }
+        Command::FetchMembershipRequests { group_jid } => {
+            crate::group_admin::fetch_requests(&sh, &client, &group_jid).await
+        }
+        Command::AnswerMembershipRequests { group_jid, jids, approve } => {
+            crate::group_admin::answer_requests(&sh, &client, &group_jid, &jids, approve).await
         }
         Command::SetGroupSubject { group_jid, subject } => {
             crate::group_admin::set_subject(&sh, &client, &group_jid, &subject).await
@@ -214,6 +220,9 @@ pub async fn run(sh: Shared, client: Arc<Client>, cmd: Command) {
         }
         Command::PreviewInvite { link } => crate::group_admin::preview_invite(&sh, &client, &link).await,
         Command::JoinGroup { link } => crate::group_admin::join(&sh, &client, &link).await,
+        Command::SendSticker { chat_jid, source_chat, source_id, quoted_id } => {
+            crate::sticker::send(&sh, &client, &chat_jid, &source_chat, &source_id, quoted_id.as_deref()).await
+        }
         Command::Logout | Command::Shutdown | Command::RetryPairing | Command::Reconnect => {
             log::error!("lifecycle command reached the command runner");
         }

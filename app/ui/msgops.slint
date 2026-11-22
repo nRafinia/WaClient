@@ -1,6 +1,7 @@
 import { Button } from "std-widgets.slint";
 import { Theme, Avatar } from "theme.slint";
 import { IconClose } from "icons.slint";
+import { TextDir } from "chat_search.slint";
 
 // One chat in the forward picker.
 export struct PickItem {
@@ -11,6 +12,8 @@ export struct PickItem {
     avatar: image,
     has-avatar: bool,
     selected: bool,
+    // Why the row cannot be picked (forward picker); empty: available.
+    note: string,
 }
 
 // One recipient of the message-info panel. Empty strings: not (yet) happened.
@@ -275,6 +278,7 @@ export component PinnedBar inherits Rectangle {
         y: 22px;
         width: parent.width - 28px - 52px;
         text: MsgOps.pin-text;
+        horizontal-alignment: TextDir.is-rtl(MsgOps.pin-text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
         color: Theme.text;
         font-size: 13px;
         overflow: elide;

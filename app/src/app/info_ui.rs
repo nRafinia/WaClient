@@ -501,6 +501,7 @@ impl App {
             announce_only: view.controls.announce_only,
             locked: view.controls.locked,
             approval_required: view.controls.approval_required,
+            pending_requests: i32::try_from(view.controls.pending_requests).unwrap_or(i32::MAX),
             has_business: !view.business.is_empty(),
             biz_category: view.business.category.as_str().into(),
             biz_description: view.business.description.as_str().into(),
@@ -945,7 +946,8 @@ impl App {
     pub(super) fn demo_info(&self, what: &str) {
         use wa_engine::{BusinessProfile, GroupInfo, GroupMember};
         let group = what.starts_with("info-group");
-        let admin = what == "info-group-admin" || what == "info-group-invite" || what == "info-group-settings";
+        let requests = what == "info-group-requests";
+        let admin = requests || what == "info-group-admin" || what == "info-group-invite" || what == "info-group-settings";
         let left = what == "info-group-left";
         let business = what == "info-biz";
         let jid = if group { "999@g.us" } else { "111@s.whatsapp.net" };
@@ -999,6 +1001,8 @@ impl App {
                 i_am_admin: admin,
                 i_am_member: !left,
                 announce_only: admin,
+                approval_required: requests,
+                pending_requests: if requests { 4 } else { 0 },
                 ..GroupInfo::default()
             }),
         };
@@ -1014,6 +1018,7 @@ impl App {
                     ga.set_invite_link("https://chat.whatsapp.com/DemoInviteCode0123456".into());
                 }
                 "info-group-settings" => ga.set_view(2),
+                "info-group-requests" => self.demo_requests(),
                 _ => {}
             }
         }

@@ -1,9 +1,11 @@
+import { Button } from "std-widgets.slint";
 import { PopupState, Theme, Avatar } from "theme.slint";
 import { IconBack, IconClose, IconPlay, IconExternal, IconChevronRight, IconTimer, IconEdit, IconCheck, IconSettings, IconAddPerson, IconLink, IconExit, IconCamera, IconBell } from "icons.slint";
 import { MenuRow, Chevron } from "msg_menu.slint";
 import { TimerState } from "timer_dialog.slint";
 import { ShareState } from "share_contact.slint";
 import { GroupAdmin } from "group_admin.slint";
+import { TextDir } from "chat_search.slint";
 
 export struct ContactInfoModel {
     jid: string,
@@ -40,6 +42,8 @@ export struct ContactInfoModel {
     announce-only: bool,
     locked: bool,
     approval-required: bool,
+    // People waiting for approval (admins of a group with approval on).
+    pending-requests: int,
     // WhatsApp Business details; empty fields are hidden.
     has-business: bool,
     biz-category: string,
@@ -204,6 +208,7 @@ component MemberRow inherits Rectangle {
                 text: root.member.is-me ? "You" : root.member.name;
                 color: Theme.text;
                 font-size: 15px;
+                horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                 overflow: elide;
             }
             if root.member.phone != "" && !root.member.is-me: Text {
@@ -753,6 +758,7 @@ export component ContactInfoPanel inherits Rectangle {
                     text: InfoGallery.open ? "Media, links and docs"
                         : GroupAdmin.view == 1 ? "Invite via link"
                         : GroupAdmin.view == 2 ? "Group settings"
+                        : GroupAdmin.view == 3 ? "Pending requests"
                         : root.model.is-group ? "Group info" : "Contact info";
                     color: Theme.text;
                     font-size: 18px;
@@ -804,6 +810,123 @@ export component ContactInfoPanel inherits Rectangle {
                     label: "Reset link";
                     label-color: Theme.danger;
                     clicked => { GroupAdmin.dialog = 4; }
+                }
+            }
+        }
+
+        // Pending join requests
+        if !InfoGallery.open && GroupAdmin.view == 3: VerticalLayout {
+            if GroupAdmin.requests.length > 0: Rectangle {
+                height: 52px;
+                background: Theme.panel;
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    spacing: 10px;
+                    alignment: end;
+                    VerticalLayout {
+                        alignment: center;
+                        Button {
+                            text: "Reject all";
+                            enabled: !GroupAdmin.requests-busy;
+                            clicked => { GroupAdmin.dialog = 7; }
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Button {
+                            text: "Approve all";
+                            primary: true;
+                            enabled: !GroupAdmin.requests-busy;
+                            clicked => { GroupAdmin.dialog = 6; }
+                        }
+                    }
+                }
+            }
+            Flickable {
+                VerticalLayout {
+                    alignment: start;
+                    if GroupAdmin.requests-loading && GroupAdmin.requests.length == 0: Rectangle {
+                        background: Theme.panel;
+                        VerticalLayout {
+                            padding: 20px;
+                            spacing: 14px;
+                            Placeholder { }
+                            Placeholder { }
+                        }
+                    }
+                    if !GroupAdmin.requests-loading && GroupAdmin.requests.length == 0: Rectangle {
+                        height: 80px;
+                        background: Theme.panel;
+                        Text {
+                            text: "No pending requests";
+                            color: Theme.secondary;
+                            font-size: 14px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                    for r in GroupAdmin.requests: Rectangle {
+                        height: 84px;
+                        background: Theme.panel;
+                        HorizontalLayout {
+                            padding-left: 20px;
+                            padding-right: 16px;
+                            spacing: 12px;
+                            Rectangle {
+                                width: 40px;
+                                Avatar {
+                                    size: 40px;
+                                    has-image: false;
+                                    initials: r.initials;
+                                    tint: r.tint;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
+                                Text {
+                                    text: r.name;
+                                    color: Theme.text;
+                                    font-size: 15px;
+                                    horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+                                    overflow: elide;
+                                }
+                                if r.phone != "": Text {
+                                    text: r.phone;
+                                    color: Theme.secondary;
+                                    font-size: 12px;
+                                    font-family: "Consolas";
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: r.detail;
+                                    color: Theme.secondary;
+                                    font-size: 12px;
+                                    wrap: word-wrap;
+                                }
+                            }
+                            VerticalLayout {
+                                width: 64px;
+                                alignment: center;
+                                Button {
+                                    text: "Reject";
+                                    enabled: !GroupAdmin.requests-busy;
+                                    clicked => { GroupAdmin.answer-request(r.jid, false); }
+                                }
+                            }
+                            VerticalLayout {
+                                width: 80px;
+                                alignment: center;
+                                Button {
+                                    text: "Approve";
+                                    primary: true;
+                                    enabled: !GroupAdmin.requests-busy;
+                                    clicked => { GroupAdmin.answer-request(r.jid, true); }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -973,6 +1096,7 @@ export component ContactInfoPanel inherits Rectangle {
                                     width: parent.width - 24px;
                                     color: Theme.text;
                                     font-size: 18px;
+                                    horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                                     single-line: true;
                                     text <=> GroupAdmin.name-draft;
                                     init => { self.focus(); }
@@ -1066,6 +1190,7 @@ export component ContactInfoPanel inherits Rectangle {
                             color: Theme.text;
                             font-size: 15px;
                             wrap: word-wrap;
+                            horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                         }
                         if root.model.about == "" && root.model.loading: VerticalLayout {
                             spacing: 6px;
@@ -1171,6 +1296,7 @@ export component ContactInfoPanel inherits Rectangle {
                             color: Theme.text;
                             font-size: 15px;
                             wrap: word-wrap;
+                            horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                             overflow: elide;
                             max-height: root.description-expanded ? 100000px : 88px;
                         }
@@ -1392,6 +1518,13 @@ export component ContactInfoPanel inherits Rectangle {
                     }
                 }
 
+                // Pending join requests (admins of a group that approves new members)
+                if root.model.is-group && root.model.is-admin && root.model.approval-required: PanelRow {
+                    label: root.model.pending-requests > 0 ? "Pending requests (" + root.model.pending-requests + ")" : "Pending requests";
+                    label-color: Theme.text;
+                    clicked => { GroupAdmin.open-requests(); }
+                }
+
                 // Group settings (admins)
                 if root.model.is-group && root.model.is-admin: Rectangle {
                     height: 60px;
@@ -1507,6 +1640,7 @@ export component ContactInfoPanel inherits Rectangle {
                                     color: Theme.text;
                                     font-size: 14px;
                                     single-line: true;
+                                    horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                                     vertical-alignment: center;
                                     edited => { root.member-search(self.text); }
                                 }

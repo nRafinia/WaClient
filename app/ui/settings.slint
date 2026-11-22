@@ -8,6 +8,8 @@ import { TranslationSection } from "translate.slint";
 import { AppearanceSection } from "appearance.slint";
 import { StorageSection } from "storage.slint";
 import { NotifyInfo } from "contact_info.slint";
+import { TextDir } from "chat_search.slint";
+
 
 // font-scale-index: 0 small, 1 normal, 2 large.
 export struct SettingsModel {
@@ -450,6 +452,8 @@ component EditableField inherits Rectangle {
                     color: Theme.text;
                     font-size: 16px;
                     single-line: true;
+                    horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+
                     vertical-alignment: center;
                     init => {
                         self.text = root.draft;
@@ -842,6 +846,8 @@ export component SettingsPage inherits Rectangle {
                                     color: Theme.text;
                                     font-size: 14px;
                                     single-line: true;
+                                    horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+
                                     vertical-alignment: center;
                                     edited => { AccountState.find-candidates(self.text); }
                                 }

@@ -1,6 +1,7 @@
 import { Button } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { IconCheck } from "icons.slint";
+import { TextDir } from "chat_search.slint";
 
 export struct LangItem {
     code: string,
@@ -57,6 +58,7 @@ export component LanguagePicker inherits Rectangle {
             color: Theme.text;
             font-size: 14px;
             single-line: true;
+            horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
             vertical-alignment: center;
             edited => { TranslateState.filter(self.text); }
         }

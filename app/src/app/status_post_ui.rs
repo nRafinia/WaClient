@@ -671,6 +671,7 @@ impl App {
                     has_avatar: avatar.is_some(),
                     avatar: avatar.unwrap_or_default(),
                     selected: working.jids.contains(&r.jid),
+                    note: Default::default(),
                 });
             }
         }

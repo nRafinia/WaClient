@@ -11,6 +11,7 @@ mod queries;
 mod search;
 mod social;
 mod storage;
+mod stickers;
 mod translations;
 
 #[cfg(test)]
@@ -198,6 +199,20 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX idx_messages_ts ON messages(ts, chat_jid, id);
     CREATE INDEX idx_messages_sender ON messages(sender_jid, from_me, ts, chat_jid, id);
     CREATE INDEX idx_messages_kind ON messages(kind, ts, chat_jid, id);
+    ",
+    // 13: quiz polls: the name of the one correct option (NULL = ordinary poll)
+    "
+    ALTER TABLE polls ADD COLUMN correct_option TEXT NULL;
+    ",
+    // 14: favourite stickers (keyed by the SHA-256 of the sticker file, so the
+    // same sticker received in several chats is one favourite)
+    "
+    CREATE TABLE sticker_favs (
+        sha TEXT PRIMARY KEY,
+        chat_jid TEXT NOT NULL,
+        msg_id TEXT NOT NULL,
+        added_at INTEGER NOT NULL
+    );
     ",
 ];
 

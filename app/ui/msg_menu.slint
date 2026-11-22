@@ -65,6 +65,10 @@ export component MsgMenu inherits Rectangle {
     in property <bool> can-star;
     in property <bool> starred;
     in property <bool> can-info;
+    // A sticker: "Add to favourites" / "Remove from favourites".
+    in property <bool> can-sticker-fav;
+    in property <bool> sticker-fav;
+    callback sticker-fav-toggle();
     callback reply();
     callback react();
     callback copy();
@@ -119,6 +123,10 @@ export component MsgMenu inherits Rectangle {
         if root.can-star: MenuRow {
             label: root.starred ? "Unstar" : "Star";
             clicked => { root.star(); }
+        }
+        if root.can-sticker-fav: MenuRow {
+            label: root.sticker-fav ? "Remove from favourites" : "Add to favourites";
+            clicked => { root.sticker-fav-toggle(); }
         }
         if root.can-pin: MenuRow {
             label: root.pinned ? "Unpin" : "Pin";

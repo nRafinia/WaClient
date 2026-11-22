@@ -14,14 +14,20 @@ use whatsapp_rust::wacore::types::message::AddressingMode;
 use whatsapp_rust::wacore_binary::JidExt as _;
 use whatsapp_rust::{
     GroupCreateOptions, GroupDescription, GroupError, GroupMetadata, GroupParticipantOptions, GroupSubject,
-    JoinGroupResult, MembershipApprovalMode, ParticipantChangeResponse, PreviousDescription,
+    JoinGroupResult, MembershipApprovalMode, MembershipRequest as LibRequest, ParticipantChangeResponse,
+    PreviousDescription,
 };
 
 use crate::account::{read_picture_file, reencode_profile_picture};
-use crate::api::{GroupSetting, InvitePreview, MemberAction, MemberChangeResult, UiEvent};
+use crate::api::{
+    GroupSetting, InvitePreview, MemberAction, MemberChangeResult, MembershipRequest, RequestMethod, UiEvent,
+};
 use crate::commands::sender_forms;
 use crate::events::{Shared, now_secs};
-use crate::info::{MetaLookup, RawMember, group_meta_from, group_meta_lookup, my_membership, own_jids, server_code};
+use crate::info::{
+    MetaLookup, RawMember, best_name, group_meta_from, group_meta_lookup, my_membership, own_jids, phone_of_jid,
+    server_code,
+};
 use crate::jid::{classify_error, redact, warn_lib_error};
 use crate::media::{avatar_full_path, write_atomic_async};
 
@@ -205,6 +211,15 @@ fn wire_jid(request: &Jid, aliases: &[String], lid_group: bool) -> Jid {
 /// One result per requested JID, in request order. A JID the server did not
 /// answer for fails with "No answer from WhatsApp".
 fn merge_results(requested: &[Target], answers: &[Answer], action: MemberAction) -> Vec<MemberChangeResult> {
+    merge_with(requested, answers, |code| member_error(code, action))
+}
+
+/// [`merge_results`] with the wording of failures supplied by the caller.
+fn merge_with(
+    requested: &[Target],
+    answers: &[Answer],
+    describe: impl Fn(&str) -> (String, bool),
+) -> Vec<MemberChangeResult> {
     requested
         .iter()
         .map(|target| (&target.requested, answers.iter().find(|a| target.is_any_of(&a.ids))))
@@ -222,11 +237,33 @@ fn merge_results(requested: &[Target], answers: &[Answer], action: MemberAction)
                 invite_instead: false,
             },
             Some(Answer { error: Some(code), .. }) => {
-                let (message, invite_instead) = member_error(code, action);
+                let (message, invite_instead) = describe(code);
                 MemberChangeResult { jid: jid.clone(), ok: false, error: Some(message), invite_instead }
             }
         })
         .collect()
+}
+
+/// Plain-English text for the `error` of an approve / reject answer.
+fn request_error(code: &str, approve: bool) -> (String, bool) {
+    let message = match code {
+        "403" | "401" => "You're not an admin".to_string(),
+        "404" => "The request is no longer there".to_string(),
+        "409" if approve => "Already in the group".to_string(),
+        "409" => "The request is no longer there".to_string(),
+        other => format!("Couldn't update (code {other})"),
+    };
+    (message, false)
+}
+
+/// The `request_method` attribute of a notification (the listing has none).
+fn request_method(m: Option<&str>) -> RequestMethod {
+    match m {
+        Some("invite_link") => RequestMethod::InviteLink,
+        Some("non_admin_add") => RequestMethod::AddedByMember,
+        Some(_) => RequestMethod::Other,
+        None => RequestMethod::Unknown,
+    }
 }
 
 /// Requested participants that the metadata returned by group creation does
@@ -463,16 +500,7 @@ pub async fn update_members(sh: &Shared, client: &Arc<Client>, group_jid: &str, 
     let (members, lid_group) = if action == MemberAction::Add {
         (Vec::new(), false)
     } else {
-        match fetch_metadata(sh, client, &group).await {
-            Ok(raw) => {
-                let meta = group_meta_from(&raw);
-                (meta.members, meta.addressing == AddressingMode::Lid)
-            }
-            Err(e) => {
-                log::debug!("member list of {} unavailable, sending addresses as given: {e}", redact(group_jid));
-                (Vec::new(), false)
-            }
-        }
+        members_and_mode(sh, client, &group, group_jid).await
     };
     let targets = targets_for(client, &people, &members).await;
     let wire: Vec<Jid> = people
@@ -508,6 +536,123 @@ pub async fn update_members(sh: &Shared, client: &Arc<Client>, group_jid: &str, 
     );
     let group_str = group.to_string();
     sh.emit(UiEvent::GroupMembersResult { group_jid: group_str.clone(), action, results });
+    refresh(sh, client, &group_str).await;
+}
+
+/// The member list and whether the group is LID-addressed; unknown (empty,
+/// false) when the metadata cannot be loaded.
+async fn members_and_mode(sh: &Shared, client: &Client, group: &Jid, group_jid: &str) -> (Vec<RawMember>, bool) {
+    match fetch_metadata(sh, client, group).await {
+        Ok(raw) => {
+            let meta = group_meta_from(&raw);
+            (meta.members, meta.addressing == AddressingMode::Lid)
+        }
+        Err(e) => {
+            log::debug!("member list of {} unavailable, sending addresses as given: {e}", redact(group_jid));
+            (Vec::new(), false)
+        }
+    }
+}
+
+/// How many people wait for approval; 0 when the list cannot be loaded.
+pub(crate) async fn pending_count(client: &Client, group: &Jid) -> u32 {
+    match client.groups().get_membership_requests(group.clone()).await {
+        Ok(list) => u32::try_from(list.len()).unwrap_or(u32::MAX),
+        Err(e) => {
+            log::debug!("pending requests of {} unavailable: {e}", redact(&group.to_string()));
+            0
+        }
+    }
+}
+
+/// The listing entry shown to the user: the address to answer with, a name
+/// (address book, push name, else the phone) and the phone when known.
+async fn describe_request(sh: &Shared, client: &Client, r: &LibRequest) -> MembershipRequest {
+    let jid = r.jid.to_non_ad();
+    let (pn, lid) = sender_forms(client, &jid).await;
+    let phone = pn.as_ref().and_then(|j| phone_of_jid(&j.to_string()));
+    let name = [pn, lid, Some(jid.clone())]
+        .into_iter()
+        .flatten()
+        .find_map(|j| sh.store.contact(&j.to_string()).ok().flatten().as_ref().and_then(best_name))
+        .or_else(|| phone.as_ref().map(|p| format!("+{p}")));
+    MembershipRequest {
+        jid: jid.to_string(),
+        name,
+        phone,
+        requested_at: r.request_time.and_then(|t| i64::try_from(t).ok()),
+        method: request_method(None),
+    }
+}
+
+/// Oldest request first, so the list reads in the order people asked.
+fn sort_requests(list: &mut [MembershipRequest]) {
+    list.sort_by_key(|r| r.requested_at.unwrap_or(i64::MAX));
+}
+
+async fn load_requests(sh: &Shared, client: &Client, group: &Jid) -> Result<Vec<MembershipRequest>, GroupError> {
+    let raw = client.groups().get_membership_requests(group.clone()).await?;
+    let mut out = Vec::with_capacity(raw.len());
+    for r in &raw {
+        out.push(describe_request(sh, client, r).await);
+    }
+    sort_requests(&mut out);
+    Ok(out)
+}
+
+pub async fn fetch_requests(sh: &Shared, client: &Arc<Client>, group_jid: &str) {
+    let Some(group) = group_jid_or_reject(sh, group_jid) else {
+        return;
+    };
+    let group_str = group.to_string();
+    match load_requests(sh, client, &group).await {
+        Ok(requests) => {
+            log::info!("FetchMembershipRequests: {} pending", requests.len());
+            sh.emit(UiEvent::MembershipRequests { group_jid: group_str, requests: Some(requests) });
+        }
+        Err(e) => {
+            warn_lib_error(&format!("FetchMembershipRequests failed for {}", redact(group_jid)), &e);
+            sh.emit(UiEvent::MembershipRequests { group_jid: group_str, requests: None });
+            reject(sh, failure(&e, "load the join requests", true));
+        }
+    }
+}
+
+pub async fn answer_requests(sh: &Shared, client: &Arc<Client>, group_jid: &str, jids: &[String], approve: bool) {
+    let Some(group) = group_jid_or_reject(sh, group_jid) else {
+        return;
+    };
+    let people = match validate_participants(jids) {
+        Ok(p) => p,
+        Err(message) => return reject(sh, message),
+    };
+    // Like member changes: a LID-addressed group wants the LIDs.
+    let (members, lid_group) = members_and_mode(sh, client, &group, group_jid).await;
+    let targets = targets_for(client, &people, &members).await;
+    let wire: Vec<Jid> = people.iter().zip(&targets).map(|(p, t)| wire_jid(p, &t.aliases, lid_group)).collect();
+    let groups = client.groups();
+    let response = if approve {
+        groups.approve_membership_requests(group.clone(), &wire).await
+    } else {
+        groups.reject_membership_requests(group.clone(), &wire).await
+    };
+    let responses = match response {
+        Ok(r) => r,
+        Err(e) => {
+            warn_lib_error(&format!("AnswerMembershipRequests failed for {}", redact(group_jid)), &e);
+            return reject(sh, failure(&e, "answer the join requests", true));
+        }
+    };
+    let results = merge_with(&targets, &answers_from(&responses), |code| request_error(code, approve));
+    log::info!(
+        "AnswerMembershipRequests ({}): {} of {} ok",
+        if approve { "approve" } else { "reject" },
+        results.iter().filter(|r| r.ok).count(),
+        results.len()
+    );
+    let group_str = group.to_string();
+    sh.emit(UiEvent::MembershipRequestsAnswered { group_jid: group_str.clone(), approve, results });
+    fetch_requests(sh, client, &group_str).await;
     refresh(sh, client, &group_str).await;
 }
 
@@ -780,6 +925,39 @@ mod tests {
         assert_eq!(normalize_invite_link(CODE).as_deref(), Some(want.as_str()));
         assert_eq!(normalize_invite_link(&want).as_deref(), Some(want.as_str()));
         assert_eq!(normalize_invite_link("nonsense!"), None);
+    }
+
+    #[test]
+    fn request_answers_use_request_wording() {
+        assert_eq!(request_error("403", true), ("You're not an admin".to_string(), false));
+        assert_eq!(request_error("404", false), ("The request is no longer there".to_string(), false));
+        assert_eq!(request_error("409", true), ("Already in the group".to_string(), false));
+        assert_eq!(request_error("500", false), ("Couldn't update (code 500)".to_string(), false));
+    }
+
+    #[test]
+    fn request_results_match_phone_answers_to_lid_requests() {
+        let target = Target { requested: "200@lid".into(), aliases: vec!["491701234567@s.whatsapp.net".into()] };
+        let answer = |id: &str, error: Option<&str>| Answer { ids: vec![id.into()], error: error.map(String::from) };
+        let ok = merge_with(&[target.clone()], &[answer("491701234567@s.whatsapp.net", None)], |c| request_error(c, true));
+        assert!(ok[0].ok);
+        assert_eq!(ok[0].jid, "200@lid", "reported under the requested address");
+        let refused = merge_with(&[target.clone()], &[answer("200@lid", Some("404"))], |c| request_error(c, false));
+        assert_eq!(refused[0].error.as_deref(), Some("The request is no longer there"));
+        let silent = merge_with(&[target], &[], |c| request_error(c, true));
+        assert_eq!(silent[0].error.as_deref(), Some("No answer from WhatsApp"));
+    }
+
+    #[test]
+    fn request_methods_and_order() {
+        assert_eq!(request_method(Some("invite_link")), RequestMethod::InviteLink);
+        assert_eq!(request_method(Some("non_admin_add")), RequestMethod::AddedByMember);
+        assert_eq!(request_method(Some("linked_group_join")), RequestMethod::Other);
+        assert_eq!(request_method(None), RequestMethod::Unknown);
+        let at = |jid: &str, t: Option<i64>| MembershipRequest { jid: jid.into(), requested_at: t, ..Default::default() };
+        let mut list = vec![at("c", None), at("b", Some(20)), at("a", Some(10))];
+        sort_requests(&mut list);
+        assert_eq!(list.iter().map(|r| r.jid.as_str()).collect::<Vec<_>>(), ["a", "b", "c"]);
     }
 
     #[test]

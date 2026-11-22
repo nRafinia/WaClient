@@ -34,7 +34,7 @@ fn chunk_rows<'a>(items: impl Iterator<Item = &'a str>) -> Vec<EmojiRow> {
 
 /// A header row then the emoji rows of each category; a tab per category
 /// pointing at its header row.
-fn category_rows() -> (Vec<EmojiRow>, Vec<EmojiTab>) {
+pub(super) fn category_rows() -> (Vec<EmojiRow>, Vec<EmojiTab>) {
     let mut rows = Vec::new();
     let mut tabs = Vec::new();
     for cat in emoji::categories() {
@@ -46,6 +46,15 @@ fn category_rows() -> (Vec<EmojiRow>, Vec<EmojiTab>) {
         rows.extend(chunk_rows(cat.emoji.iter().map(|e| e.ch)));
     }
     (rows, tabs)
+}
+
+/// The picker's rows for a search box content (categories when it is empty).
+pub(super) fn picker_rows(query: &str) -> Vec<EmojiRow> {
+    if query.trim().is_empty() {
+        category_rows().0
+    } else {
+        chunk_rows(emoji::search(query).into_iter().map(|e| e.ch))
+    }
 }
 
 impl EmojiState {
@@ -74,12 +83,7 @@ impl EmojiState {
 impl App {
     /// An empty query shows the categories again.
     pub(super) fn emoji_search(&self, query: &str) {
-        let rows = if query.trim().is_empty() {
-            category_rows().0
-        } else {
-            chunk_rows(emoji::search(query).into_iter().map(|e| e.ch))
-        };
-        self.emoji.rows.set_vec(rows);
+        self.emoji.rows.set_vec(picker_rows(query));
     }
 
     /// Remembers a picked emoji (most recent first) for the "Recent" row.

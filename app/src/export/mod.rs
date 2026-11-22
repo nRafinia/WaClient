@@ -327,7 +327,7 @@ mod tests {
         assert_eq!(entry(&l).location, Some((35.7, 51.4)));
         let mut p = row("p", "📊 Lunch?");
         p.kind = MessageKind::Other;
-        let view = PollView { question: "Lunch?".into(), options: vec![("Pizza".into(), 2, false), ("Soup".into(), 0, true)], selectable_count: 1 };
+        let view = PollView { question: "Lunch?".into(), options: vec![("Pizza".into(), 2, false), ("Soup".into(), 0, true)], selectable_count: 1, correct: None };
         let mut x = extras(None, false);
         x.poll = Some(view);
         let e = entry_from(&p, &ChatCtx { name: "Ann".into(), is_group: false }, x);

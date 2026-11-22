@@ -44,6 +44,70 @@ fn thumbnail() -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// A round cartoon face on a transparent background: colour `hue` and mouth `mood`.
+fn sticker_face(hue: usize, mood: usize) -> image::RgbaImage {
+    const SIZE: u32 = 192;
+    const PALETTE: [[u8; 3]; 8] = [
+        [255, 196, 61],
+        [255, 120, 100],
+        [110, 200, 120],
+        [100, 160, 240],
+        [190, 130, 230],
+        [250, 160, 200],
+        [120, 220, 220],
+        [245, 140, 60],
+    ];
+    let [r, g, b] = PALETTE[hue % PALETTE.len()];
+    let dark = image::Rgba([60, 40, 30, 255]);
+    image::RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+        let (dx, dy) = (x as f32 - 96.0, y as f32 - 96.0);
+        let radius = (dx * dx + dy * dy).sqrt();
+        if radius > 88.0 {
+            return image::Rgba([0, 0, 0, 0]);
+        }
+        if radius > 80.0 {
+            return dark;
+        }
+        let eye = ((dx.abs() - 30.0).powi(2) + (dy + 22.0).powi(2)).sqrt() < 11.0;
+        let arc = |cy: f32| ((dx * dx + (dy - cy).powi(2)).sqrt() - 38.0).abs() < 4.5;
+        let mouth = match mood % 4 {
+            0 => arc(5.0) && dy > 14.0,
+            1 => (dx / 22.0).powi(2) + ((dy - 30.0) / 16.0).powi(2) < 1.0,
+            2 => (dy - 32.0).abs() < 4.0 && dx.abs() < 26.0,
+            _ => arc(66.0) && dy < 40.0,
+        };
+        if eye || mouth { dark } else { image::Rgba([r, g, b, 255]) }
+    })
+}
+
+/// Eight stickers (WebP, like real ones) in Bob's chat, long ago so the chat
+/// itself looks as before; the first three are favourites.
+fn seed_stickers(
+    store: &Store,
+    dir: &std::path::Path,
+    chat: &str,
+    now: i64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use sha2::{Digest, Sha256};
+    for n in 0..8usize {
+        let path = dir.join(format!("sticker-{n}.webp"));
+        sticker_face(n, n / 2).save(&path)?;
+        let bytes = std::fs::read(&path)?;
+        let mut s = msg(chat, &format!("stk{n}"), if n % 3 == 0 { ME } else { chat }, now - 40 * 86_400 + n as i64, "");
+        s.text = None;
+        s.kind = MessageKind::Sticker;
+        s.media_mime = Some("image/webp".into());
+        s.media_size = Some(bytes.len() as i64);
+        s.local_path = Some(path.to_string_lossy().into_owned());
+        store.insert_message(&s, false)?;
+        if n < 3 {
+            let sha: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+            store.add_sticker_fav(&sha, chat, &s.id, now - n as i64)?;
+        }
+    }
+    Ok(())
+}
+
 fn gradient(w: u32, h: u32) -> image::RgbImage {
     image::RgbImage::from_fn(w, h, |x, y| {
         image::Rgb([(x * 255 / w) as u8, (y * 255 / h) as u8, 140])
@@ -175,6 +239,7 @@ pub fn store() -> Result<Arc<Store>, Box<dyn std::error::Error>> {
     s.kind = MessageKind::Sticker;
     s.local_path = path_str(&sticker);
     store.insert_message(&s, false)?;
+    seed_stickers(&store, &dir, bob, now)?;
     let mut vid = msg(alice, "a14", alice, now - 30, "");
     vid.text = None;
     vid.kind = MessageKind::Video;
@@ -204,6 +269,44 @@ pub fn store() -> Result<Arc<Store>, Box<dyn std::error::Error>> {
     store.upsert_poll(alice, "a15m", "Which days work?", &days, 0)?;
     store.upsert_poll_vote(alice, "a15m", ME, &days[..2], now - 9, true)?;
     store.upsert_poll_vote(alice, "a15m", carol, &days[1..], now - 8, false)?;
+    // Quizzes: one we answered wrongly, one not answered yet.
+    let mut quiz = msg(alice, "a15q", alice, now - 7, "📊 What is the capital of Australia?");
+    quiz.kind = MessageKind::Other;
+    store.insert_message(&quiz, false)?;
+    let cities: Vec<String> = ["Sydney", "Canberra", "Melbourne"].map(String::from).to_vec();
+    store.upsert_poll(alice, "a15q", "What is the capital of Australia?", &cities, 1)?;
+    store.set_poll_correct(alice, "a15q", Some("Canberra"))?;
+    store.upsert_poll_vote(alice, "a15q", ME, &cities[..1], now - 6, true)?;
+    store.upsert_poll_vote(alice, "a15q", carol, &cities[1..2], now - 5, false)?;
+    store.upsert_poll_vote(alice, "a15q", bob, &cities[..1], now - 4, false)?;
+    let mut quiz2 = msg(alice, "a15r", alice, now - 3, "📊 Which planet is the largest?");
+    quiz2.kind = MessageKind::Other;
+    store.insert_message(&quiz2, false)?;
+    let planets: Vec<String> = ["Earth", "Jupiter", "Mars"].map(String::from).to_vec();
+    store.upsert_poll(alice, "a15r", "Which planet is the largest?", &planets, 1)?;
+    store.set_poll_correct(alice, "a15r", Some("Jupiter"))?;
+    store.upsert_poll_vote(alice, "a15r", carol, &planets[1..2], now - 2, false)?;
+    // Right-to-left poll and quiz, and a Persian line the global search finds.
+    let mut fa_poll = msg(alice, "a15p", alice, now - 2, "📊 ناهار جمعه کجا برویم؟");
+    fa_poll.kind = MessageKind::Other;
+    store.insert_message(&fa_poll, false)?;
+    let fa_options: Vec<String> = ["پیتزا", "سوشی", "غذای خانگی"].map(String::from).to_vec();
+    store.upsert_poll(alice, "a15p", "ناهار جمعه کجا برویم؟", &fa_options, 1)?;
+    store.upsert_poll_vote(alice, "a15p", alice, &fa_options[..1], now - 2, false)?;
+    store.upsert_poll_vote(alice, "a15p", ME, &fa_options[..1], now - 2, true)?;
+    store.upsert_poll_vote(alice, "a15p", carol, &fa_options[1..2], now - 2, false)?;
+    let mut fa_quiz = msg(alice, "a15f", alice, now - 1, "📊 پایتخت ایران کدام شهر است؟");
+    fa_quiz.kind = MessageKind::Other;
+    store.insert_message(&fa_quiz, false)?;
+    let fa_cities: Vec<String> = ["اصفهان", "تهران", "شیراز"].map(String::from).to_vec();
+    store.upsert_poll(alice, "a15f", "پایتخت ایران کدام شهر است؟", &fa_cities, 1)?;
+    store.set_poll_correct(alice, "a15f", Some("تهران"))?;
+    store.upsert_poll_vote(alice, "a15f", ME, &fa_cities[..1], now - 1, true)?;
+    store.upsert_poll_vote(alice, "a15f", carol, &fa_cities[1..2], now - 1, false)?;
+    store.insert_message(
+        &msg(alice, "a16", alice, now - 3 * day, "این پیام برای آزمایش Message number و جست‌وجوی راست‌به‌چپ نوشته شده است"),
+        false,
+    )?;
     // An archived chat with unread messages, and a muted group.
     let old_chat = "555@s.whatsapp.net";
     store.upsert_chat(old_chat, ChatKind::Dm, Some("Dave (old project)"))?;
@@ -295,6 +398,21 @@ mono *verbatim*
     store.insert_message(&msg(fmt, "f2", ME, now - 30, "I *agree*, _really_ ~not~ `x = 1`
 > your quote
 * star bullet"), false)?;
+    // Right-to-left bubbles (`WACLIENT_DEMO_UI=rtl-bubbles`): Persian, Arabic, mixed, English, multi-line, a quoted Persian reply.
+    let rtl = "777@s.whatsapp.net";
+    store.upsert_chat(rtl, ChatKind::Dm, Some("RTL"))?;
+    store.upsert_contact(&ContactPatch { jid: rtl.into(), full_name: Some("RTL".into()), push_name: None, phone: None })?;
+    store.insert_message(&msg(rtl, "r1", rtl, now - 600, "سلام، حالت چطوره؟ امروز هوا خیلی خوبه"), false)?;
+    store.insert_message(&msg(rtl, "r2", ME, now - 540, "I am fine, thanks"), false)?;
+    store.insert_message(&msg(rtl, "r3", rtl, now - 480, "مرحبا بالعالم، كيف حالك اليوم؟"), false)?;
+    store.insert_message(&msg(rtl, "r4", ME, now - 420, "سلام hello دوست من"), false)?;
+    store.insert_message(&msg(rtl, "r5", rtl, now - 360, "Hello, this one is English"), false)?;
+    store.insert_message(&msg(rtl, "r6", rtl, now - 300, "خط اول پیام
+خط دوم پیام کمی طولانی‌تر است تا بشکند و چند خطی شود"), false)?;
+    let mut rq = msg(rtl, "r7", ME, now - 120, "ممنون از لطفت");
+    rq.quoted_id = Some("r1".into());
+    rq.quoted_preview = Some("سلام، حالت چطوره؟ امروز هوا خیلی خوبه".into());
+    store.insert_message(&rq, false)?;
     // Emoji-only messages (`WACLIENT_DEMO_UI=emoji-big`): 1, 2 and 3 emoji, and text with an emoji.
     store.insert_message(&msg(fmt, "em1", fmt, now - 25, "\u{1F602}"), false)?;
     store.insert_message(&msg(fmt, "em2", ME, now - 20, "\u{1F44D}\u{1F3FD}\u{2764}\u{FE0F}"), false)?;
@@ -405,6 +523,7 @@ pub fn command_name(cmd: &wa_engine::Command) -> &'static str {
         Command::SetOwnPicture { .. } => "SetOwnPicture",
         Command::FetchOwnProfile => "FetchOwnProfile",
         Command::SendMedia { .. } => "SendMedia",
+        Command::SendSticker { .. } => "SendSticker",
         Command::SendContact { .. } => "SendContact",
         Command::LookupPhones { .. } => "LookupPhones",
         Command::SendLocation { .. } => "SendLocation",
@@ -439,6 +558,8 @@ pub fn command_name(cmd: &wa_engine::Command) -> &'static str {
         Command::CreatePoll { .. } => "CreatePoll",
         Command::CreateGroup { .. } => "CreateGroup",
         Command::UpdateGroupMembers { .. } => "UpdateGroupMembers",
+        Command::FetchMembershipRequests { .. } => "FetchMembershipRequests",
+        Command::AnswerMembershipRequests { .. } => "AnswerMembershipRequests",
         Command::SetGroupSubject { .. } => "SetGroupSubject",
         Command::SetGroupDescription { .. } => "SetGroupDescription",
         Command::SetGroupPicture { .. } => "SetGroupPicture",
@@ -486,6 +607,13 @@ pub fn apply_msg_ops(store: &Store, cmd: &wa_engine::Command) -> Vec<wa_engine::
         }
     };
     match cmd {
+        // The demo has no engine: a sent text is stored as the engine would.
+        Command::SendText { chat_jid, text, quoted_id, .. } => {
+            let id = format!("demo-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(now));
+            let mut m = msg(chat_jid, &id, ME, now, text);
+            m.quoted_id.clone_from(quoted_id);
+            done(store.insert_message(&m, false).map(|_| true), chat_jid)
+        }
         Command::EditMessage { chat_jid, id, text } => {
             done(store.edit_message(chat_jid, id, text).map(|()| true), chat_jid)
         }
@@ -512,6 +640,19 @@ pub fn apply_msg_ops(store: &Store, cmd: &wa_engine::Command) -> Vec<wa_engine::
             }
             events.push(UiEvent::ChatsChanged);
             events
+        }
+        Command::SendSticker { chat_jid, source_chat, source_id, .. } => {
+            let Ok(Some(src)) = store.message(source_chat, source_id) else { return Vec::new() };
+            let mut copy = msg(chat_jid, &format!("stk-{source_id}-{now}"), ME, now, "");
+            copy.text = None;
+            copy.kind = MessageKind::Sticker;
+            copy.media_mime = src.media_mime.clone();
+            copy.media_size = src.media_size;
+            copy.local_path = src.local_path.clone();
+            if let Err(e) = store.insert_message(&copy, false) {
+                log::warn!("demo: sticker send failed: {e}");
+            }
+            vec![changed(chat_jid), UiEvent::ChatsChanged]
         }
         Command::FetchMessageInfo { chat_jid, id } => {
             let receipts = if chat_jid.ends_with("@g.us") {

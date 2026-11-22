@@ -1,6 +1,7 @@
 import { Button, ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { IconClose } from "icons.slint";
+import { IconClose, IconCheck } from "icons.slint";
+import { TextDir } from "chat_search.slint";
 
 export struct PollField {
     text: string,
@@ -13,12 +14,18 @@ export global PollState {
     in-out property <string> question;
     // "Allow multiple answers".
     in-out property <bool> multi: true;
+    // "Quiz mode": one answer only, one option marked correct.
+    in-out property <bool> quiz;
+    // Index into `fields` of the correct option (-1 none).
+    in-out property <int> correct: -1;
     in property <[PollField]> fields;
     // The poll could be sent as it is.
     in property <bool> valid;
     // Why not (only once it is clearly wrong, e.g. two equal options).
     in property <string> hint;
     callback question-edited(string);
+    // The quiz switch or the correct option changed.
+    callback quiz-changed();
     callback option-edited(int, string);
     callback remove-option(int);
     callback send();
@@ -54,6 +61,7 @@ component PollInput inherits Rectangle {
         width: parent.width - 24px;
         color: Theme.text;
         font-size: 14px;
+        horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
         single-line: true;
         text: root.value;
         init => {
@@ -84,7 +92,7 @@ export component CreatePollDialog inherits Rectangle {
 
         Rectangle {
             width: min(440px, parent.width - 32px);
-            height: min(560px, parent.height - 32px);
+            height: min(620px, parent.height - 32px);
             background: Theme.panel;
             border-radius: 12px;
             clip: true;
@@ -131,15 +139,44 @@ export component CreatePollDialog inherits Rectangle {
                 x: 20px;
                 y: 146px;
                 width: parent.width - 40px;
-                height: parent.height - 146px - 68px - 112px;
+                height: parent.height - 146px - 68px - 156px;
 
                 for f[i] in PollState.fields: Rectangle {
                     height: 46px;
 
+                    if PollState.quiz: Rectangle {
+                        x: 4px;
+                        y: 10px;
+                        width: 20px;
+                        height: 20px;
+                        border-radius: 10px;
+                        border-width: PollState.correct == i ? 0px : 1.5px;
+                        border-color: Theme.secondary;
+                        background: PollState.correct == i ? Theme.accent : transparent;
+                        opacity: f.text == "" ? 0.35 : 1;
+                        if PollState.correct == i: IconCheck {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            size: 14px;
+                            color: white;
+                        }
+                        TouchArea {
+                            width: 28px;
+                            height: 28px;
+                            x: -4px;
+                            y: -4px;
+                            enabled: f.text != "";
+                            mouse-cursor: pointer;
+                            clicked => {
+                                PollState.correct = i;
+                                PollState.quiz-changed();
+                            }
+                        }
+                    }
                     PollInput {
-                        x: 0px;
+                        x: PollState.quiz ? 32px : 0px;
                         y: 0px;
-                        width: parent.width - 40px;
+                        width: parent.width - 40px - (PollState.quiz ? 32px : 0px);
                         placeholder: "Option \{i + 1}";
                         value: f.text;
                         edited(t) => { PollState.option-edited(i, t); }
@@ -167,7 +204,7 @@ export component CreatePollDialog inherits Rectangle {
 
             Rectangle {
                 x: 20px;
-                y: parent.height - 68px - 100px;
+                y: parent.height - 68px - 144px;
                 width: parent.width - 40px;
                 height: 28px;
                 Text {
@@ -181,12 +218,56 @@ export component CreatePollDialog inherits Rectangle {
                 }
             }
 
-            // "Allow multiple answers" switch.
+            // "Quiz mode" switch.
+            Rectangle {
+                x: 20px;
+                y: parent.height - 68px - 108px;
+                width: parent.width - 40px;
+                height: 44px;
+                Text {
+                    x: 0px;
+                    width: parent.width - 60px;
+                    height: parent.height;
+                    text: "Quiz mode (one correct answer)";
+                    color: Theme.text;
+                    font-size: 14.5px;
+                    vertical-alignment: center;
+                }
+                Rectangle {
+                    x: parent.width - 44px;
+                    y: (parent.height - self.height) / 2;
+                    width: 44px;
+                    height: 24px;
+                    border-radius: 12px;
+                    background: PollState.quiz ? Theme.accent : Theme.input-bg;
+                    border-width: PollState.quiz ? 0px : 1px;
+                    border-color: Theme.secondary;
+                    Rectangle {
+                        x: PollState.quiz ? parent.width - self.width - 3px : 3px;
+                        y: 3px;
+                        width: 18px;
+                        height: 18px;
+                        border-radius: 9px;
+                        background: PollState.quiz ? white : Theme.secondary;
+                        animate x { duration: 120ms; }
+                    }
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        PollState.quiz = !PollState.quiz;
+                        PollState.quiz-changed();
+                    }
+                }
+            }
+
+            // "Allow multiple answers" switch (a quiz always has one answer).
             Rectangle {
                 x: 20px;
                 y: parent.height - 68px - 64px;
                 width: parent.width - 40px;
                 height: 44px;
+                opacity: PollState.quiz ? 0.4 : 1;
                 Text {
                     x: 0px;
                     width: parent.width - 60px;
@@ -202,20 +283,21 @@ export component CreatePollDialog inherits Rectangle {
                     width: 44px;
                     height: 24px;
                     border-radius: 12px;
-                    background: PollState.multi ? Theme.accent : Theme.input-bg;
-                    border-width: PollState.multi ? 0px : 1px;
+                    background: PollState.multi && !PollState.quiz ? Theme.accent : Theme.input-bg;
+                    border-width: PollState.multi && !PollState.quiz ? 0px : 1px;
                     border-color: Theme.secondary;
                     Rectangle {
-                        x: PollState.multi ? parent.width - self.width - 3px : 3px;
+                        x: PollState.multi && !PollState.quiz ? parent.width - self.width - 3px : 3px;
                         y: 3px;
                         width: 18px;
                         height: 18px;
                         border-radius: 9px;
-                        background: PollState.multi ? white : Theme.secondary;
+                        background: PollState.multi && !PollState.quiz ? white : Theme.secondary;
                         animate x { duration: 120ms; }
                     }
                 }
                 TouchArea {
+                    enabled: !PollState.quiz;
                     mouse-cursor: pointer;
                     clicked => { PollState.multi = !PollState.multi; }
                 }

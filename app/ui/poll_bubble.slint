@@ -1,5 +1,6 @@
 import { Theme } from "theme.slint";
-import { IconCheck } from "icons.slint";
+import { IconCheck, IconClose } from "icons.slint";
+import { TextDir } from "chat_search.slint";
 
 export struct PollOptionItem {
     name: string,
@@ -7,6 +8,8 @@ export struct PollOptionItem {
     // 0..100, share of all votes cast.
     percent: int,
     mine: bool,
+    // Quiz marks once the answer is shown: 0 none, 1 correct, 2 the viewer's wrong choice.
+    mark: int,
 }
 
 // Votes of poll bubbles; the controller (app/poll_ui.rs) computes the new
@@ -14,6 +17,8 @@ export struct PollOptionItem {
 export global PollActions {
     // Message id, index of the clicked option.
     callback vote(string, int);
+    // Message id: open the list of who voted for what.
+    callback view-votes(string);
 }
 
 // Poll rendering for the inside of a message bubble: a click on an option row
@@ -25,6 +30,9 @@ export component PollBubble inherits VerticalLayout {
     in property <[PollOptionItem]> options;
     in property <int> total-votes;
     in property <bool> multi;
+    in property <bool> quiz;
+    // "Correct answer: ..." once a quiz reveals its answer, else empty.
+    in property <string> correct-text;
     // False for read-only views: no hover, no clicks.
     in property <bool> enabled: true;
     in property <length> content-w: 260px;
@@ -38,10 +46,11 @@ export component PollBubble inherits VerticalLayout {
         font-size: 15px * Theme.font-scale;
         font-weight: 700;
         wrap: word-wrap;
+        horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
     }
 
     Text {
-        text: root.multi ? "Select one or more" : "Select one";
+        text: root.quiz ? "Quiz" : (root.multi ? "Select one or more" : "Select one");
         color: Theme.secondary;
         font-size: 12px;
     }
@@ -64,14 +73,20 @@ export component PollBubble inherits VerticalLayout {
                     width: 18px;
                     height: 18px;
                     border-radius: root.multi ? 4px : 9px;
-                    border-width: o.mine ? 0px : 1.5px;
+                    border-width: o.mine || o.mark != 0 ? 0px : 1.5px;
                     border-color: Theme.secondary;
-                    background: o.mine ? Theme.accent : transparent;
+                    background: o.mark == 1 ? Theme.success : (o.mark == 2 ? Theme.danger : (o.mine ? Theme.accent : transparent));
 
-                    if o.mine: IconCheck {
+                    if o.mine || o.mark == 1: IconCheck {
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
                         size: 13px;
+                        color: white;
+                    }
+                    if o.mark == 2: IconClose {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        size: 11px;
                         color: white;
                     }
                 }
@@ -81,6 +96,7 @@ export component PollBubble inherits VerticalLayout {
                     color: Theme.text;
                     font-size: 14px * Theme.font-scale;
                     wrap: word-wrap;
+                    horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                     horizontal-stretch: 1;
                     vertical-alignment: center;
                 }
@@ -103,7 +119,7 @@ export component PollBubble inherits VerticalLayout {
                     x: 0px;
                     width: parent.width * clamp(o.percent, 0, 100) / 100;
                     height: parent.height;
-                    background: o.mine ? Theme.accent : Theme.secondary;
+                    background: o.mark == 1 ? Theme.success : (o.mark == 2 ? Theme.danger : (o.mine ? Theme.accent : Theme.secondary));
                 }
             }
         }
@@ -115,9 +131,42 @@ export component PollBubble inherits VerticalLayout {
         }
     }
 
-    Text {
-        text: "\{root.total-votes} \{root.total-votes == 1 ? "vote" : "votes"}";
-        color: Theme.secondary;
-        font-size: 12px;
+    if root.correct-text != "": Text {
+        text: root.correct-text;
+        color: Theme.success;
+        font-size: 13px;
+        font-weight: 600;
+        wrap: word-wrap;
+        horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+    }
+
+    HorizontalLayout {
+        spacing: 10px;
+
+        Text {
+            text: "\{root.total-votes} \{root.total-votes == 1 ? "vote" : "votes"}";
+            color: Theme.secondary;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+
+        if root.total-votes > 0 && root.enabled: Rectangle {
+            horizontal-stretch: 1;
+            height: votes-link.preferred-height + 4px;
+
+            votes-link := Text {
+                x: 0px;
+                y: 2px;
+                text: "View votes";
+                color: Theme.accent;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            TouchArea {
+                width: votes-link.preferred-width;
+                mouse-cursor: pointer;
+                clicked => { PollActions.view-votes(root.msg-id); }
+            }
+        }
     }
 }

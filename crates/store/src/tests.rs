@@ -45,13 +45,13 @@ fn migration_sets_version_and_is_not_rerun() {
     let path = dir.path().join("db.sqlite");
     {
         let s = Store::open(&path).unwrap();
-        assert_eq!(user_version(&s), 12);
+        assert_eq!(user_version(&s), 14);
         s.insert_message(&msg(A, "1", 10, false), true).unwrap();
     }
     // Re-running migration 1 would fail with "table already exists".
     let s = Store::open(&path).unwrap();
     assert!(s.message(A, "1").unwrap().is_some());
-    assert_eq!(user_version(&s), 12);
+    assert_eq!(user_version(&s), 14);
 }
 
 #[test]
@@ -359,7 +359,7 @@ fn migration_1_to_2_upgrades_existing_file_db() {
         .unwrap();
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(user_version(&s), 12);
+    assert_eq!(user_version(&s), 14);
     let m = s.message(A, "old").unwrap().unwrap();
     assert_eq!(m.text.as_deref(), Some("legacy"));
     assert!(!m.revoked && !m.edited);
@@ -610,7 +610,7 @@ fn migration_4_upgrades_existing_v3_db() {
         .unwrap();
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(user_version(&s), 12);
+    assert_eq!(user_version(&s), 14);
     assert_eq!(s.message(A, "old").unwrap().unwrap().text.as_deref(), Some("legacy"));
     let viewed: i64 = s
         .lock()
@@ -758,6 +758,49 @@ fn poll_for_tallies_votes() {
         [(0, false), (2, false), (0, false)]
     );
     assert_eq!(s.poll_options(A, "p").unwrap().unwrap(), opts);
+}
+
+#[test]
+fn quiz_correct_option_is_stored_and_reported_by_index() {
+    let s = Store::open_in_memory().unwrap();
+    let opts = ["Sydney".to_string(), "Canberra".to_string()];
+    s.upsert_poll(A, "q", "Capital?", &opts, 1).unwrap();
+    assert_eq!(s.poll_for(A, "q").unwrap().unwrap().correct, None, "ordinary until marked");
+    s.set_poll_correct(A, "q", Some("Oslo")).unwrap();
+    assert_eq!(s.poll_for(A, "q").unwrap().unwrap().correct, None, "not an option: ignored");
+    s.set_poll_correct(A, "q", Some("Canberra")).unwrap();
+    assert_eq!(s.poll_for(A, "q").unwrap().unwrap().correct, Some(1));
+    // A repeated definition keeps the answer.
+    s.upsert_poll(A, "q", "Capital?", &opts, 1).unwrap();
+    assert_eq!(s.poll_for(A, "q").unwrap().unwrap().correct, Some(1));
+    s.set_poll_correct(A, "q", None).unwrap();
+    assert_eq!(s.poll_for(A, "q").unwrap().unwrap().correct, None);
+    // Unknown polls are a no-op.
+    s.set_poll_correct(A, "nope", Some("x")).unwrap();
+}
+
+#[test]
+fn poll_voters_lists_each_vote_by_option_order_newest_first() {
+    let s = Store::open_in_memory().unwrap();
+    assert!(s.poll_voters(A, "p").unwrap().is_empty());
+    let opts = ["Yes".to_string(), "No".to_string(), "Maybe".to_string()];
+    s.upsert_poll(A, "p", "Q", &opts, 0).unwrap();
+    s.upsert_poll_vote(A, "p", "a@s.whatsapp.net", &["No".into()], 10, false).unwrap();
+    s.upsert_poll_vote(A, "p", "b@s.whatsapp.net", &["Yes".into(), "No".into()], 20, false).unwrap();
+    s.upsert_poll_vote(A, "p", "c@s.whatsapp.net", &["Gone".into(), "Yes".into()], 5, true).unwrap();
+    s.upsert_poll_vote(A, "p", "d@s.whatsapp.net", &["Maybe".into()], 7, false).unwrap();
+    // Withdrawn votes disappear.
+    s.upsert_poll_vote(A, "p", "d@s.whatsapp.net", &[], 8, false).unwrap();
+    let jid = |c: &str| format!("{c}@s.whatsapp.net");
+    assert_eq!(
+        s.poll_voters(A, "p").unwrap(),
+        [
+            ("Yes".to_string(), jid("b"), 20),
+            ("Yes".to_string(), jid("c"), 5),
+            ("No".to_string(), jid("b"), 20),
+            ("No".to_string(), jid("a"), 10),
+        ]
+    );
 }
 
 fn seeded_chat(s: &Store) {
@@ -1029,7 +1072,7 @@ fn migration_5_upgrades_existing_v4_db_and_stores_about() {
         .unwrap();
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(user_version(&s), 12);
+    assert_eq!(user_version(&s), 14);
     let c = s.contact(A).unwrap().unwrap();
     assert_eq!(c.full_name.as_deref(), Some("Ann"));
     assert_eq!((c.about, c.about_set_at), (None, None));
@@ -1064,7 +1107,7 @@ fn migration_6_upgrades_existing_v5_db_and_stores_link_preview() {
         .unwrap();
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(user_version(&s), 12);
+    assert_eq!(user_version(&s), 14);
     let old = s.message(A, "old").unwrap().unwrap();
     assert_eq!(old.text.as_deref(), Some("hi"));
     assert_eq!((old.link_url, old.link_title, old.link_desc, old.link_thumb), (None, None, None, None));
@@ -1204,7 +1247,7 @@ fn migration_7_upgrades_existing_v6_db() {
         .unwrap();
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(user_version(&s), 12);
+    assert_eq!(user_version(&s), 14);
     assert!(!chat(&s, A).receipts_off);
     assert_eq!(s.unreceipted_incoming(A, 0, 10).unwrap(), vec![("old".to_string(), A.to_string())]);
 }
@@ -1233,7 +1276,7 @@ fn migration_8_marks_incoming_of_read_chats_as_receipted() {
         }
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(user_version(&s), 12);
+    assert_eq!(user_version(&s), 14);
     assert!(s.unreceipted_incoming(read_chat, 0, 10).unwrap().is_empty());
     assert_eq!(
         s.unreceipted_incoming(unread_chat, 0, 10).unwrap(),
@@ -1309,7 +1352,7 @@ fn migration_9_upgrades_a_v8_database() {
         .unwrap();
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(user_version(&s), 12);
+    assert_eq!(user_version(&s), 14);
     let m = s.message(A, "old").unwrap().unwrap();
     assert_eq!(m.text.as_deref(), Some("legacy"));
     assert!(!m.starred && !m.mentions_me);
@@ -1591,7 +1634,7 @@ fn migration_9_keeps_rows_and_adds_pin_and_receipt_columns() {
         }
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(user_version(&s), 12);
+    assert_eq!(user_version(&s), 14);
     assert_eq!(live_ids(&s), ["a", "b"]);
     assert_eq!((chat(&s, A).unread, chat(&s, A).last_ts), (2, 7));
     // New columns/tables are usable on the migrated file.
@@ -1600,7 +1643,7 @@ fn migration_9_keeps_rows_and_adds_pin_and_receipt_columns() {
     assert_eq!(s.message_receipts(A, "a").unwrap().len(), 1);
     drop(s);
     let again = Store::open(&path).unwrap();
-    assert_eq!(user_version(&again), 12);
+    assert_eq!(user_version(&again), 14);
     assert_eq!(again.pinned_message_at(A, 0).unwrap().map(|p| p.0), Some("a".to_string()));
 }
 
@@ -1623,7 +1666,7 @@ fn migration_10_keeps_rows_and_adds_geo_expiry_and_timer_columns() {
         .unwrap();
     }
     let s = Store::open(&path).unwrap();
-    assert_eq!(user_version(&s), 12);
+    assert_eq!(user_version(&s), 14);
     assert_eq!(live_ids(&s), ["a"]);
     let c = chat(&s, A);
     assert_eq!((c.unread, c.last_ts, c.ephemeral_secs, c.ephemeral_ts), (1, 7, 0, 0));

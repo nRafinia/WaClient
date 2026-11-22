@@ -226,7 +226,22 @@ fn validate_new_poll(question: &str, options: &[String]) -> Result<(String, Vec<
 
 /// The poll message as WA Web sends it: V3 for a single answer, V1 with
 /// selectable count 0 (any number) for several, plus the vote secret.
-fn build_poll_message(question: &str, options: &[String], multi: bool, secret: [u8; 32]) -> wa::Message {
+///
+/// A quiz (`correct` = the right option's name) is always a single-answer V3
+/// poll with `pollType` QUIZ and `correctAnswer` carrying the name and its
+/// lowercase-hex SHA-256, exactly what the library's `create_quiz` builds.
+fn build_poll_message(question: &str, options: &[String], multi: bool, secret: [u8; 32], correct: Option<&str>) -> wa::Message {
+    let multi = multi && correct.is_none();
+    let (poll_type, correct_answer) = match correct {
+        Some(name) => (
+            Some(wa::message::PollType::QUIZ),
+            MessageField::some(wa::message::poll_creation_message::Option {
+                option_name: Some(name.to_string()),
+                option_hash: Some(convert::quiz_option_hash(name)),
+            }),
+        ),
+        None => (None, MessageField::none()),
+    };
     let poll = wa::message::PollCreationMessage {
         name: Some(question.to_string()),
         options: options
@@ -238,6 +253,8 @@ fn build_poll_message(question: &str, options: &[String], multi: bool, secret: [
             .collect(),
         selectable_options_count: Some(if multi { 0 } else { 1 }),
         poll_content_type: Some(wa::message::PollContentType::TEXT),
+        poll_type,
+        correct_answer,
         ..Default::default()
     };
     let mut message = if multi {
@@ -265,6 +282,7 @@ pub async fn create(
     question: &str,
     options: &[String],
     multi: bool,
+    quiz_correct: Option<usize>,
 ) {
     let (question, options) = match validate_new_poll(question, options) {
         Ok(v) => v,
@@ -273,12 +291,22 @@ pub async fn create(
             return;
         }
     };
+    let correct = match quiz_correct {
+        None => None,
+        Some(index) => match options.get(index) {
+            Some(name) => Some(name.as_str()),
+            None => {
+                reject(sh, "Pick the correct answer of the quiz".to_string());
+                return;
+            }
+        },
+    };
     let Some(chat) = parse_jid(sh, chat_jid) else { return };
     let Some(sender_jid) = own_jid(client) else {
         reject(sh, NOT_LOGGED_IN.to_string());
         return;
     };
-    let message = build_poll_message(&question, &options, multi, generate_message_secret());
+    let message = build_poll_message(&question, &options, multi, generate_message_secret(), correct);
     let id = client.generate_message_id();
     let Some(pending) = convert::outgoing(&message, &id, chat_jid, &sender_jid, now_secs()) else {
         log::error!("built poll message is not displayable");
@@ -374,20 +402,53 @@ mod tests {
     #[test]
     fn built_poll_has_secret_and_selectable_count() {
         let opts = names(&["a", "b"]);
-        let single = build_poll_message("Q", &opts, false, [7; 32]);
+        let single = build_poll_message("Q", &opts, false, [7; 32], None);
         assert!(single.poll_creation_message_v3.as_option().is_some());
         assert_eq!(convert::poll_info(&single).unwrap().selectable_count, 1);
         assert_eq!(convert::message_secret(&single), Some(vec![7; 32]));
-        let multi = build_poll_message("Q", &opts, true, [7; 32]);
+        let multi = build_poll_message("Q", &opts, true, [7; 32], None);
         assert!(multi.poll_creation_message.as_option().is_some());
         assert_eq!(convert::poll_info(&multi).unwrap().selectable_count, 2, "0 on the wire = any");
+    }
+
+    #[test]
+    fn quiz_message_carries_type_and_correct_answer_and_parses_back() {
+        let opts = names(&["Sydney", "Canberra", "Melbourne"]);
+        // `multi` is ignored for a quiz: always one answer.
+        let quiz = build_poll_message("Capital?", &opts, true, [5; 32], Some("Canberra"));
+        let poll = quiz.poll_creation_message_v3.as_option().expect("V3 poll");
+        assert!(matches!(poll.poll_type, Some(wa::message::PollType::QUIZ)));
+        assert_eq!(poll.selectable_options_count, Some(1));
+        let answer = poll.correct_answer.as_option().expect("correct answer");
+        assert_eq!(answer.option_name.as_deref(), Some("Canberra"));
+        let want = whatsapp_rust::wacore::poll::compute_option_hash("Canberra");
+        let hex: String = want.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(answer.option_hash.as_deref(), Some(hex.as_str()));
+        assert_eq!(convert::message_secret(&quiz), Some(vec![5; 32]));
+
+        let info = convert::poll_info(&quiz).unwrap();
+        assert_eq!((info.selectable_count, info.correct.as_deref()), (1, Some("Canberra")));
+        let plain = build_poll_message("Q", &opts, false, [5; 32], None);
+        assert!(plain.poll_creation_message_v3.as_option().unwrap().correct_answer.is_unset());
+        assert_eq!(convert::poll_info(&plain).unwrap().correct, None);
+    }
+
+    #[test]
+    fn quiz_answer_is_stored_with_the_outgoing_poll() {
+        let store = Store::open_in_memory().unwrap();
+        let opts = names(&["a", "b"]);
+        let message = build_poll_message("Q", &opts, false, [9; 32], Some("b"));
+        let pending = convert::outgoing(&message, "Q1", CHAT, ME, 100).expect("displayable");
+        assert!(store.insert_outgoing(&pending).unwrap());
+        record_poll(&store, &pending);
+        assert_eq!(store.poll_for(CHAT, "Q1").unwrap().unwrap().correct, Some(1));
     }
 
     #[test]
     fn stored_outgoing_poll_yields_secrets_for_vote_decryption() {
         let store = Store::open_in_memory().unwrap();
         let opts = names(&["a", "b"]);
-        let message = build_poll_message("Q", &opts, false, [9; 32]);
+        let message = build_poll_message("Q", &opts, false, [9; 32], None);
         let pending = convert::outgoing(&message, "P1", CHAT, ME, 100).expect("displayable");
         assert_eq!(pending.kind, MessageKind::Other);
         assert!(store.insert_outgoing(&pending).unwrap());

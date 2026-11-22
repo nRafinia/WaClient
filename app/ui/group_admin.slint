@@ -1,5 +1,6 @@
 import { Button, TextEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { TextDir } from "chat_search.slint";
 
 // One member whose change was refused, shown in the failure dialog.
 export struct MemberFailure {
@@ -7,14 +8,28 @@ export struct MemberFailure {
     error: string,
 }
 
+// One person waiting for admin approval to join (sub-view "Pending requests").
+export struct RequestRow {
+    jid: string,
+    name: string,
+    // Formatted phone number; empty when unknown (never a raw LID).
+    phone: string,
+    // "Today 14:05 · via invite link".
+    detail: string,
+    initials: string,
+    tint: color,
+}
+
 // Group administration state shared by the info panel and its dialogs.
 // Permissions and settings come with the panel's model; this global holds what
 // the user is doing right now. Driven from Rust (app/group_admin_ui.rs).
 export global GroupAdmin {
     // Modal dialog: 0 none, 1 description editor, 2 remove a member,
-    // 3 exit the group, 4 reset the invite link, 5 failed member changes.
+    // 3 exit the group, 4 reset the invite link, 5 failed member changes,
+    // 6 approve all pending requests, 7 reject all of them.
     in-out property <int> dialog;
-    // Sub-view of the panel: 0 none, 1 invite link, 2 group settings.
+    // Sub-view of the panel: 0 none, 1 invite link, 2 group settings,
+    // 3 pending join requests.
     in-out property <int> view;
     // The group name in the panel header is being edited.
     in-out property <bool> editing-name;
@@ -30,6 +45,10 @@ export global GroupAdmin {
     in property <[MemberFailure]> failures;
     // At least one failure can be answered with an invite link.
     in property <bool> failures-invite;
+    in property <[RequestRow]> requests;
+    in property <bool> requests-loading;
+    // An approve / reject is on its way: the buttons wait for the answer.
+    in property <bool> requests-busy;
 
     callback save-name(string);
     callback save-description(string);
@@ -47,6 +66,11 @@ export global GroupAdmin {
     callback leave();
     callback send-invites();
     callback close-view();
+    callback open-requests();
+    // jid, approve (true) or reject (false).
+    callback answer-request(string, bool);
+    // Every listed request; approve (true) or reject (false).
+    callback answer-all(bool);
 }
 
 // Modal confirmation and form dialogs of group administration. Covers its parent.
@@ -70,6 +94,8 @@ export component GroupDialogs inherits Rectangle {
                     : GroupAdmin.dialog == 2 ? "Remove " + GroupAdmin.target-name + "?"
                     : GroupAdmin.dialog == 3 ? "Exit \"" + GroupAdmin.group-name + "\"?"
                     : GroupAdmin.dialog == 4 ? "Reset this link?"
+                    : GroupAdmin.dialog == 6 ? "Approve all " + GroupAdmin.requests.length + " requests?"
+                    : GroupAdmin.dialog == 7 ? "Reject all " + GroupAdmin.requests.length + " requests?"
                     : GroupAdmin.failures-title;
                 color: Theme.text;
                 font-size: 18px;
@@ -82,6 +108,7 @@ export component GroupDialogs inherits Rectangle {
                     width: parent.width;
                     height: parent.height;
                     wrap: word-wrap;
+                    horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                     text <=> GroupAdmin.description-draft;
                     init => { self.focus(); }
                 }
@@ -100,6 +127,18 @@ export component GroupDialogs inherits Rectangle {
             }
             if GroupAdmin.dialog == 4: Text {
                 text: "The current link will stop working.";
+                color: Theme.secondary;
+                font-size: 14px;
+                wrap: word-wrap;
+            }
+            if GroupAdmin.dialog == 6: Text {
+                text: "Everyone on the list will be added to this group.";
+                color: Theme.secondary;
+                font-size: 14px;
+                wrap: word-wrap;
+            }
+            if GroupAdmin.dialog == 7: Text {
+                text: "Everyone on the list will be turned down. They can ask again with the invite link.";
                 color: Theme.secondary;
                 font-size: 14px;
                 wrap: word-wrap;
@@ -128,7 +167,9 @@ export component GroupDialogs inherits Rectangle {
                 if GroupAdmin.dialog != 5: Button {
                     text: GroupAdmin.dialog == 1 ? "Save"
                         : GroupAdmin.dialog == 2 ? "Remove"
-                        : GroupAdmin.dialog == 3 ? "Exit group" : "Reset link";
+                        : GroupAdmin.dialog == 3 ? "Exit group"
+                        : GroupAdmin.dialog == 6 ? "Approve all"
+                        : GroupAdmin.dialog == 7 ? "Reject all" : "Reset link";
                     primary: true;
                     clicked => {
                         // Rust closes the dialog (a rejected description keeps it open).
@@ -138,6 +179,10 @@ export component GroupDialogs inherits Rectangle {
                             GroupAdmin.remove-member(GroupAdmin.target-jid);
                         } else if (GroupAdmin.dialog == 3) {
                             GroupAdmin.leave();
+                        } else if (GroupAdmin.dialog == 6) {
+                            GroupAdmin.answer-all(true);
+                        } else if (GroupAdmin.dialog == 7) {
+                            GroupAdmin.answer-all(false);
                         } else {
                             GroupAdmin.reset-invite();
                         }

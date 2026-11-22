@@ -1,6 +1,7 @@
 import { Button, ListView, CheckBox } from "std-widgets.slint";
 import { Theme, Avatar } from "theme.slint";
 import { IconSearch, IconCheck } from "icons.slint";
+import { TextDir } from "chat_search.slint";
 
 // One tab of the folder strip above the chat list.
 export struct FolderTab {
@@ -129,6 +130,7 @@ export component FolderDialogs inherits Rectangle {
                     color: Theme.text;
                     font-size: 14px;
                     single-line: true;
+                    horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                     text <=> FolderState.name;
                     init => { self.focus(); }
                     accepted => { FolderState.save(); }
@@ -193,6 +195,7 @@ export component FolderDialogs inherits Rectangle {
                     color: Theme.text;
                     font-size: 14px;
                     single-line: true;
+                    horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                     vertical-alignment: center;
                     edited => { FolderState.pick-search(self.text); }
                 }

@@ -201,6 +201,70 @@ impl Store {
         Ok(())
     }
 
+    /// Marks `correct` (an option name) as the right answer of a quiz poll;
+    /// `None` clears it. Names that are not an option of the poll are ignored.
+    pub fn set_poll_correct(&self, chat_jid: &str, msg_id: &str, correct: Option<&str>) -> Result<()> {
+        let conn = self.lock();
+        let Some(correct) = correct else {
+            conn.execute(
+                "UPDATE polls SET correct_option = NULL WHERE chat_jid = ?1 AND msg_id = ?2",
+                params![chat_jid, msg_id],
+            )?;
+            return Ok(());
+        };
+        let json: Option<String> = conn
+            .query_row(
+                "SELECT options_json FROM polls WHERE chat_jid = ?1 AND msg_id = ?2",
+                params![chat_jid, msg_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if json.is_some_and(|j| decode_json_strings(&j).iter().any(|o| o == correct)) {
+            conn.execute(
+                "UPDATE polls SET correct_option = ?3 WHERE chat_jid = ?1 AND msg_id = ?2",
+                params![chat_jid, msg_id, correct],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Every vote of a poll as `(option name, voter jid, vote time)`: options
+    /// in the poll's order, newest vote first within an option. A voter who
+    /// picked several options appears once per option; names that are not an
+    /// option of the poll are left out.
+    pub fn poll_voters(&self, chat_jid: &str, msg_id: &str) -> Result<Vec<(String, String, i64)>> {
+        let conn = self.lock();
+        let json: Option<String> = conn
+            .query_row(
+                "SELECT options_json FROM polls WHERE chat_jid = ?1 AND msg_id = ?2",
+                params![chat_jid, msg_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(json) = json else {
+            return Ok(Vec::new());
+        };
+        let options = decode_json_strings(&json);
+        let mut stmt = conn.prepare(
+            "SELECT voter_jid, options_json, ts FROM poll_votes \
+             WHERE chat_jid = ?1 AND msg_id = ?2 ORDER BY ts DESC, voter_jid",
+        )?;
+        let rows = stmt.query_map(params![chat_jid, msg_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+        })?;
+        let mut out: Vec<(usize, String, String, i64)> = Vec::new();
+        for row in rows {
+            let (voter, json, ts) = row?;
+            for name in decode_json_strings(&json) {
+                if let Some(index) = options.iter().position(|o| *o == name) {
+                    out.push((index, name, voter.clone(), ts));
+                }
+            }
+        }
+        out.sort_by_key(|(index, ..)| *index);
+        Ok(out.into_iter().map(|(_, name, voter, ts)| (name, voter, ts)).collect())
+    }
+
     /// Records the selection of one voter (option names, repeats collapsed).
     /// The newest vote of a voter wins; an empty selection withdraws the vote.
     /// Returns `false`, storing nothing, when the poll limits the number of
@@ -327,15 +391,15 @@ impl Store {
     /// The poll with its tally; `None` if the message is not a stored poll.
     pub fn poll_for(&self, chat_jid: &str, msg_id: &str) -> Result<Option<PollView>> {
         let conn = self.lock();
-        let head: Option<(String, String, u32)> = conn
+        let head: Option<(String, String, u32, Option<String>)> = conn
             .query_row(
-                "SELECT question, options_json, selectable_count FROM polls \
+                "SELECT question, options_json, selectable_count, correct_option FROM polls \
                  WHERE chat_jid = ?1 AND msg_id = ?2",
                 params![chat_jid, msg_id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .optional()?;
-        let Some((question, options_json, selectable_count)) = head else {
+        let Some((question, options_json, selectable_count, correct_name)) = head else {
             return Ok(None);
         };
         let mut options: Vec<(String, u32, bool)> = decode_json_strings(&options_json)
@@ -358,10 +422,12 @@ impl Store {
                 }
             }
         }
+        let correct = correct_name.and_then(|c| options.iter().position(|o| o.0 == c));
         Ok(Some(PollView {
             question,
             options,
             selectable_count,
+            correct,
         }))
     }
 

@@ -1,5 +1,7 @@
 import { Button } from "std-widgets.slint";
 import { PopupState, Theme, Avatar, ProfileItem } from "theme.slint";
+import { TextDir } from "chat_search.slint";
+
 
 component Tip inherits Rectangle {
     in property <string> text;
@@ -344,6 +346,8 @@ export component ProfileDialog inherits Rectangle {
                         color: Theme.text;
                         font-size: 15px;
                         single-line: true;
+                        horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+
                         vertical-alignment: center;
                         edited => { root.draft = self.text; }
                         accepted => { root.accept-rename(self.text); }

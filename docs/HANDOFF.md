@@ -1,4 +1,4 @@
-# WaClient — handoff notes (state as of 2026-11-22, v0.9.0)
+# WaClient — handoff notes (state as of 2026-11-22, v0.10.0)
 
 Read this first in a new session. It records what exists, what was decided and why,
 what is untested, and how to work on the project safely. README.md is the user-facing
@@ -12,7 +12,7 @@ client to look as much like the official one as possible.
 
 - Workspace: `crates/store` (`wa_store`, rusqlite 0.39 bundled), `crates/engine`
   (`wa_engine`, whatsapp-rust 0.7, `default-features=false` minus `simd`), `app` (`waclient`,
-  Slint 1.19 UI). Version lives in root `Cargo.toml` (`version = "0.9.0"`).
+  Slint 1.19 UI). Version lives in root `Cargo.toml` (`version = "0.10.0"`).
 - Latest local package: `dist/WaClient-0.6.0-win-x64.zip` (keep only the latest release in `dist/`).
 - Identity: `ClientProfile::web()` (the Windows profile was rejected by the server as
   "outdated"), DevicePropsOverride os "Windows", PlatformType UWP, require_full_sync,
@@ -23,7 +23,7 @@ client to look as much like the official one as possible.
 | What | Command |
 |---|---|
 | Build (debug) | `cargo build -p waclient` |
-| Test all | `cargo test --workspace` (1103 passing at v0.9.0, 3 ignored) |
+| Test all | `cargo test --workspace` (1158 passing at v0.10.0, 3 ignored) |
 | Test one area | `cargo test -p wa_engine <filter>` / `cargo test -p waclient <filter>` |
 | Engine+store only | `cargo build -p wa_engine -p wa_store` |
 | Store perf smoke | `cargo test -p wa_store --test perf -- --ignored` |
@@ -127,6 +127,17 @@ client to look as much like the official one as possible.
   overwrites; HTML escapes everything; only http/https/mailto links.
 - Light theme: colours must come from Theme tokens (theme.slint has light+dark values); don't add
   hard-coded surface colours in .slint files.
+- RTL: every text input and every displayed user text aligns by its first strong character via the
+  Slint global `TextDir.is-rtl` (app/ui/chat_search.slint, wired to `undo::paragraph_is_rtl`). New
+  text fields/labels must use the same binding (one alignment per Text — Slint can't align per line).
+- Store migrations now 14 (13 = polls.correct_option for quizzes, 14 = sticker_favs).
+- Pop-out chat windows (`app/src/app/chat_window.rs`, `app/ui/chat_window.slint`, ChatView
+  `compact` mode): own model per window, max 4, closed on lock (not restored), send/reply only,
+  respects composer gates; Slint globals are per window (pop-outs get their own).
+- Stickers: `Command::SendSticker` reuses the stored upload only while `media_key_timestamp` (upload
+  time, not message time) is < 14 days old; else re-uploads the cached webp. Same rule for forwards.
+- Group membership requests: Fetch/AnswerMembershipRequests; listed requests have no "method" (the
+  library only gives jid + time).
 - Live-location SENDING is deliberately not built (decided 2026-11-21): whatsapp-rust 0.7 has
   no protocol-correct way to send position updates or stop a share (only the initial
   LiveLocationMessage), and the official Windows/Web clients can't share live location either,

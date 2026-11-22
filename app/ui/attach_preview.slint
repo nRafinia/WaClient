@@ -1,4 +1,5 @@
 import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+import { TextDir } from "chat_search.slint";
 import { Theme } from "theme.slint";
 import { IconViewOnce } from "icons.slint";
 
@@ -147,6 +148,7 @@ export component AttachPreview inherits Rectangle {
             if root.can-caption: LineEdit {
                 placeholder-text: "Add a caption";
                 text <=> root.caption;
+                horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                 accepted => { root.send(root.caption); }
             }
 

@@ -5,6 +5,11 @@
 //! `settings::AppearanceSettings`). Wallpaper images are copied into the
 //! profile's `wallpapers` folder, scaled down and re-encoded as JPEG on a
 //! worker thread. A missing image silently falls back to "no wallpaper".
+//!
+//! Blur is done in Rust (Slint has no live blur): once the slider settles, a
+//! worker writes `<name>-b<radius>.jpg` next to the original, which stays
+//! untouched so the blur can go back to 0. Until that cache exists the sharp
+//! image is shown; the dialog previews the blur on a small thumbnail.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -16,14 +21,14 @@ use std::time::Duration;
 use chrono::Timelike;
 use image::ImageEncoder;
 use image::codecs::jpeg::JpegEncoder;
-use image::imageops::FilterType;
+use image::imageops::{FilterType, fast_blur};
 use sha2::{Digest, Sha256};
-use slint::{Color, ComponentHandle, Image, ModelRc, Timer, TimerMode, VecModel};
+use slint::{Color, ComponentHandle, Image, ModelRc, Rgb8Pixel, SharedPixelBuffer, Timer, TimerMode, VecModel};
 
 use super::prefs::SAVE_DELAY;
 use super::{App, ProfileState, with_app};
 use crate::settings::{
-    ACCENT_COUNT, AppearanceSettings, WALLPAPER_DIM_MAX, WALLPAPER_PRESETS, WallpaperPref,
+    ACCENT_COUNT, AppearanceSettings, WALLPAPER_BLUR_MAX, WALLPAPER_DIM_MAX, WALLPAPER_PRESETS, WallpaperPref,
 };
 use crate::{AppearanceState, MainWindow, Theme, WallpaperPreset};
 
@@ -35,6 +40,12 @@ const JPEG_QUALITY: u8 = 85;
 const MIN_CONTRAST: f32 = 4.5;
 /// Night mode is re-evaluated (and the OS theme re-read) this often.
 const TICK: Duration = Duration::from_secs(30);
+/// The blur slider has to rest this long before a blurred file is generated.
+const BLUR_DEBOUNCE: Duration = Duration::from_millis(300);
+/// Longest side of a blurred wallpaper file (blur hides the lost detail).
+const BLUR_SIDE: u32 = 1280;
+/// Longest side of the dialog's live preview thumbnail.
+const PREVIEW_SIDE: u32 = 240;
 
 const TEXT_DARK: Rgb = Rgb(0xe9, 0xed, 0xef);
 const TEXT_LIGHT: Rgb = Rgb(0x11, 0x1b, 0x21);
@@ -174,6 +185,43 @@ pub fn fit_within(w: u32, h: u32, max: u32) -> (u32, u32) {
     (s(w), s(h))
 }
 
+/// Gaussian sigma (in pixels of a [`BLUR_SIDE`] image) for a blur radius 0..=20.
+pub fn blur_sigma(radius: u8) -> f32 {
+    f32::from(radius.min(WALLPAPER_BLUR_MAX)) * 1.2
+}
+
+/// Name of the blurred copy of `file`; None for radius 0 (no copy) or a bad name.
+pub fn blur_cache_name(file: &str, radius: u8) -> Option<String> {
+    let stem = Path::new(file).file_stem()?.to_str()?;
+    (radius > 0).then(|| format!("{stem}-b{radius}.jpg"))
+}
+
+/// The radius when `name` is a blurred copy of `file`.
+fn parse_blur_name(name: &str, file: &str) -> Option<u8> {
+    let stem = Path::new(file).file_stem()?.to_str()?;
+    let rest = name.strip_prefix(stem)?.strip_prefix("-b")?.strip_suffix(".jpg")?;
+    if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    rest.parse().ok()
+}
+
+/// Names (out of `names`) that are blurred copies of `file` with a radius
+/// other than `keep`. Never matches the original or other files.
+fn stale_blur_names(names: &[String], file: &str, keep: Option<u8>) -> Vec<String> {
+    names.iter().filter(|n| parse_blur_name(n, file).is_some_and(|r| Some(r) != keep)).cloned().collect()
+}
+
+/// Whether the settled blur request should start a worker: the radius is
+/// still the wanted one, nothing is cached for it and no worker is busy.
+pub fn should_generate(requested: u8, current: u8, cached: bool, in_flight: bool) -> bool {
+    requested > 0 && requested == current && !cached && !in_flight
+}
+
+fn blur_rgb(img: &image::RgbImage, sigma: f32) -> image::RgbImage {
+    if sigma < 0.3 { img.clone() } else { fast_blur(img, sigma) }
+}
+
 fn format_minutes(m: u16) -> String {
     format!("{:02}:{:02}", m / 60, m % 60)
 }
@@ -224,6 +272,11 @@ fn import_image(src: &Path, dir: &Path, name: &str) -> Result<(), String> {
     } else {
         img.resize_exact(w, h, FilterType::Triangle).to_rgb8()
     };
+    write_jpeg(&rgb, dir, name)
+}
+
+/// Writes `rgb` as JPEG to `dir/name` through a temp file.
+fn write_jpeg(rgb: &image::RgbImage, dir: &Path, name: &str) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|e| format!("Could not create the wallpaper folder: {e}"))?;
     let tmp = dir.join(format!("{name}.tmp"));
     let written = (|| -> Result<(), String> {
@@ -240,6 +293,58 @@ fn import_image(src: &Path, dir: &Path, name: &str) -> Result<(), String> {
     fs::rename(&tmp, dir.join(name)).map_err(|e| format!("Could not save the wallpaper: {e}"))
 }
 
+/// Writes the blurred copy of `dir/file` for `radius`. Runs on a worker thread.
+fn generate_blur(dir: &Path, file: &str, radius: u8) -> Result<(), String> {
+    let name = blur_cache_name(file, radius).ok_or("nothing to blur")?;
+    let src = Path::new(file).file_name().ok_or("bad wallpaper name")?;
+    let img = image::open(dir.join(src)).map_err(|e| format!("Could not read the wallpaper: {e}"))?;
+    let (w, h) = fit_within(img.width(), img.height(), BLUR_SIDE);
+    let small = if (w, h) == (img.width(), img.height()) {
+        img.to_rgb8()
+    } else {
+        img.resize_exact(w, h, FilterType::Triangle).to_rgb8()
+    };
+    write_jpeg(&blur_rgb(&small, blur_sigma(radius)), dir, &name)
+}
+
+/// Deletes blurred copies of `file` in `dir` except radius `keep`. Only
+/// names matching `<stem>-b<N>.jpg` inside the wallpapers folder are touched.
+/// Returns the deleted paths.
+fn delete_stale_blurs(dir: &Path, file: &str, keep: Option<u8>) -> Vec<PathBuf> {
+    let Ok(rd) = fs::read_dir(dir) else { return Vec::new() };
+    let names: Vec<String> = rd.filter_map(|e| e.ok()?.file_name().into_string().ok()).collect();
+    let mut gone = Vec::new();
+    for name in stale_blur_names(&names, file, keep) {
+        let path = dir.join(&name);
+        match fs::remove_file(&path) {
+            Ok(()) => gone.push(path),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => log::warn!("could not delete an old blurred wallpaper: {e}"),
+        }
+    }
+    gone
+}
+
+fn slint_image(rgb: &image::RgbImage) -> Image {
+    Image::from_rgb8(SharedPixelBuffer::<Rgb8Pixel>::clone_from_slice(rgb.as_raw(), rgb.width(), rgb.height()))
+}
+
+/// A blurred copy being waited for or made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BlurJob {
+    profile: String,
+    file: String,
+    radius: u8,
+}
+
+/// Blur radius of the preference (global or per chat) that uses `file`.
+fn current_blur(a: &AppearanceSettings, file: &str) -> Option<u8> {
+    std::iter::once(&a.wallpaper)
+        .chain(a.chat_wallpapers.values())
+        .find(|w| w.kind == 2 && w.file == file)
+        .map(|w| w.blur)
+}
+
 // ---- state ----
 
 /// Whose wallpaper the dialog edits.
@@ -254,6 +359,13 @@ thread_local! {
     /// Profile id and scope of the open wallpaper dialog.
     static DIALOG: RefCell<Option<(String, Scope)>> = const { RefCell::new(None) };
     static IMAGES: RefCell<HashMap<PathBuf, Image>> = RefCell::new(HashMap::new());
+    static BLUR_TIMER: Timer = Timer::default();
+    /// Waiting for the slider to settle.
+    static BLUR_PENDING: RefCell<Option<BlurJob>> = const { RefCell::new(None) };
+    /// On a worker thread right now.
+    static BLUR_FLIGHT: RefCell<Option<BlurJob>> = const { RefCell::new(None) };
+    /// Thumbnail of the dialog's image (path, thumbnail, longest side of the stored file).
+    static THUMB: RefCell<Option<(PathBuf, image::RgbImage, u32)>> = const { RefCell::new(None) };
 }
 
 pub(super) fn wire(win: &MainWindow) {
@@ -282,6 +394,9 @@ pub(super) fn wire(win: &MainWindow) {
         });
     });
     g.on_set_dim(|v| with_app(|a| a.wallpaper_edit(|w| w.dim = u8::try_from(v.clamp(0, i32::from(WALLPAPER_DIM_MAX))).unwrap_or(0))));
+    g.on_set_blur(|v| {
+        with_app(|a| a.wallpaper_edit(|w| w.blur = u8::try_from(v.clamp(0, i32::from(WALLPAPER_BLUR_MAX))).unwrap_or(0)));
+    });
     g.on_choose_image(|| with_app(App::wallpaper_choose_image));
     g.on_use_default(|| with_app(App::wallpaper_use_default));
     g.on_close_dialog(|| with_app(App::wallpaper_close));
@@ -300,9 +415,17 @@ impl App {
         }
         // The stored name is only ever one the app generated; keep the join inside the folder anyway.
         let name = Path::new(&pref.file).file_name()?;
-        let path = self.profile_dir(p).join(WALLPAPER_DIR).join(name);
+        let mut path = self.profile_dir(p).join(WALLPAPER_DIR).join(name);
         if !path.is_file() {
             return None;
+        }
+        if let Some(blurred) = blur_cache_name(&pref.file, pref.blur) {
+            let cached = path.with_file_name(blurred);
+            if cached.is_file() {
+                path = cached;
+            } else {
+                self.blur_request(p, pref);
+            }
         }
         IMAGES.with(|c| {
             let mut cache = c.borrow_mut();
@@ -323,13 +446,101 @@ impl App {
             return;
         }
         let Some(name) = Path::new(&pref.file).file_name() else { return };
-        let path = self.profile_dir(p).join(WALLPAPER_DIR).join(name);
+        let dir = self.profile_dir(p).join(WALLPAPER_DIR);
+        let path = dir.join(name);
         IMAGES.with(|c| c.borrow_mut().remove(&path));
         if let Err(e) = fs::remove_file(&path) {
             if e.kind() != std::io::ErrorKind::NotFound {
                 log::warn!("could not delete an old wallpaper: {e}");
             }
         }
+        self.drop_blurs(&dir, &pref.file, None);
+    }
+
+    fn drop_blurs(&self, dir: &Path, file: &str, keep: Option<u8>) {
+        let gone = delete_stale_blurs(dir, file, keep);
+        IMAGES.with(|c| {
+            let mut cache = c.borrow_mut();
+            for path in &gone {
+                cache.remove(path);
+            }
+        });
+    }
+
+    /// Asks for the blurred copy of `pref`'s image; it is made once the slider rests.
+    fn blur_request(&self, p: &ProfileState, pref: &WallpaperPref) {
+        let job = BlurJob { profile: p.id.clone(), file: pref.file.clone(), radius: pref.blur };
+        let known = BLUR_PENDING.with(|j| j.borrow().as_ref() == Some(&job)) || BLUR_FLIGHT.with(|j| j.borrow().as_ref() == Some(&job));
+        if known {
+            return;
+        }
+        BLUR_PENDING.with(|j| *j.borrow_mut() = Some(job));
+        BLUR_TIMER.with(|t| t.start(TimerMode::SingleShot, BLUR_DEBOUNCE, || with_app(App::blur_fire)));
+    }
+
+    /// The slider rested: start the worker unless the wish changed or is already met.
+    fn blur_fire(&self) {
+        let Some(job) = BLUR_PENDING.with(|j| j.borrow_mut().take()) else { return };
+        let Some(p) = self.find(&job.profile) else { return };
+        let current = current_blur(&p.settings.borrow().appearance, &job.file).unwrap_or(0);
+        let dir = self.profile_dir(&p).join(WALLPAPER_DIR);
+        let cached = blur_cache_name(&job.file, job.radius).is_some_and(|n| dir.join(n).is_file());
+        let busy = BLUR_FLIGHT.with(|j| j.borrow().is_some());
+        if !should_generate(job.radius, current, cached, busy) {
+            return;
+        }
+        BLUR_FLIGHT.with(|j| *j.borrow_mut() = Some(job.clone()));
+        let spawned = std::thread::Builder::new().name("wallpaper-blur".into()).spawn({
+            let job = job.clone();
+            move || {
+                let result = generate_blur(&dir, &job.file, job.radius);
+                let queued = slint::invoke_from_event_loop(move || with_app(|a| a.blur_done(&job, result)));
+                if let Err(e) = queued {
+                    log::error!("could not deliver the blurred wallpaper to the UI: {e}");
+                }
+            }
+        });
+        if let Err(e) = spawned {
+            BLUR_FLIGHT.with(|j| *j.borrow_mut() = None);
+            log::warn!("could not start the wallpaper blur: {e}");
+        }
+    }
+
+    fn blur_done(&self, job: &BlurJob, result: Result<(), String>) {
+        BLUR_FLIGHT.with(|j| *j.borrow_mut() = None);
+        if let Err(e) = result {
+            log::warn!("wallpaper blur failed: {e}");
+            return;
+        }
+        let Some(p) = self.find(&job.profile) else { return };
+        let keep = current_blur(&p.settings.borrow().appearance, &job.file).filter(|r| *r > 0);
+        self.drop_blurs(&self.profile_dir(&p).join(WALLPAPER_DIR), &job.file, keep);
+        // Also shows a radius that was asked for while this one was being made.
+        if p.id == self.p().id {
+            self.appearance_apply(&p);
+        }
+    }
+
+    /// The dialog's image with the blur applied to a small thumbnail (fast enough to follow the slider).
+    fn wallpaper_preview(&self, p: &ProfileState, pref: &WallpaperPref) -> Option<Image> {
+        if pref.kind != 2 {
+            return None;
+        }
+        let name = Path::new(&pref.file).file_name()?;
+        let path = self.profile_dir(p).join(WALLPAPER_DIR).join(name);
+        THUMB.with(|t| {
+            let mut t = t.borrow_mut();
+            if t.as_ref().is_none_or(|(cached, ..)| *cached != path) {
+                let img = image::open(&path).ok()?;
+                let side = img.width().max(img.height());
+                let (w, h) = fit_within(img.width(), img.height(), PREVIEW_SIDE);
+                *t = Some((path.clone(), img.resize_exact(w, h, FilterType::Triangle).to_rgb8(), side));
+            }
+            let (_, thumb, side) = t.as_ref()?;
+            // Same look as the stored copy: its sigma, scaled to the thumbnail.
+            let scale = thumb.width().max(thumb.height()) as f32 / (*side).min(BLUR_SIDE) as f32;
+            Some(slint_image(&blur_rgb(thumb, blur_sigma(pref.blur) * scale)))
+        })
     }
 
     fn selected_chat(p: &ProfileState) -> Option<String> {
@@ -429,7 +640,9 @@ impl App {
         g.set_dlg_kind(i32::from(pref.kind));
         g.set_dlg_preset(i32::from(pref.preset));
         g.set_dlg_dim(i32::from(pref.dim));
+        g.set_dlg_blur(i32::from(pref.blur));
         g.set_dlg_image(self.wallpaper_image(p, &pref).unwrap_or_default());
+        g.set_dlg_preview(self.wallpaper_preview(p, &pref).unwrap_or_default());
         g.set_dialog_open(true);
     }
 
@@ -505,6 +718,7 @@ impl App {
 
     fn wallpaper_edit_scope(&self, p: &ProfileState, scope: &Scope, f: impl FnOnce(&mut WallpaperPref)) {
         let mut dropped: Option<WallpaperPref> = None;
+        let mut unblurred: Option<String> = None;
         self.appearance_edit_in(p, |a| {
             let global_dim = a.wallpaper.dim;
             let slot = match scope {
@@ -518,10 +732,15 @@ impl App {
             f(slot);
             if before.kind == 2 && (slot.kind != 2 || slot.file != before.file) {
                 dropped = Some(before);
+            } else if slot.kind == 2 && slot.blur == 0 && before.blur != 0 {
+                // Back to sharp: the copies are useless now. Other radii are cleaned up when theirs is made.
+                unblurred = Some(slot.file.clone());
             }
         });
         if let Some(old) = dropped {
             self.forget_wallpaper_file(p, &old);
+        } else if let Some(file) = unblurred {
+            self.drop_blurs(&self.profile_dir(p).join(WALLPAPER_DIR), &file, None);
         }
     }
 
@@ -591,16 +810,52 @@ impl App {
 
 #[cfg(debug_assertions)]
 impl App {
+    /// A sharp test picture in the demo profile's wallpapers folder (temporary, never the real data).
+    fn demo_wallpaper_image(&self) -> Option<String> {
+        let name = "global-demo.jpg";
+        let img = image::RgbImage::from_fn(1600, 900, |x, y| {
+            let (dx, dy) = (x as f32 - 800.0, y as f32 - 450.0);
+            if dx * dx + dy * dy < 260.0 * 260.0 {
+                image::Rgb([245, 220, 120])
+            } else if (x / 100 + y / 100) % 2 == 0 {
+                image::Rgb([40, 90 + (y / 6) as u8 % 120, 160])
+            } else {
+                image::Rgb([200, 70, 90 + (x / 8) as u8 % 120])
+            }
+        });
+        match write_jpeg(&img, &self.profile_dir(&self.p()).join(WALLPAPER_DIR), name) {
+            Ok(()) => Some(name.to_string()),
+            Err(e) => {
+                log::warn!("demo: {e}");
+                None
+            }
+        }
+    }
+
     /// Demo (`WACLIENT_DEMO_UI=theme-accent[-light]|wallpaper[-light]|wallpaper-dialog`).
     /// The demo keeps its settings in a temporary folder, never in the real data.
     pub(super) fn demo_appearance(&self, what: &str) {
         let Some(win) = self.win() else { return };
         let light = what.ends_with("-light");
+        let image = if what.starts_with("wallpaper-blur") || what.starts_with("empty-wallpaper") {
+            self.demo_wallpaper_image()
+        } else {
+            None
+        };
+        let blur = if what.starts_with("wallpaper-blur0") {
+            0
+        } else if what.starts_with("empty-wallpaper") {
+            8
+        } else {
+            12
+        };
         self.appearance_edit(|a| {
             a.theme_mode = if light { 1 } else { 2 };
             a.accent = if what.starts_with("theme-accent") { if light { 2 } else { 1 } } else { 0 };
-            a.wallpaper = if what.starts_with("wallpaper") {
-                WallpaperPref { kind: 1, preset: if light { 4 } else { 3 }, dim: 25, file: String::new() }
+            a.wallpaper = if let Some(file) = &image {
+                WallpaperPref { kind: 2, preset: 0, dim: 25, file: file.clone(), blur }
+            } else if what.starts_with("wallpaper") {
+                WallpaperPref { kind: 1, preset: if light { 4 } else { 3 }, dim: 25, file: String::new(), blur: 0 }
             } else {
                 WallpaperPref::default()
             };
@@ -609,9 +864,9 @@ impl App {
             self.open_settings();
             win.set_settings_start_category(2);
             win.set_show_settings(true);
-        } else {
+        } else if !what.starts_with("empty-wallpaper") {
             self.select_chat("111@s.whatsapp.net");
-            if what == "wallpaper-dialog" {
+            if what.ends_with("-dialog") {
                 self.wallpaper_open(false);
             }
         }
@@ -737,6 +992,67 @@ mod tests {
         let bytes = fs::read(out.join("w.jpg")).expect("read");
         assert_eq!(&bytes[..2], &[0xff, 0xd8], "JPEG magic");
         assert!(import_image(&dir.join("missing.png"), &out, "x.jpg").is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn blur_names_are_next_to_the_original_and_only_for_a_blur() {
+        assert_eq!(blur_cache_name("global-170.jpg", 12).as_deref(), Some("global-170-b12.jpg"));
+        assert_eq!(blur_cache_name("global-170.jpg", 0), None);
+        assert_eq!(blur_cache_name("", 5), None);
+        assert_eq!(parse_blur_name("global-170-b12.jpg", "global-170.jpg"), Some(12));
+        assert_eq!(parse_blur_name("global-170.jpg", "global-170.jpg"), None);
+        assert_eq!(parse_blur_name("global-1700-b3.jpg", "global-170.jpg"), None);
+        assert_eq!(parse_blur_name("global-170-bx.jpg", "global-170.jpg"), None);
+        assert_eq!(parse_blur_name("global-170-b3.jpg.tmp", "global-170.jpg"), None);
+    }
+
+    #[test]
+    fn stale_blurs_skip_the_original_the_kept_radius_and_other_files() {
+        let names: Vec<String> =
+            ["g-1.jpg", "g-1-b4.jpg", "g-1-b12.jpg", "g-2-b4.jpg", "notes.txt"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(stale_blur_names(&names, "g-1.jpg", Some(12)), vec!["g-1-b4.jpg"]);
+        assert_eq!(stale_blur_names(&names, "g-1.jpg", None), vec!["g-1-b4.jpg", "g-1-b12.jpg"]);
+    }
+
+    #[test]
+    fn blur_radius_maps_to_a_growing_sigma() {
+        assert_eq!(blur_sigma(0), 0.0);
+        assert!(blur_sigma(1) < blur_sigma(10) && blur_sigma(10) < blur_sigma(20));
+        assert_eq!(blur_sigma(200), blur_sigma(WALLPAPER_BLUR_MAX));
+    }
+
+    #[test]
+    fn blur_starts_only_when_settled_missing_and_idle() {
+        assert!(should_generate(8, 8, false, false));
+        assert!(!should_generate(8, 9, false, false), "slider moved on");
+        assert!(!should_generate(8, 8, true, false), "already cached");
+        assert!(!should_generate(8, 8, false, true), "worker busy");
+        assert!(!should_generate(0, 0, false, false), "no blur");
+    }
+
+    #[test]
+    fn blurring_changes_pixels_and_keeps_the_size() {
+        let img = image::RgbImage::from_fn(64, 40, |x, _| if x < 32 { image::Rgb([0, 0, 0]) } else { image::Rgb([255, 255, 255]) });
+        let out = blur_rgb(&img, blur_sigma(10));
+        assert_eq!(out.dimensions(), img.dimensions());
+        assert_ne!(out.as_raw(), img.as_raw());
+        assert_eq!(blur_rgb(&img, 0.0).as_raw(), img.as_raw());
+    }
+
+    #[test]
+    fn blur_cache_is_generated_next_to_the_original_and_stale_ones_deleted() {
+        let dir = std::env::temp_dir().join(format!("waclient-blur-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let img = image::RgbImage::from_fn(300, 200, |x, _| if x < 150 { image::Rgb([10, 10, 10]) } else { image::Rgb([240, 240, 240]) });
+        write_jpeg(&img, &dir, "w.jpg").expect("original");
+        generate_blur(&dir, "w.jpg", 6).expect("blur 6");
+        generate_blur(&dir, "w.jpg", 9).expect("blur 9");
+        let blurred = image::open(dir.join("w-b6.jpg")).expect("open cache");
+        assert_eq!((blurred.width(), blurred.height()), (300, 200));
+        let gone = delete_stale_blurs(&dir, "w.jpg", Some(9));
+        assert_eq!(gone, vec![dir.join("w-b6.jpg")]);
+        assert!(dir.join("w.jpg").is_file() && dir.join("w-b9.jpg").is_file() && !dir.join("w-b6.jpg").exists());
         let _ = fs::remove_dir_all(&dir);
     }
 

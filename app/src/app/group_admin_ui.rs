@@ -8,13 +8,13 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use slint::{ComponentHandle, ModelRc, VecModel};
-use wa_engine::{Command, GroupSetting, MemberAction, MemberChangeResult};
+use wa_engine::{Command, GroupSetting, MemberAction, MemberChangeResult, MembershipRequest, RequestMethod};
 
 use super::contact_info::format_phone;
 use super::group_new_ui::validate_subject;
 use super::share_ui::MAX_ADD_MEMBERS;
 use super::{App, ProfileState, with_app};
-use crate::{GroupAdmin, MainWindow, MemberFailure, models};
+use crate::{GroupAdmin, MainWindow, MemberFailure, RequestRow, models};
 
 /// Longest group description WhatsApp accepts.
 const MAX_DESCRIPTION_CHARS: usize = 2048;
@@ -60,8 +60,78 @@ fn invite_sent_text(count: usize) -> String {
     }
 }
 
+/// The pending requests on screen: who the list buttons may answer for.
+struct Requests {
+    profile: String,
+    group: String,
+    /// `(jid, name as listed)`, in list order.
+    people: Vec<(String, String)>,
+}
+
+/// A listed request as the sub-view shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RequestLine {
+    jid: String,
+    name: String,
+    phone: String,
+    detail: String,
+}
+
+/// The name of a requester: what the engine found, else the phone, else a
+/// neutral text (a bare LID is not something to show).
+fn request_name(r: &MembershipRequest) -> String {
+    r.name
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_string)
+        .or_else(|| r.phone.as_deref().filter(|p| !p.is_empty()).map(|p| format!("+{p}")))
+        .unwrap_or_else(|| "Unknown contact".to_string())
+}
+
+fn method_label(method: RequestMethod) -> &'static str {
+    match method {
+        RequestMethod::InviteLink => "via invite link",
+        RequestMethod::AddedByMember => "added by a member",
+        RequestMethod::Unknown | RequestMethod::Other => "",
+    }
+}
+
+/// "14:05 · via invite link"; parts that are unknown are left out.
+fn request_detail(r: &MembershipRequest, now: chrono::DateTime<chrono::Local>) -> String {
+    let when = r.requested_at.filter(|t| *t > 0).map(|t| models::format_chat_time(t, now)).unwrap_or_default();
+    [when.as_str(), method_label(r.method)].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join(" \u{b7} ")
+}
+
+fn request_lines(list: &[MembershipRequest], now: chrono::DateTime<chrono::Local>) -> Vec<RequestLine> {
+    list.iter()
+        .map(|r| RequestLine {
+            jid: r.jid.clone(),
+            name: request_name(r),
+            phone: r.phone.as_deref().filter(|p| !p.is_empty()).map(format_phone).unwrap_or_default(),
+            detail: request_detail(r, now),
+        })
+        .collect()
+}
+
+fn answer_failures_title(approve: bool) -> &'static str {
+    if approve { "Couldn't approve some requests" } else { "Couldn't reject some requests" }
+}
+
+/// Toast after an answer; `None` when nothing worked (the dialog says why).
+fn answer_toast(approve: bool, ok: usize) -> Option<String> {
+    let verb = if approve { "Approved" } else { "Rejected" };
+    match ok {
+        0 => None,
+        1 => Some(format!("{verb} 1 request")),
+        n => Some(format!("{verb} {n} requests")),
+    }
+}
+
 #[derive(Default)]
 struct AdminState {
+    /// The listed join requests of the open panel.
+    requests: Option<Requests>,
     failures: Option<Failures>,
     /// Members waiting for the invite link to arrive.
     invite_for: Option<InviteWait>,
@@ -147,6 +217,9 @@ pub(super) fn wire(win: &MainWindow) {
     g.on_leave(|| with_app(App::group_leave));
     g.on_send_invites(|| with_app(App::group_send_invites));
     g.on_close_view(|| with_app(App::group_close_view));
+    g.on_open_requests(|| with_app(App::group_open_requests));
+    g.on_answer_request(|jid, approve| with_app(|a| a.group_answer_requests(Some(jid.as_str()), approve)));
+    g.on_answer_all(|approve| with_app(|a| a.group_answer_requests(None, approve)));
 }
 
 impl App {
@@ -169,6 +242,7 @@ impl App {
             a.failures = None;
             a.invite_for = None;
             a.link.clear();
+            a.requests = None;
         });
         let Some(win) = self.win() else { return };
         let g = win.global::<GroupAdmin>();
@@ -177,6 +251,9 @@ impl App {
         g.set_editing_name(false);
         g.set_invite_link(Default::default());
         g.set_invite_loading(false);
+        g.set_requests(Default::default());
+        g.set_requests_loading(false);
+        g.set_requests_busy(false);
     }
 
     /// Esc on a dialog; with none open, on the inline name editor.
@@ -408,12 +485,178 @@ impl App {
     /// `UiEvent::Error`: a send-invites request of this profile that was
     /// waiting for the link will not get it.
     pub(super) fn invite_request_failed(&self, p: &ProfileState) {
+        // An approve / reject that failed outright never gets its own answer.
+        if let Some(win) = self.win() {
+            let g = win.global::<GroupAdmin>();
+            g.set_requests_busy(false);
+            g.set_requests_loading(false);
+        }
         ADMIN.with(|a| {
             let mut a = a.borrow_mut();
             if a.invite_for.as_ref().is_some_and(|w| w.profile == p.id) {
                 a.invite_for = None;
             }
         });
+    }
+
+    fn group_open_requests(&self) {
+        let Some(group) = self.admin_group() else { return };
+        ADMIN.with(|a| a.borrow_mut().requests = None);
+        if let Some(win) = self.win() {
+            let g = win.global::<GroupAdmin>();
+            g.set_requests(Default::default());
+            g.set_requests_loading(true);
+            g.set_requests_busy(false);
+            g.set_view(3);
+        }
+        self.send(Command::FetchMembershipRequests { group_jid: group });
+    }
+
+    /// Approve / reject one request (`jid`) or every listed one (`None`).
+    fn group_answer_requests(&self, jid: Option<&str>, approve: bool) {
+        self.close_dialog();
+        let Some(group) = self.admin_group() else { return };
+        let profile = self.p().id.clone();
+        let jids: Vec<String> = ADMIN.with(|a| {
+            let a = a.borrow();
+            let Some(r) = a.requests.as_ref().filter(|r| r.profile == profile && r.group == group) else {
+                return Vec::new();
+            };
+            match jid {
+                Some(j) => r.people.iter().filter(|(k, _)| k == j).map(|(k, _)| k.clone()).collect(),
+                None => r.people.iter().map(|(k, _)| k.clone()).collect(),
+            }
+        });
+        if jids.is_empty() {
+            return;
+        }
+        if let Some(win) = self.win() {
+            win.global::<GroupAdmin>().set_requests_busy(true);
+        }
+        log::info!(
+            "group: {} {} join request(s) of {}",
+            if approve { "approving" } else { "rejecting" },
+            jids.len(),
+            models::redact_jid(&group)
+        );
+        self.send(Command::AnswerMembershipRequests { group_jid: group, jids, approve });
+    }
+
+    /// Shows `list` in the sub-view and remembers who is on it.
+    fn show_requests(&self, profile: &str, group: &str, list: &[MembershipRequest]) {
+        let lines = request_lines(list, chrono::Local::now());
+        ADMIN.with(|a| {
+            a.borrow_mut().requests = Some(Requests {
+                profile: profile.to_string(),
+                group: group.to_string(),
+                people: lines.iter().map(|l| (l.jid.clone(), l.name.clone())).collect(),
+            });
+        });
+        let rows: Vec<RequestRow> = lines
+            .iter()
+            .map(|l| RequestRow {
+                jid: l.jid.as_str().into(),
+                name: l.name.as_str().into(),
+                phone: l.phone.as_str().into(),
+                detail: l.detail.as_str().into(),
+                initials: models::initials(&l.name).into(),
+                tint: models::tint_for(&l.jid),
+            })
+            .collect();
+        if let Some(win) = self.win() {
+            let g = win.global::<GroupAdmin>();
+            g.set_requests(ModelRc::new(VecModel::from(rows)));
+            g.set_requests_loading(false);
+            g.set_requests_busy(false);
+        }
+    }
+
+    /// `UiEvent::MembershipRequests`; `None` means the list could not be loaded.
+    pub(super) fn on_membership_requests(&self, p: &ProfileState, active: bool, group: &str, list: Option<Vec<MembershipRequest>>) {
+        if !active || !self.info_is_open_for(&p.id, group) {
+            return;
+        }
+        match list {
+            Some(list) => self.show_requests(&p.id, group, &list),
+            None => {
+                if let Some(win) = self.win() {
+                    let g = win.global::<GroupAdmin>();
+                    g.set_requests_loading(false);
+                    g.set_requests_busy(false);
+                }
+            }
+        }
+    }
+
+    /// `UiEvent::MembershipRequestsAnswered`: a toast for what worked, the
+    /// failure dialog for what did not (the engine follows up with a fresh list).
+    pub(super) fn on_membership_answered(&self, p: &ProfileState, active: bool, group: &str, approve: bool, results: &[MemberChangeResult]) {
+        if !active {
+            return;
+        }
+        if let Some(win) = self.win() {
+            win.global::<GroupAdmin>().set_requests_busy(false);
+        }
+        if let Some(text) = answer_toast(approve, results.iter().filter(|r| r.ok).count()) {
+            self.show_toast(&text);
+        }
+        if results.iter().all(|r| r.ok) {
+            return;
+        }
+        let names: Vec<(String, String)> = ADMIN.with(|a| {
+            a.borrow().requests.as_ref().filter(|r| r.profile == p.id && r.group == group).map(|r| r.people.clone()).unwrap_or_default()
+        });
+        let rows: Vec<MemberFailure> = results
+            .iter()
+            .filter(|r| !r.ok)
+            .map(|r| {
+                let name = names.iter().find(|(k, _)| *k == r.jid).map(|(_, n)| n.clone()).unwrap_or_else(|| "Unknown contact".to_string());
+                let error = r.error.as_deref().map(str::trim).filter(|e| !e.is_empty()).unwrap_or("Couldn't be updated");
+                MemberFailure { name: name.into(), error: error.into() }
+            })
+            .collect();
+        ADMIN.with(|a| a.borrow_mut().failures = None);
+        let Some(win) = self.win() else { return };
+        let g = win.global::<GroupAdmin>();
+        g.set_failures_title(answer_failures_title(approve).into());
+        g.set_failures(ModelRc::new(VecModel::from(rows)));
+        g.set_failures_invite(false);
+        g.set_dialog(DIALOG_FAILURES);
+    }
+
+    /// `UiEvent::MembershipRequestsChanged`: somebody asked or cancelled, so
+    /// the pending count (and the list, when open) is read again.
+    pub(super) fn on_membership_changed(&self, p: &ProfileState, active: bool, group: &str) {
+        if !active || !self.info_is_open_for(&p.id, group) || !self.info_controls().is_admin {
+            return;
+        }
+        self.send(Command::FetchContactInfo { jid: group.to_string() });
+        if self.win().is_some_and(|w| w.global::<GroupAdmin>().get_view() == 3) {
+            self.send(Command::FetchMembershipRequests { group_jid: group.to_string() });
+        }
+    }
+
+    /// Demo (`WACLIENT_DEMO_UI=group-requests`): the sub-view with made-up requests.
+    #[cfg(debug_assertions)]
+    pub(super) fn demo_requests(&self) {
+        let now = chrono::Utc::now().timestamp();
+        let ask = |jid: &str, name: Option<&str>, phone: Option<&str>, ago: i64, method| MembershipRequest {
+            jid: jid.to_string(),
+            name: name.map(str::to_string),
+            phone: phone.map(str::to_string),
+            requested_at: Some(now - ago),
+            method,
+        };
+        let list = [
+            ask("555@s.whatsapp.net", Some("Sara Ahmadi"), Some("989123456780"), 600, RequestMethod::InviteLink),
+            ask("666@lid", None, Some("447911123499"), 7_200, RequestMethod::AddedByMember),
+            ask("777@lid", None, None, 86_400 * 2, RequestMethod::Unknown),
+            ask("888@s.whatsapp.net", Some("Daniel"), Some("14155550123"), 86_400 * 9, RequestMethod::InviteLink),
+        ];
+        self.show_requests(&self.p().id.clone(), "999@g.us", &list);
+        if let Some(win) = self.win() {
+            win.global::<GroupAdmin>().set_view(3);
+        }
     }
 
     /// `UiEvent::InviteLink`: shown in the sub-view of the open panel, and sent
@@ -444,6 +687,46 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn request(jid: &str, name: Option<&str>, phone: Option<&str>, at: Option<i64>, method: RequestMethod) -> MembershipRequest {
+        MembershipRequest { jid: jid.into(), name: name.map(String::from), phone: phone.map(String::from), requested_at: at, method }
+    }
+
+    #[test]
+    fn requester_names_never_show_a_bare_lid() {
+        let named = request("1@lid", Some(" Sara "), None, None, RequestMethod::Unknown);
+        assert_eq!(request_name(&named), "Sara");
+        let phone_only = request("1@lid", None, Some("447911123456"), None, RequestMethod::Unknown);
+        assert_eq!(request_name(&phone_only), "+447911123456");
+        let blank = request("123456@lid", Some("  "), None, None, RequestMethod::Unknown);
+        assert_eq!(request_name(&blank), "Unknown contact");
+    }
+
+    #[test]
+    fn request_lines_show_time_method_and_formatted_phone() {
+        use chrono::TimeZone;
+        let now = chrono::Local.with_ymd_and_hms(2026, 11, 22, 15, 0, 0).unwrap();
+        let ts = chrono::Local.with_ymd_and_hms(2026, 11, 22, 14, 5, 0).unwrap().timestamp();
+        let a = request("a@lid", Some("Sara"), Some("989123456789"), Some(ts), RequestMethod::InviteLink);
+        let b = request("b@lid", None, None, None, RequestMethod::Unknown);
+        let lines = request_lines(&[a, b], now);
+        assert_eq!(lines[0].detail, "14:05 \u{b7} via invite link");
+        assert_eq!(lines[0].phone, format_phone("989123456789"));
+        assert_eq!(lines[1].detail, "");
+        assert_eq!(lines[1].phone, "");
+        assert_eq!(lines[1].jid, "b@lid");
+        assert_eq!(method_label(RequestMethod::AddedByMember), "added by a member");
+        assert_eq!(method_label(RequestMethod::Other), "");
+    }
+
+    #[test]
+    fn answers_are_summarised() {
+        assert_eq!(answer_toast(true, 1).as_deref(), Some("Approved 1 request"));
+        assert_eq!(answer_toast(false, 3).as_deref(), Some("Rejected 3 requests"));
+        assert_eq!(answer_toast(true, 0), None);
+        assert_eq!(answer_failures_title(true), "Couldn't approve some requests");
+        assert_eq!(answer_failures_title(false), "Couldn't reject some requests");
+    }
 
     fn result(jid: &str, ok: bool, error: Option<&str>, invite: bool) -> MemberChangeResult {
         MemberChangeResult { jid: jid.into(), ok, error: error.map(String::from), invite_instead: invite }

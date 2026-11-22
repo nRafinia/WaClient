@@ -2,6 +2,8 @@ import { Button, ListView, Spinner } from "std-widgets.slint";
 import { Theme, Avatar } from "theme.slint";
 import { PickItem } from "msgops.slint";
 import { IconClose, IconPlay } from "icons.slint";
+import { TextDir } from "chat_search.slint";
+
 
 // State of the "New status" editor and its audience chooser (Rust:
 // app/status_post_ui.rs). The status list opens the editor through the
@@ -190,6 +192,8 @@ export component AudiencePicker inherits Rectangle {
                         color: Theme.text;
                         font-size: 14px;
                         single-line: true;
+                        horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+
                         edited => { StatusPost.picker-search(self.text); }
                     }
                 }
@@ -539,6 +543,8 @@ export component StatusPostDialog inherits Rectangle {
                         color: Theme.text;
                         font-size: 14px;
                         single-line: true;
+                        horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+
                         text <=> StatusPost.caption;
                         edited => { StatusPost.text-edited(self.text); }
                     }

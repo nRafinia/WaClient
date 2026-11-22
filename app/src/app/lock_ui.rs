@@ -17,7 +17,7 @@ use sha2::Sha256;
 use slint::{ComponentHandle, Timer, TimerMode};
 
 use super::{App, with_app};
-use crate::{LockState, MainWindow};
+use crate::{LockState, MainWindow, PopupState};
 
 const FILE: &str = "applock.json";
 pub const MIN_LEN: usize = 4;
@@ -336,6 +336,18 @@ pub(super) fn wire(win: &MainWindow) {
     g.on_set_lock_on_tray(|on| with_app(|a| a.lock_set_tray(on)));
 }
 
+/// Popup menus draw above everything, including the lock overlay, so any that
+/// is open when the lock engages is closed with Esc (Slint closes the topmost
+/// popup per press; the window-level handler ignores Esc while locked).
+fn close_open_popups(win: &MainWindow) {
+    let open = win.global::<PopupState>().get_open();
+    let esc = slint::SharedString::from(slint::platform::Key::Escape);
+    for _ in 0..open.clamp(0, 16) {
+        win.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: esc.clone() });
+        win.window().dispatch_event(slint::platform::WindowEvent::KeyReleased { text: esc.clone() });
+    }
+}
+
 impl App {
     /// Whether the lock screen is up (masks notifications and call banners).
     pub(super) fn is_locked(&self) -> bool {
@@ -390,11 +402,15 @@ impl App {
         if self.lock.cfg.borrow().passcode.is_none() || self.lock.locked.replace(true) {
             return;
         }
+        // Pop-out chat windows would keep showing messages: they close.
+        self.popouts_close_all();
         if let Some(win) = self.win() {
+            close_open_popups(&win);
             let g = win.global::<LockState>();
             g.set_error("".into());
             g.set_locked(true);
         }
+        self.refresh_title();
         self.lock_refresh_wait();
         self.calls_render();
     }
@@ -456,6 +472,7 @@ impl App {
                 g.set_blocked(false);
                 g.set_locked(false);
             }
+            self.refresh_title();
             self.calls_render();
             return;
         }

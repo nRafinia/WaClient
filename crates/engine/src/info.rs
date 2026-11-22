@@ -358,6 +358,7 @@ fn group_info_from(
         approval_required: meta.approval_required,
         i_am_admin,
         i_am_member,
+        pending_requests: 0,
     }
 }
 
@@ -660,7 +661,11 @@ async fn enrich_group(sh: &Shared, client: &Client, jid: &Jid, jid_str: &str, in
         MetaLookup::Found(meta) => {
             loaded = true;
             let me = own_jids(client);
-            info.group = Some(group_info_from(&meta, &me, store_name_of(sh)));
+            let mut group = group_info_from(&meta, &me, store_name_of(sh));
+            if group.i_am_admin && group.approval_required {
+                group.pending_requests = crate::group_admin::pending_count(client, jid).await;
+            }
+            info.group = Some(group);
         }
         MetaLookup::NotMember => {
             loaded = true;

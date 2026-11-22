@@ -19,6 +19,9 @@ A native Windows desktop client for WhatsApp, written in Rust. It links to your 
   and browse every photo and video of the chat with Left / Right (counter "12 / 87"). The top bar has sender and date,
   Copy image, Forward, Save as and Show in chat. Videos still open in the system player ("Open video").
 - Emoji-only messages (1-3 emoji) are shown large, without a bubble.
+- Stickers: a Stickers tab in the emoji picker (favourites + recently received/sent stickers) to
+  send a sticker, and "Add to favourites" in a sticker's message menu. Animated stickers show their
+  first frame in the picker.
 - Voice playback speed 1x / 1.5x / 2x (pill on the bubble; pitch rises with speed).
 - Voice notes: record (Ogg/Opus) and play back. Buffer underruns/overruns (xruns) are ignored. If
   the microphone stops delivering audio (switched or unplugged), the recording ends early but is
@@ -33,11 +36,18 @@ A native Windows desktop client for WhatsApp, written in Rust. It links to your 
 - Statuses viewer: recent statuses (last 24h) of your contacts; you can also post your own.
 - Polls: vote (single or multiple answers; click again to change or withdraw) and create your
   own from the attach menu (question, 2–12 options, "Allow multiple answers"); live tallies.
+  "View votes" under a poll lists who voted for which option, with the time; it updates live.
+- Quizzes: switch on "Quiz mode" in the Create poll dialog and mark the correct option (one answer
+  only). Received quizzes look like normal polls until you vote; then (and always on your own
+  quiz) the correct option gets a green check, your wrong choice a red cross, and the correct
+  answer is spelled out.
 - Incoming calls: banner with caller, voice / video, Decline and Open chat (answer on your
   phone); missed and declined calls appear in the chat.
 - Groups: create a group (members, name, photo), add / remove members, make or dismiss admins,
   rename, edit the description, change or remove the photo, invite link (copy / reset), "Only
   admins can send messages" / "Only admins can edit info" / "Approve new members", exit group.
+  With approval on, admins see "Pending requests (N)" in the group info and can approve or
+  reject each person (or everyone at once).
   Join by pasting a chat.whatsapp.com link or clicking one in a message (with a preview first).
   Group changes appear as notices in the chat ("Ali added Sara"). In admins-only groups the
   message box is replaced by a notice when you are not an admin.
@@ -178,6 +188,9 @@ A native Windows desktop client for WhatsApp, written in Rust. It links to your 
 - Appearance (Settings > Chats): System / Light / Dark / Scheduled night-mode theme, eight accent
   colours, and chat wallpapers (presets or your own image) for all chats or per chat (chat menu >
   Wallpaper...).
+- Open a chat in its own window (row menu or chat header menu > Open in new window): up to four
+  pop-out chats with live messages, composer, reply and reactions while the main window keeps
+  working. The pop-outs close when the app locks.
 - Send later: right-click the Send button (or click the small chevron on it) > "Send later...",
   then pick In 1 hour / Tonight 21:00 / Tomorrow 09:00 or type a local date and time (in the future,
   at most one year ahead). Text only (formatting, mentions and the reply target are kept). **WhatsApp
@@ -193,8 +206,7 @@ A native Windows desktop client for WhatsApp, written in Rust. It links to your 
 ## Known limitations
 
 - Calls can't be answered or placed from the app (incoming calls are shown and can be declined).
-- Quizzes and per-voter "View votes" lists are not supported; membership requests cannot be
-  approved from the app.
+- Quizzes and per-voter "View votes" lists are not supported.
 - Statuses are still to be verified in real use; treat the viewer and posting as experimental.
 - Only recent statuses (last 24h) are shown; older ones are purged.
 - Every profile appears on the phone as the same "Windows" linked device type.

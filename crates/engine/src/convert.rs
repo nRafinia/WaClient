@@ -541,6 +541,8 @@ pub struct PollInfo {
     pub options: Vec<String>,
     /// How many options one voter may pick (never 0).
     pub selectable_count: u32,
+    /// The correct option of a quiz poll (one of `options`); `None` for ordinary polls.
+    pub correct: Option<String>,
 }
 
 /// The poll defined by `msg`, if it is a poll creation.
@@ -556,11 +558,34 @@ pub fn poll_info(msg: &wa::Message) -> Option<PollInfo> {
         // 0 means "any number" on the wire.
         _ => u32::try_from(options.len().max(1)).unwrap_or(u32::MAX),
     };
+    let correct = quiz_answer(poll, &options);
     Some(PollInfo {
         question: non_empty(&poll.name).unwrap_or_else(|| "Poll".to_string()),
         options,
         selectable_count,
+        correct,
     })
+}
+
+/// The correct option of a quiz poll: `correctAnswer` named by its text or,
+/// failing that, by the lowercase-hex SHA-256 of the name WA Web sends.
+fn quiz_answer(poll: &wa::message::PollCreationMessage, options: &[String]) -> Option<String> {
+    if !matches!(poll.poll_type, Some(wa::message::PollType::QUIZ)) {
+        return None;
+    }
+    let answer = poll.correct_answer.as_option()?;
+    if let Some(name) = non_empty(&answer.option_name)
+        && options.contains(&name)
+    {
+        return Some(name);
+    }
+    let hash = answer.option_hash.as_deref().filter(|h| !h.is_empty())?.to_ascii_lowercase();
+    options.iter().find(|name| quiz_option_hash(name) == hash).cloned()
+}
+
+/// Lowercase hex of SHA-256(name): how `correctAnswer.optionHash` is written.
+pub fn quiz_option_hash(name: &str) -> String {
+    whatsapp_rust::wacore::poll::compute_option_hash(name).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// [`poll_info`] for a message we built from `msg` (see [`from_inbound`]);

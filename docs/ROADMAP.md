@@ -40,7 +40,7 @@ effort, and whether items can run as parallel agents with disjoint files.
 | 3.6 | **Send later** (local schedule; only while the app runs — say so in the UI) | M | Goes through the normal send path at fire time. |
 | 3.7 | **Export chat** (HTML / TXT / JSON + media folder) | M | |
 
-## Phase 4 — later / bigger
+## Phase 4 — later / bigger — mostly DONE in 0.10.0 (pop-out windows, stickers, quizzes, View votes, membership requests). Open: video picture-in-picture (needs an in-app video player first), installer is built by CI.
 - Open chat in a separate window; video picture-in-picture.
 - Stickers: show and send saved stickers (webp).
 - Polls: quizzes, per-voter "View votes"; groups: approve membership requests.

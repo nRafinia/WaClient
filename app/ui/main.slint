@@ -3,8 +3,9 @@ import { PopupState, Theme, ChatItem, ProfileItem } from "theme.slint";
 import { MsgItem, ReactionConfig, ContactEntry, PhoneLinks, VoiceSpeed } from "msg.slint";
 import { PollOptionItem, PollActions } from "poll_bubble.slint";
 import { PollState, PollField, CreatePollDialog } from "poll_create.slint";
+import { PollVotes, VoteRow, PollVotesDialog } from "poll_votes.slint";
 import { ReactionChipItem } from "reactions.slint";
-import { EmojiRow, EmojiTab } from "emoji_picker.slint";
+import { EmojiRow, EmojiTab, StickerItem, StickerState } from "emoji_picker.slint";
 import { AccountState, ChatActions, ChatConfirmDialog, ContactRowItem } from "account.slint";
 import { SettingsPage, SettingsModel, StorageState, StorageFolder, MovingWindow } from "settings.slint";
 import { StatusEntry, StatusSlideItem, StatusViewer } from "status_view.slint";
@@ -15,6 +16,8 @@ import { ProfileRail, ProfileDialog } from "profile_rail.slint";
 import { IconClose } from "icons.slint";
 import { LoginView } from "login.slint";
 import { ChatList } from "chat_list.slint";
+import { ChatWindow } from "chat_window.slint";
+export { ChatWindow }
 import { ChatView, MentionItem, Mentions, ComposeLang, ComposeTranslate, AttachActions } from "chat_view.slint";
 import { Toast, SavedMessages } from "msg_menu.slint";
 import { MsgOps, PickItem, ReceiptRow, StarredRow } from "msgops.slint";
@@ -32,7 +35,7 @@ import { TranslateState, LangItem, TranslateDialog } from "translate.slint";
 import { AppearanceState, WallpaperDialog } from "appearance.slint";
 export { AppearanceState, WallpaperPreset } from "appearance.slint";
 import { ContactInfoPanel, ContactInfoModel, GroupMemberItem, GalleryThumb, GalleryDoc, GalleryLink, InfoGallery, NotifyInfo, SoundChoice } from "contact_info.slint";
-import { GroupAdmin, GroupDialogs, MemberFailure } from "group_admin.slint";
+import { GroupAdmin, GroupDialogs, MemberFailure, RequestRow } from "group_admin.slint";
 import { GroupNew, GroupNewDialogs } from "group_new.slint";
 import { CallState, CallBannerItem, CallBanners } from "call_banner.slint";
 import { LockState, LockScreen } from "lock.slint";
@@ -40,8 +43,9 @@ import { ProxyState, ProxyBlockedView } from "proxy.slint";
 import { FolderState, FolderTab, FolderPickRow, FolderMenuRow, FolderDialogs } from "folders.slint";
 import { MediaViewer, MediaViewerState } from "media_viewer.slint";
 export { MediaViewerState }
+export { TextDir } from "chat_search.slint";
 
-export { ExportState, SavedMessages, NotifyInfo, SoundChoice, CalendarState, CalendarCell, SearchFilters, SearchHitItem, SenderItem, StorageUsage, StorageChat, StorageSegment, StorageType, ProxyState,FolderState, FolderTab, FolderPickRow, FolderMenuRow, CallState, CallBannerItem, GroupAdmin, GroupNew, MemberFailure, LockState, PollActions, PollState, PollField, StatusPost, LocationState, LocationActions, MsgOps, PickItem, ReceiptRow, StarredRow, AccountState, ChatActions, ContactRowItem, StorageState, StorageFolder, MovingWindow, Theme, ChatItem, MsgItem, ProfileItem, ReactionConfig, PollOptionItem, ReactionChipItem, EmojiRow, EmojiTab, SettingsModel, StatusEntry, StatusSlideItem, ContactInfoModel, GroupMemberItem, ContactEntry, GalleryThumb, GalleryDoc, GalleryLink, InfoGallery, AttachItem, AttachOptions, ShareState, ShareRow, TimerState, TimerOption, TranslateState, LangItem, MentionItem, Mentions, ComposeLang, ComposeTranslate, PhoneLinks, VoiceSpeed, AttachActions, Schedule, SchedRow, QuickPick }
+export { ExportState, SavedMessages, NotifyInfo, SoundChoice, CalendarState, CalendarCell, SearchFilters, SearchHitItem, SenderItem, StorageUsage, StorageChat, StorageSegment, StorageType, ProxyState,FolderState, FolderTab, FolderPickRow, FolderMenuRow, CallState, CallBannerItem, GroupAdmin, GroupNew, MemberFailure, RequestRow, LockState, PollActions, PollState, PollField, PollVotes, VoteRow, StatusPost, LocationState, LocationActions, MsgOps, PickItem, ReceiptRow, StarredRow, AccountState, ChatActions, ContactRowItem, StorageState, StorageFolder, MovingWindow, PopupState, Theme, ChatItem, MsgItem, ProfileItem, ReactionConfig, PollOptionItem, ReactionChipItem, EmojiRow, EmojiTab, StickerItem, StickerState, SettingsModel, StatusEntry, StatusSlideItem, ContactInfoModel, GroupMemberItem, ContactEntry, GalleryThumb, GalleryDoc, GalleryLink, InfoGallery, AttachItem, AttachOptions, ShareState, ShareRow, TimerState, TimerOption, TranslateState, LangItem, MentionItem, Mentions, ComposeLang, ComposeTranslate, PhoneLinks, VoiceSpeed, AttachActions, Schedule, SchedRow, QuickPick }
 
 export component MainWindow inherits Window {
     in property <string> window-title: "WaClient";
@@ -172,6 +176,8 @@ export component MainWindow inherits Window {
 
     callback search(string);
     callback chat-selected(string);
+    // "Open in new window" for a chat of the active profile.
+    callback open-popout(string);
     callback incognito-toggled();
     // (chat, enabled)
     callback chat-receipts(string, bool);
@@ -272,6 +278,7 @@ export component MainWindow inherits Window {
     public function restore-scroll(y: length, h: length) { view.restore-scroll(y, h); }
     public function show-delete(id: string, everyone: bool) { view.show-delete(id, everyone); }
     public function focus-composer() { view.focus-composer(); }
+    public function show-emoji-picker() { view.show-emoji-picker(); }
     public function clear-composer() { view.clear-composer(); }
     public function clear-search() { list.clear-search(); }
     public function jump-to(ratio: float) { view.jump-to(ratio); }
@@ -412,6 +419,7 @@ export component MainWindow inherits Window {
                     open-status(i) => { root.status-open(i); }
                     search(q) => { root.search(q); }
                     chat-selected(jid) => { root.chat-selected(jid); }
+                    open-popout(jid) => { root.open-popout(jid); }
                     rows-visible(first, count) => { root.chats-visible(first, count); }
                 }
                 Rectangle {
@@ -482,6 +490,7 @@ export component MainWindow inherits Window {
                         MsgOps.panel-close();
                         root.info-open();
                     }
+                    pop-out => { root.open-popout(root.selected-jid); }
                     search-open <=> root.search-open;
                     search-query <=> root.search-query;
                     search-current: root.search-current;
@@ -800,6 +809,13 @@ export component MainWindow inherits Window {
         }
 
         if PollState.open: CreatePollDialog {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+        }
+
+        if PollVotes.open: PollVotesDialog {
             x: 0px;
             y: 0px;
             width: parent.width;

@@ -1,6 +1,7 @@
 import { Button, Spinner } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { LocationActions, LocationPin } from "location_card.slint";
+import { TextDir } from "chat_search.slint";
 
 // State of the "Send location" dialog (Rust: app/location_ui.rs).
 export global LocationState {
@@ -46,6 +47,7 @@ component Field inherits Rectangle {
         color: Theme.text;
         font-size: 14px;
         single-line: true;
+        horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
         edited => { root.edited(self.text); }
     }
 }

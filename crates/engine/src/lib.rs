@@ -31,6 +31,7 @@ mod settings;
 mod share;
 mod status;
 mod status_post;
+mod sticker;
 mod tasks;
 mod translate;
 

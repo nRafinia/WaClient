@@ -1,0 +1,105 @@
+// A chat popped out into its own window ("Open in new window"): the messages
+// and the composer of one chat, driven by app/src/app/chat_window.rs. Globals
+// are per window, so this window has its own (default) Mentions, MsgOps ...;
+// the controller wires the few it needs. ChatView runs in `compact` mode.
+import { Theme } from "theme.slint";
+import { MsgItem } from "msg.slint";
+import { EmojiRow, EmojiTab } from "emoji_picker.slint";
+import { ChatView } from "chat_view.slint";
+
+export component ChatWindow inherits Window {
+    in property <string> window-title: "WaClient";
+    title: root.window-title;
+    preferred-width: 560px;
+    preferred-height: 720px;
+    min-width: 380px;
+    min-height: 420px;
+    background: Theme.bg;
+
+    in property <[MsgItem]> messages;
+    in property <string> header-name;
+    in property <string> header-subtitle;
+    in property <image> header-avatar;
+    in property <bool> header-has-avatar;
+    in property <string> header-initials;
+    in property <color> header-tint;
+    in property <bool> blocked;
+    in property <string> composer-blocked-text;
+    in property <bool> has-reply;
+    in property <string> reply-sender;
+    in property <string> reply-text;
+    in property <bool> enter-sends: true;
+    in property <bool> new-below;
+    in property <[EmojiRow]> emoji-rows;
+    in property <[EmojiTab]> emoji-tabs;
+    in property <[string]> emoji-recents;
+
+    callback send-message(string);
+    callback reply-to(string);
+    callback cancel-reply();
+    callback react(string, string);
+    callback download(string);
+    callback open(string);
+    callback show-in-folder(string);
+    callback toggle-play(string);
+    callback load-older();
+    callback jump-latest();
+    callback copy-text(string);
+    callback open-link(string);
+    callback emoji-search(string);
+    callback emoji-picked(string);
+    callback emoji-insert(string);
+    callback unblock();
+
+    public function scroll-to-bottom() { view.scroll-to-bottom(); }
+    public pure function at-bottom() -> bool { return view.at-bottom(); }
+    public pure function content-short() -> bool { return view.content-short(); }
+    public pure function scroll-y() -> length { return view.scroll-y(); }
+    public pure function content-h() -> length { return view.content-h(); }
+    public function restore-scroll(y: length, h: length) { view.restore-scroll(y, h); }
+    public function focus-composer() { view.focus-composer(); }
+    public function clear-composer() { view.clear-composer(); }
+    public pure function composer-text() -> string { return view.composer-text(); }
+    public pure function composer-cursor() -> int { return view.composer-cursor(); }
+    public function set-composer(text: string, cursor: int) { view.set-composer(text, cursor); }
+
+    view := ChatView {
+        width: parent.width;
+        height: parent.height;
+        compact: true;
+        has-chat: true;
+        messages: root.messages;
+        header-name: root.header-name;
+        header-subtitle: root.header-subtitle;
+        header-avatar: root.header-avatar;
+        header-has-avatar: root.header-has-avatar;
+        header-initials: root.header-initials;
+        header-tint: root.header-tint;
+        blocked: root.blocked;
+        composer-blocked-text: root.composer-blocked-text;
+        has-reply: root.has-reply;
+        reply-sender: root.reply-sender;
+        reply-text: root.reply-text;
+        enter-sends: root.enter-sends;
+        new-below: root.new-below;
+        emoji-rows: root.emoji-rows;
+        emoji-tabs: root.emoji-tabs;
+        emoji-recents: root.emoji-recents;
+        send-message(t) => { root.send-message(t); }
+        reply-to(id) => { root.reply-to(id); }
+        cancel-reply => { root.cancel-reply(); }
+        react(id, e) => { root.react(id, e); }
+        download(id) => { root.download(id); }
+        open(id) => { root.open(id); }
+        show-in-folder(id) => { root.show-in-folder(id); }
+        toggle-play(id) => { root.toggle-play(id); }
+        load-older => { root.load-older(); }
+        jump-latest => { root.jump-latest(); }
+        copy-text(id) => { root.copy-text(id); }
+        open-link(url) => { root.open-link(url); }
+        emoji-search(q) => { root.emoji-search(q); }
+        emoji-picked(e) => { root.emoji-picked(e); }
+        emoji-insert(e) => { root.emoji-insert(e); }
+        unblock => { root.unblock(); }
+    }
+}

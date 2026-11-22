@@ -4,7 +4,7 @@
 use slint::ComponentHandle;
 
 use super::App;
-use crate::{AppearanceState, ExportState, FolderState, GroupAdmin, GroupNew, LocationState, MediaViewerState, MsgOps, PollState, ShareState, StatusPost, TimerState, TranslateState};
+use crate::{AppearanceState, ExportState, FolderState, GroupAdmin, GroupNew, LocationState, MediaViewerState, MsgOps, PollState, PollVotes, SearchFilters, ShareState, StatusPost, TimerState, TranslateState};
 
 /// What is open right now, as far as the controller can tell. Popup menus and
 /// the emoji picker are not listed: they own the keyboard while open and
@@ -43,6 +43,8 @@ pub struct EscState {
     pub location: bool,
     /// The create-poll dialog.
     pub poll_create: bool,
+    /// The "View votes" dialog of a poll.
+    pub poll_votes: bool,
     /// The @mention suggestions of the composer: the topmost layer.
     pub mention_open: bool,
     pub attach_open: bool,
@@ -54,6 +56,8 @@ pub struct EscState {
     pub media_viewer: bool,
     /// An incoming-call banner is showing (the topmost one is dismissed).
     pub call_banner: bool,
+    /// The chat-list search with its filter chip row showing: Esc clears it.
+    pub global_search: bool,
     pub search_open: bool,
     /// Invite-link or group-settings sub-view of the info panel.
     pub group_view: bool,
@@ -90,11 +94,13 @@ pub enum EscAction {
     CloseStatusPost,
     CloseLocation,
     ClosePollCreate,
+    ClosePollVotes,
     CloseMention,
     CloseAttach,
     CloseViewer,
     CloseMediaViewer,
     DismissCall,
+    CloseGlobalSearch,
     CloseSearch,
     CloseGroupView,
     CloseInfo,
@@ -140,6 +146,8 @@ pub fn esc_action(s: &EscState) -> EscAction {
         EscAction::CloseLocation
     } else if s.poll_create {
         EscAction::ClosePollCreate
+    } else if s.poll_votes {
+        EscAction::ClosePollVotes
     } else if s.mention_open {
         EscAction::CloseMention
     } else if s.attach_open {
@@ -150,6 +158,8 @@ pub fn esc_action(s: &EscState) -> EscAction {
         EscAction::CloseMediaViewer
     } else if s.call_banner {
         EscAction::DismissCall
+    } else if s.global_search {
+        EscAction::CloseGlobalSearch
     } else if s.search_open {
         EscAction::CloseSearch
     } else if s.group_view {
@@ -196,12 +206,14 @@ impl App {
             status_post: post.get_open(),
             location: win.global::<LocationState>().get_open(),
             poll_create: win.global::<PollState>().get_open(),
+            poll_votes: win.global::<PollVotes>().get_open(),
             mention_open: super::composer::mention_open(),
             attach_open: win.get_attach_open(),
             attach_busy: win.get_attach_busy(),
             viewer_open: win.get_viewer_open(),
             media_viewer: win.global::<MediaViewerState>().get_open(),
             call_banner: super::call_ui::has_banners(),
+            global_search: win.global::<SearchFilters>().get_open() && !win.get_archived_mode() && !win.get_status_mode(),
             search_open: win.get_search_open(),
             group_view: group.get_view() != 0 && win.get_contact_info_open(),
             info_open: win.get_contact_info_open(),
@@ -231,11 +243,19 @@ impl App {
             EscAction::CloseStatusPost => self.status_post_cancel(),
             EscAction::CloseLocation => self.location_close(),
             EscAction::ClosePollCreate => self.poll_close(),
+            EscAction::ClosePollVotes => self.poll_votes_close(),
             EscAction::CloseMention => self.close_mentions(),
             EscAction::CloseAttach => self.attach_cancel(),
             EscAction::CloseViewer => self.status_close(),
             EscAction::CloseMediaViewer => self.media_viewer_close(),
             EscAction::DismissCall => self.call_dismiss_top(),
+            EscAction::CloseGlobalSearch => {
+                self.p().st.borrow_mut().query.clear();
+                win.invoke_clear_search();
+                self.gsearch_reset();
+                self.refresh_chats();
+                win.invoke_focus_composer();
+            }
             EscAction::CloseSearch => {
                 win.set_search_open(false);
                 win.set_search_query(Default::default());
@@ -284,12 +304,14 @@ mod tests {
             status_post: true,
             location: true,
             poll_create: true,
+            poll_votes: true,
             mention_open: true,
             attach_open: true,
             attach_busy: false,
             viewer_open: true,
             media_viewer: true,
             call_banner: true,
+            global_search: true,
             search_open: true,
             info_open: true,
             ops_panel: true,
@@ -320,11 +342,13 @@ mod tests {
             EscAction::CloseStatusPost,
             EscAction::CloseLocation,
             EscAction::ClosePollCreate,
+            EscAction::ClosePollVotes,
             EscAction::CloseMention,
             EscAction::CloseAttach,
             EscAction::CloseViewer,
             EscAction::CloseMediaViewer,
             EscAction::DismissCall,
+            EscAction::CloseGlobalSearch,
             EscAction::CloseSearch,
             EscAction::CloseGroupView,
             EscAction::CloseInfo,
@@ -353,11 +377,13 @@ mod tests {
                 EscAction::CloseStatusPost => s.status_post = false,
                 EscAction::CloseLocation => s.location = false,
                 EscAction::ClosePollCreate => s.poll_create = false,
+                EscAction::ClosePollVotes => s.poll_votes = false,
                 EscAction::CloseMention => s.mention_open = false,
                 EscAction::CloseAttach => s.attach_open = false,
                 EscAction::CloseViewer => s.viewer_open = false,
                 EscAction::CloseMediaViewer => s.media_viewer = false,
                 EscAction::DismissCall => s.call_banner = false,
+                EscAction::CloseGlobalSearch => s.global_search = false,
                 EscAction::CloseSearch => s.search_open = false,
                 EscAction::CloseGroupView => s.group_view = false,
                 EscAction::CloseInfo => s.info_open = false,

@@ -32,7 +32,7 @@ const FORWARD_MAX_CHATS: usize = 5;
 /// Uploaded media stays on WhatsApp's servers for a limited time; reusing the
 /// stored upload of an older message would hand the recipients a dead link,
 /// so those are downloaded and uploaded again instead.
-const MEDIA_REUSE_MAX_AGE_SECS: i64 = 14 * 24 * 60 * 60;
+pub(crate) const MEDIA_REUSE_MAX_AGE_SECS: i64 = 14 * 24 * 60 * 60;
 
 const HOUR_SECS: u32 = 60 * 60;
 const PIN_24H_SECS: u32 = 24 * HOUR_SECS;
@@ -124,7 +124,7 @@ fn load_row(sh: &Shared, chat_jid: &str, id: &str, what: &str) -> Option<Message
     }
 }
 
-fn load_stored(store: &Store, chat_jid: &str, id: &str) -> Option<wa::Message> {
+pub(crate) fn load_stored(store: &Store, chat_jid: &str, id: &str) -> Option<wa::Message> {
     let raw = store.message_raw(chat_jid, id).ok().flatten()?;
     wa::Message::decode_from_slice(&raw)
         .map_err(|e| log::warn!("stored message {id} does not decode: {e}"))
@@ -224,6 +224,18 @@ pub(crate) fn media_reusable(base: &wa::Message) -> bool {
     .unwrap_or(false)
 }
 
+/// Whether a stored upload is still young enough to be sent again. Its age is
+/// counted from the media's own upload time (`media_key_timestamp`, kept by
+/// every reused copy), not from the message row: a copy re-sent late gets a new
+/// row but still points at the old upload. The row time is only the fallback.
+pub(crate) fn upload_fresh(base: Option<&wa::Message>, row_ts: i64, now: i64) -> bool {
+    let uploaded = base
+        .and_then(|b| with_media!(b, as_option, |m| m.media_key_timestamp).flatten())
+        .filter(|ts| *ts > 0)
+        .unwrap_or(row_ts);
+    now.saturating_sub(uploaded) <= MEDIA_REUSE_MAX_AGE_SECS
+}
+
 /// The message to send when forwarding a stored one: text becomes a new text
 /// message, media keeps its upload (url, keys, hashes) under a fresh context.
 /// `base` is the stored message (unwrapped), `text` the current text/caption.
@@ -316,8 +328,7 @@ impl ForwardSource {
         match self.row.kind {
             MessageKind::Text | MessageKind::Other => true,
             _ => {
-                now.saturating_sub(self.row.ts) <= MEDIA_REUSE_MAX_AGE_SECS
-                    && self.base().is_some_and(media_reusable)
+                upload_fresh(self.base(), self.row.ts, now) && self.base().is_some_and(media_reusable)
             }
         }
     }
@@ -445,7 +456,7 @@ async fn forward_one(sh: &Shared, client: &Arc<Client>, src: &ForwardSource, to_
 
 /// Gives the forwarded copy its own cache file, so deleting one message never
 /// removes the media of the other. `None` when the source has no cached file.
-async fn copy_cached_media(sh: &Shared, row: &MessageRow, to_chat_jid: &str, new_id: &str) -> Option<String> {
+pub(crate) async fn copy_cached_media(sh: &Shared, row: &MessageRow, to_chat_jid: &str, new_id: &str) -> Option<String> {
     let from = PathBuf::from(row.local_path.as_deref()?);
     let ext = cache::extension_for(row.kind, row.media_mime.as_deref(), row.media_name.as_deref());
     let to = cache::cache_path(&sh.media.dir, to_chat_jid, new_id, &ext);
@@ -519,7 +530,7 @@ async fn reupload_forward(sh: &Shared, client: &Arc<Client>, src: &ForwardSource
     Ok(build_media_message(&prepared, upload, caption, Some(forward_context(previous))))
 }
 
-fn read_capped(path: &Path) -> Result<Vec<u8>, String> {
+pub(crate) fn read_capped(path: &Path) -> Result<Vec<u8>, String> {
     let unreadable = |e: std::io::Error| format!("Cannot read the media: {e}");
     let len = std::fs::metadata(path).map_err(unreadable)?.len();
     if len > cache::MAX_SEND_BYTES {
@@ -529,7 +540,7 @@ fn read_capped(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 /// The decrypted media of `row` on disk, downloading it first when needed.
-async fn local_media_file(sh: &Shared, client: &Arc<Client>, row: &MessageRow) -> Result<PathBuf, String> {
+pub(crate) async fn local_media_file(sh: &Shared, client: &Arc<Client>, row: &MessageRow) -> Result<PathBuf, String> {
     let cached = |p: Option<String>| p.map(PathBuf::from).filter(|p| p.is_file());
     if let Some(p) = cached(row.local_path.clone()) {
         return Ok(p);
@@ -1163,6 +1174,29 @@ mod tests {
         assert!(src(MessageKind::Image, NOW - 1000).reuse_upload(NOW));
         assert!(!src(MessageKind::Image, NOW - MEDIA_REUSE_MAX_AGE_SECS - 1).reuse_upload(NOW));
         assert!(src(MessageKind::Text, 0).reuse_upload(NOW));
+    }
+
+    #[test]
+    fn upload_age_comes_from_the_media_timestamp_not_the_row() {
+        let with_ts = |ts: Option<i64>| {
+            let mut m = image_with_upload(None);
+            if let Some(im) = m.image_message.as_option_mut() {
+                im.media_key_timestamp = ts;
+            }
+            m
+        };
+        let old = NOW - MEDIA_REUSE_MAX_AGE_SECS - 1;
+        // A new row (re-sent copy) of an old upload is stale.
+        assert!(!upload_fresh(Some(&with_ts(Some(old))), NOW - 10, NOW));
+        // A fresh upload is accepted even when the row is old.
+        assert!(upload_fresh(Some(&with_ts(Some(NOW - 1000))), old, NOW));
+        // No timestamp: the row time decides.
+        assert!(upload_fresh(Some(&with_ts(None)), NOW - 1000, NOW));
+        assert!(!upload_fresh(Some(&with_ts(None)), old, NOW));
+        assert!(!upload_fresh(None, old, NOW));
+        // The forwarded copy keeps the original upload time.
+        let fwd = forwarded_message(Some(&with_ts(Some(old))), MessageKind::Image, None).expect("media");
+        assert_eq!(fwd.image_message.as_option().and_then(|m| m.media_key_timestamp), Some(old));
     }
 
     fn stored_source(store: &Store, chat: &str, id: &str, now_ts: i64) -> ForwardSource {

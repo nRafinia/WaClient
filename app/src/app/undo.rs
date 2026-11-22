@@ -159,7 +159,7 @@ fn is_rtl_char(c: char) -> bool {
 /// Whether the paragraph starts right to left: its first strong character
 /// decides, like Slint's own paragraph direction. Digits, punctuation, emoji
 /// and spaces are neutral.
-fn paragraph_is_rtl(par: &str) -> bool {
+pub(crate) fn paragraph_is_rtl(par: &str) -> bool {
     par.chars().find(|c| c.is_alphabetic()).is_some_and(is_rtl_char)
 }
 
@@ -328,6 +328,16 @@ mod tests {
         // Leading digits, punctuation and emoji are neutral.
         let t = "1) 😀 سلام hello";
         assert_eq!(rtl_home_end(t, 4, 4, false, false), Some((t.len(), t.len())));
+    }
+
+    #[test]
+    fn text_direction_follows_the_first_strong_character() {
+        for rtl in ["سلام", "مرحبا بالعالم", "שלום", "اردو زبان", "123 😀 سلام", "... @98912 سلام", "سلام hello"] {
+            assert!(paragraph_is_rtl(rtl), "{rtl}");
+        }
+        for ltr in ["hello", "hello سلام", "1) 😀 hello", "", "   ", "123 !?", "😀"] {
+            assert!(!paragraph_is_rtl(ltr), "{ltr}");
+        }
     }
 
     #[test]

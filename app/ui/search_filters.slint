@@ -1,6 +1,7 @@
 import { ListView, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { IconCheck, IconClose, IconFile, IconLink, IconPlay, IconCamera, IconChat } from "icons.slint";
+import { TextDir } from "chat_search.slint";
 
 // One message found by the global search.
 export struct SearchHitItem {
@@ -126,7 +127,7 @@ export component SearchFilterBar inherits Rectangle {
         kinds := HorizontalLayout {
             spacing: 6px;
             alignment: start;
-            for name[i] in ["All", "Photos & videos", "Links", "Documents", "Voice"]: Chip {
+            for name[i] in ["All", "Media", "Links", "Docs", "Voice"]: Chip {
                 y: 2px;
                 text: name;
                 selected: SearchFilters.kind == i;
@@ -284,7 +285,9 @@ component HitRow inherits Rectangle {
         width: parent.width - 72px - 12px;
         height: 22px;
         clip: true;
-        HorizontalLayout {
+        // A right-to-left snippet reads from the right edge, so the pieces are
+        // laid out in reverse (the sender prefix and `before` come first on the right).
+        if !TextDir.is-rtl(root.hit.before + root.hit.matched + root.hit.after): HorizontalLayout {
             alignment: start;
             if root.hit.sender != "": Text {
                 text: root.hit.sender + ": ";
@@ -311,6 +314,35 @@ component HitRow inherits Rectangle {
                 font-size: 13px;
                 vertical-alignment: center;
                 overflow: elide;
+            }
+        }
+        if TextDir.is-rtl(root.hit.before + root.hit.matched + root.hit.after): HorizontalLayout {
+            alignment: end;
+            Text {
+                text: root.hit.after;
+                color: Theme.secondary;
+                font-size: 13px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                text: root.hit.matched;
+                color: Theme.accent;
+                font-size: 13px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+            Text {
+                text: root.hit.before;
+                color: Theme.secondary;
+                font-size: 13px;
+                vertical-alignment: center;
+            }
+            if root.hit.sender != "": Text {
+                text: root.hit.sender + ": ";
+                color: Theme.text;
+                font-size: 13px;
+                vertical-alignment: center;
             }
         }
     }
@@ -401,6 +433,7 @@ export component SearchResultsPanel inherits Rectangle {
                 color: Theme.text;
                 font-size: 14px;
                 single-line: true;
+                horizontal-alignment: TextDir.is-rtl(self.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
                 vertical-alignment: center;
                 edited => { SearchFilters.sender-query(self.text); }
             }
