@@ -1,0 +1,168 @@
+import { ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+// One row of the grid. A non-empty `header` makes it a section title row
+// (cells ignored); otherwise `cells` holds up to 8 emoji.
+export struct EmojiRow {
+    header: string,
+    cells: [string],
+}
+
+// Category tab: `row` is the index in `rows` the grid scrolls to when clicked.
+export struct EmojiTab {
+    icon: string,
+    row: int,
+}
+
+component EmojiCell inherits Rectangle {
+    in property <string> emoji;
+    callback clicked();
+
+    background: ta.has-hover ? Theme.selected : transparent;
+    border-radius: 6px;
+
+    Text {
+        text: root.emoji;
+        font-size: 22px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component EmojiPicker inherits Rectangle {
+    // Grid contents; while searching the caller supplies the results here.
+    in property <[EmojiRow]> rows;
+    in property <[EmojiTab]> tabs;
+    in property <[string]> recents;
+    in property <string> empty-text: "No emoji found";
+    in-out property <string> search-text;
+
+    callback picked(string);
+    callback search-changed(string);
+    callback closed();
+
+    property <length> row-h: 38px;
+    property <bool> searching: root.search-text != "";
+
+    width: 340px;
+    height: 380px;
+    background: Theme.panel;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Theme.divider;
+    clip: true;
+
+    FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.closed();
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            padding: 8px;
+            spacing: 6px;
+
+            Rectangle {
+                height: 34px;
+                background: Theme.input-bg;
+                border-radius: 17px;
+
+                if search-input.text == "": Text {
+                    x: 14px;
+                    text: "Search emoji";
+                    color: Theme.secondary;
+                    font-size: 14px;
+                    vertical-alignment: center;
+                }
+                search-input := TextInput {
+                    x: 14px;
+                    width: parent.width - 28px;
+                    height: parent.height;
+                    vertical-alignment: center;
+                    color: Theme.text;
+                    font-size: 14px;
+                    text <=> root.search-text;
+                    edited => { root.search-changed(self.text); }
+                }
+            }
+
+            if !root.searching: HorizontalLayout {
+                height: 32px;
+                spacing: 2px;
+                for tab in root.tabs: Rectangle {
+                    border-radius: 6px;
+                    background: tab-ta.has-hover ? Theme.hover : transparent;
+                    Text {
+                        text: tab.icon;
+                        font-size: 18px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    tab-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { grid.content-y = -tab.row * root.row-h; }
+                    }
+                }
+            }
+
+            if !root.searching && root.recents.length > 0: Rectangle {
+                height: root.row-h + 18px;
+                Text {
+                    y: 0px;
+                    text: "Recent";
+                    color: Theme.secondary;
+                    font-size: 12px;
+                    font-weight: 600;
+                }
+                for e[i] in root.recents: EmojiCell {
+                    x: Math.mod(i, 8) * (parent.width / 8);
+                    y: 18px;
+                    width: parent.width / 8;
+                    height: root.row-h;
+                    emoji: e;
+                    visible: i < 8;
+                    clicked => { root.picked(e); }
+                }
+            }
+
+            Rectangle {
+                grid := ListView {
+                    for row in root.rows: Rectangle {
+                        height: root.row-h;
+                        if row.header != "": Text {
+                            x: 2px;
+                            text: row.header;
+                            color: Theme.secondary;
+                            font-size: 12px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                        if row.header == "": Rectangle {
+                            for e[i] in row.cells: EmojiCell {
+                                x: i * (parent.width / 8);
+                                width: parent.width / 8;
+                                height: root.row-h;
+                                emoji: e;
+                                clicked => { root.picked(e); }
+                            }
+                        }
+                    }
+                }
+                if root.rows.length == 0: Text {
+                    text: root.empty-text;
+                    color: Theme.secondary;
+                    font-size: 14px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}

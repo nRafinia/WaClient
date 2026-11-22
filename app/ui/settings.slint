@@ -1,0 +1,1315 @@
+import { Theme, Avatar } from "theme.slint";
+import { IconBack, IconCheck, IconClose, IconEdit, IconContact, IconKey, IconChat, IconBell, IconStorage, IconApp, IconGlobe, IconHelp } from "icons.slint";
+import { AccountState, ChatActions, ContactRowItem } from "account.slint";
+import { TimerChips } from "timer_dialog.slint";
+import { AppLockSection } from "lock.slint";
+import { ProxySection } from "proxy.slint";
+
+// font-scale-index: 0 small, 1 normal, 2 large.
+export struct SettingsModel {
+    notifications: bool,
+    notification-preview: bool,
+    notification-sound: bool,
+    send-read-receipts: bool,
+    send-status-receipts: bool,
+    send-typing: bool,
+    send-presence: bool,
+    send-link-previews: bool,
+    auto-download-images: bool,
+    auto-download-voice: bool,
+    auto-download-documents: bool,
+    auto-download-max-mb: int,
+    enter-sends: bool,
+    font-scale-index: int,
+    close-to-tray: bool,
+    start-with-windows: bool,
+}
+
+component SectionHeader inherits Rectangle {
+    in property <string> text;
+    height: 28px;
+    Text {
+        x: 24px;
+        width: parent.width - 48px;
+        text: root.text;
+        color: Theme.accent;
+        font-size: 13px;
+        font-weight: 600;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+component Switch inherits Rectangle {
+    in property <bool> checked;
+    callback toggled();
+
+    width: 40px;
+    height: 22px;
+    border-radius: 11px;
+    background: root.checked ? Theme.accent : Theme.input-bg;
+
+    Rectangle {
+        x: root.checked ? parent.width - self.width - 3px : 3px;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: white;
+        animate x { duration: 120ms; }
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.toggled(); }
+    }
+}
+
+component ToggleRow inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    callback toggled();
+
+    height: 52px;
+    background: area.has-hover ? Theme.hover : transparent;
+    opacity: root.enabled ? 1.0 : 0.45;
+
+    area := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if root.enabled {
+                root.toggled();
+            }
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        spacing: 12px;
+        alignment: stretch;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: 15px;
+                overflow: elide;
+            }
+            if root.subtitle != "": Text {
+                text: root.subtitle;
+                color: Theme.secondary;
+                font-size: 12px;
+                overflow: elide;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Switch {
+                checked: root.checked;
+            }
+        }
+    }
+}
+
+component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <color> fill: Theme.input-bg;
+    in property <color> label-color: Theme.text;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 36px;
+    opacity: root.enabled ? 1.0 : 0.5;
+    min-width: 96px;
+    border-radius: 18px;
+    background: area.pressed ? fill.darker(0.2) : (area.has-hover ? fill.brighter(0.1) : fill);
+
+    area := TouchArea {
+        mouse-cursor: pointer;
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text: root.text;
+        color: root.label-color;
+        font-size: 14px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component SizeSlider inherits Rectangle {
+    in-out property <int> value: 16;
+    in property <int> min: 1;
+    in property <int> max: 100;
+    callback edited(int);
+
+    height: 28px;
+
+    property <length> track-w: root.width - 16px;
+    property <float> frac: (root.value - root.min) / (root.max - root.min);
+
+    Rectangle {
+        x: 8px;
+        y: (parent.height - self.height) / 2;
+        width: root.track-w;
+        height: 4px;
+        border-radius: 2px;
+        background: Theme.input-bg;
+    }
+    Rectangle {
+        x: 8px;
+        y: (parent.height - self.height) / 2;
+        width: root.track-w * root.frac;
+        height: 4px;
+        border-radius: 2px;
+        background: Theme.accent;
+    }
+    Rectangle {
+        x: 8px + root.track-w * root.frac - 8px;
+        y: (parent.height - self.height) / 2;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: Theme.accent;
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        function pick() {
+            if root.track-w > 0px {
+                root.edited(Math.round(root.min + Math.max(0.0, Math.min(1.0, (self.mouse-x - 8px) / root.track-w)) * (root.max - root.min)));
+            }
+        }
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.down {
+                pick();
+            }
+        }
+        moved => {
+            if self.pressed {
+                pick();
+            }
+        }
+    }
+}
+
+component FontChoice inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked();
+
+    height: 32px;
+    border-radius: 16px;
+    background: root.selected ? Theme.accent : (area.has-hover ? Theme.selected : Theme.input-bg);
+
+    area := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text: root.text;
+        color: root.selected ? white : Theme.text;
+        font-size: 13px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export struct StorageFolder {
+    name: string,
+    path: string,
+}
+
+// Driven from Rust (app/prefs.rs). Empty data-path hides the location rows
+// (demo mode, which has no data folder of its own).
+export global StorageState {
+    in-out property <string> data-path;
+    in-out property <string> size-text;
+    in-out property <[StorageFolder]> folders;
+    in-out property <string> status;
+    in-out property <bool> busy;
+    // Non-empty while the user has to confirm a validated move.
+    in-out property <string> confirm-text;
+    callback open-folder(string);
+    callback choose-location();
+    callback confirm-move();
+    callback cancel-move();
+}
+
+// Shown at start-up while the data is copied to its new folder.
+export component MovingWindow inherits Window {
+    in property <string> status: "Preparing…";
+    in property <float> progress;
+    title: "WaClient";
+    preferred-width: 440px;
+    preferred-height: 170px;
+    min-width: 440px;
+    min-height: 170px;
+    background: Theme.bg;
+
+    VerticalLayout {
+        padding: 28px;
+        spacing: 14px;
+        alignment: center;
+        Text {
+            text: "Moving your data…";
+            color: Theme.text;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        Text {
+            text: root.status;
+            color: Theme.secondary;
+            font-size: 13px;
+        }
+        Rectangle {
+            height: 8px;
+            border-radius: 4px;
+            background: Theme.input-bg;
+            Rectangle {
+                x: 0;
+                width: parent.width * Math.max(0.0, Math.min(1.0, root.progress));
+                height: parent.height;
+                border-radius: 4px;
+                background: Theme.accent;
+            }
+        }
+        Text {
+            text: "Please keep the computer on. WaClient opens when this is done.";
+            color: Theme.secondary;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+    }
+}
+
+component Divider inherits VerticalLayout {
+    Rectangle { height: 12px; }
+    Rectangle { height: 1px; background: Theme.divider; }
+    Rectangle { height: 12px; }
+}
+
+component InfoRow inherits Rectangle {
+    in property <string> title;
+    in property <string> value;
+    height: 48px;
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        spacing: 16px;
+        Text {
+            text: root.title;
+            color: Theme.text;
+            font-size: 15px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.value;
+            color: Theme.secondary;
+            font-size: 15px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+component NoteText inherits Text {
+    color: Theme.secondary;
+    font-size: 13px;
+    wrap: word-wrap;
+}
+
+// One entry of the category list.
+component CategoryRow inherits Rectangle {
+    in property <int> icon;
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked();
+
+    height: 52px;
+    background: root.selected ? Theme.selected : (area.has-hover ? Theme.hover : transparent);
+
+    HorizontalLayout {
+        padding-left: 20px;
+        padding-right: 12px;
+        spacing: 16px;
+        Rectangle {
+            width: 26px;
+            if root.icon == 0: IconContact { size: 20px; color: Theme.secondary; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+            if root.icon == 1: IconKey { size: 20px; color: Theme.secondary; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+            if root.icon == 2: IconChat { size: 20px; color: Theme.secondary; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+            if root.icon == 3: IconBell { size: 20px; color: Theme.secondary; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+            if root.icon == 4: IconStorage { size: 20px; color: Theme.secondary; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+            if root.icon == 5: IconApp { size: 20px; color: Theme.secondary; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+            if root.icon == 6: IconGlobe { size: 20px; color: Theme.secondary; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+            if root.icon == 7: IconHelp { size: 20px; color: Theme.secondary; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+        }
+        Text {
+            text: root.text;
+            color: Theme.text;
+            font-size: 15px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    area := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// A name / about field: shows the value with a pencil, edits inline with
+// confirm and cancel buttons. `kind` picks the limit in AccountState.clamp.
+component EditableField inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <string> placeholder;
+    in property <int> kind;
+    in property <int> max-chars;
+    callback submit(string);
+
+    property <bool> editing;
+    property <string> draft;
+
+    height: 72px;
+
+    function commit() {
+        AccountState.error = "";
+        root.submit(root.draft);
+        root.editing = false;
+    }
+
+    VerticalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        padding-top: 6px;
+        spacing: 6px;
+        Text {
+            text: root.label;
+            color: Theme.accent;
+            font-size: 13px;
+        }
+        if !root.editing: HorizontalLayout {
+            height: 36px;
+            spacing: 12px;
+            Text {
+                text: root.value != "" ? root.value : root.placeholder;
+                color: root.value != "" ? Theme.text : Theme.secondary;
+                font-size: 16px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Rectangle {
+                width: 32px;
+                background: pencil.has-hover ? Theme.hover : transparent;
+                border-radius: 16px;
+                IconEdit {
+                    color: Theme.secondary;
+                    size: 18px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+                pencil := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.draft = root.value;
+                        root.editing = true;
+                    }
+                }
+            }
+        }
+        if root.editing: HorizontalLayout {
+            height: 36px;
+            spacing: 8px;
+            Rectangle {
+                background: Theme.input-bg;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Theme.accent;
+                TextInput {
+                    x: 12px;
+                    width: parent.width - 24px;
+                    height: parent.height;
+                    color: Theme.text;
+                    font-size: 16px;
+                    single-line: true;
+                    vertical-alignment: center;
+                    init => {
+                        self.text = root.draft;
+                        self.focus();
+                        self.select-all();
+                    }
+                    edited => {
+                        self.text = AccountState.clamp(root.kind, self.text);
+                        root.draft = self.text;
+                    }
+                    accepted => { root.commit(); }
+                    key-pressed(e) => {
+                        if (e.text == Key.Escape) {
+                            root.editing = false;
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+            }
+            Text {
+                width: 44px;
+                text: root.draft.character-count + "/" + root.max-chars;
+                color: Theme.secondary;
+                font-size: 12px;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+            }
+            Rectangle {
+                width: 32px;
+                border-radius: 16px;
+                background: ok.has-hover ? Theme.hover : transparent;
+                IconCheck {
+                    color: Theme.accent;
+                    size: 18px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+                ok := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.commit(); }
+                }
+            }
+            Rectangle {
+                width: 32px;
+                border-radius: 16px;
+                background: cancel.has-hover ? Theme.hover : transparent;
+                IconClose {
+                    color: Theme.secondary;
+                    size: 18px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+                cancel := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.editing = false; }
+                }
+            }
+        }
+    }
+}
+
+// A contact with a button on the right (Unblock / Block).
+component ContactRow inherits Rectangle {
+    in property <ContactRowItem> item;
+    in property <string> action;
+    callback clicked();
+
+    height: 56px;
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        spacing: 14px;
+        VerticalLayout {
+            alignment: center;
+            Avatar {
+                size: 38px;
+                source: root.item.avatar;
+                has-image: root.item.has-avatar;
+                initials: root.item.initials;
+                tint: root.item.tint;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 1px;
+            Text {
+                text: root.item.name;
+                color: Theme.text;
+                font-size: 15px;
+                overflow: elide;
+            }
+            if root.item.subtitle != "": Text {
+                text: root.item.subtitle;
+                color: Theme.secondary;
+                font-size: 12px;
+                overflow: elide;
+            }
+        }
+        VerticalLayout {
+            width: 90px;
+            alignment: center;
+            ActionButton {
+                text: root.action;
+                min-width: 80px;
+                height: 32px;
+                clicked => { root.clicked(); }
+            }
+        }
+    }
+}
+
+export component SettingsPage inherits Rectangle {
+    in-out property <SettingsModel> model;
+    in property <string> profile-name;
+    in property <string> cache-status;
+    in-out property <bool> confirm-logout: false;
+    // 0 profile, 1 account, 2 chats, 3 notifications, 4 storage, 5 app, 6 network, 7 help.
+    in-out property <int> category: 0;
+
+    callback changed(SettingsModel);
+    callback clear-cache();
+    callback logout();
+    callback close();
+
+    // Narrow windows show the category list and the details one at a time.
+    property <bool> narrow: root.width < 640px;
+    property <bool> detail-open: false;
+    property <bool> picker-open: false;
+    property <[string]> titles: ["Profile", "Account", "Chats", "Notifications", "Storage", "App", "Network", "Help"];
+
+    background: Theme.bg;
+
+    VerticalLayout {
+        Rectangle {
+            height: 59px;
+            background: Theme.panel;
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 24px;
+                spacing: 12px;
+
+                Rectangle {
+                    width: 36px;
+                    back := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            if (root.narrow && root.detail-open) {
+                                root.detail-open = false;
+                            } else {
+                                root.close();
+                            }
+                        }
+                    }
+                    Rectangle {
+                        width: 36px;
+                        height: 36px;
+                        border-radius: 18px;
+                        background: back.has-hover ? Theme.hover : transparent;
+                        IconBack {
+                            color: Theme.text;
+                            size: 18px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+                }
+                Text {
+                    text: root.narrow && root.detail-open ? root.titles[root.category] : "Settings";
+                    color: Theme.text;
+                    font-size: 18px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            if !root.narrow || !root.detail-open: VerticalLayout {
+                width: root.narrow ? root.width : 240px;
+                padding-top: 8px;
+                alignment: start;
+                for title[i] in root.titles: CategoryRow {
+                    icon: i;
+                    text: title;
+                    selected: !root.narrow && root.category == i;
+                    clicked => {
+                        root.category = i;
+                        root.detail-open = true;
+                        root.picker-open = false;
+                    }
+                }
+            }
+            if !root.narrow: Rectangle {
+                width: 1px;
+                background: Theme.divider;
+            }
+            if !root.narrow || root.detail-open: Flickable {
+                VerticalLayout {
+                    padding-top: 16px;
+                    padding-bottom: 32px;
+                    spacing: 4px;
+
+                    // Profile
+                    if root.category == 0: VerticalLayout {
+                        alignment: start;
+                        spacing: 4px;
+                        HorizontalLayout {
+                            alignment: center;
+                            padding-top: 8px;
+                            Avatar {
+                                size: 120px;
+                                source: AccountState.photo;
+                                has-image: AccountState.has-photo;
+                                initials: AccountState.initials;
+                                tint: AccountState.tint;
+                            }
+                        }
+                        HorizontalLayout {
+                            alignment: center;
+                            spacing: 12px;
+                            padding-top: 12px;
+                            padding-bottom: 12px;
+                            ActionButton {
+                                text: AccountState.has-photo ? "Change photo" : "Add photo";
+                                enabled: !AccountState.photo-busy;
+                                clicked => { AccountState.change-photo(); }
+                            }
+                            if AccountState.has-photo: ActionButton {
+                                text: "Remove photo";
+                                enabled: !AccountState.photo-busy;
+                                clicked => { AccountState.remove-photo(); }
+                            }
+                        }
+                        EditableField {
+                            label: "Name";
+                            value: AccountState.name != "" ? AccountState.name : root.profile-name;
+                            kind: 0;
+                            max-chars: 25;
+                            submit(t) => { AccountState.set-name(t); }
+                        }
+                        EditableField {
+                            label: "About";
+                            value: AccountState.about;
+                            placeholder: "Add something about yourself";
+                            kind: 1;
+                            max-chars: 139;
+                            submit(t) => { AccountState.set-about(t); }
+                        }
+                        if AccountState.phone != "": VerticalLayout {
+                            padding-left: 24px;
+                            padding-right: 24px;
+                            padding-top: 6px;
+                            spacing: 6px;
+                            Text {
+                                text: "Phone number";
+                                color: Theme.accent;
+                                font-size: 13px;
+                            }
+                            Text {
+                                text: AccountState.phone;
+                                color: Theme.text;
+                                font-size: 16px;
+                            }
+                        }
+                        if AccountState.error != "": VerticalLayout {
+                            padding-left: 24px;
+                            padding-right: 24px;
+                            padding-top: 8px;
+                            Text {
+                                text: AccountState.error;
+                                color: Theme.danger;
+                                font-size: 13px;
+                                wrap: word-wrap;
+                            }
+                        }
+                        VerticalLayout {
+                            padding-left: 24px;
+                            padding-right: 24px;
+                            padding-top: 8px;
+                            NoteText {
+                                text: "Your name and photo are visible to your contacts.";
+                            }
+                        }
+                    }
+
+                    // Account
+                    if root.category == 1: VerticalLayout {
+                        alignment: start;
+                        spacing: 4px;
+                        SectionHeader { text: "Privacy"; }
+                        ToggleRow {
+                            title: "Read receipts";
+                            subtitle: "Let others see when you read their messages";
+                            checked: root.model.send-read-receipts;
+                            toggled => {
+                                root.model.send-read-receipts = !root.model.send-read-receipts;
+                                root.changed(root.model);
+                            }
+                        }
+                        ToggleRow {
+                            title: "Send status view receipts";
+                            subtitle: "When off, people won't see that you viewed their status";
+                            checked: root.model.send-status-receipts;
+                            toggled => {
+                                root.model.send-status-receipts = !root.model.send-status-receipts;
+                                root.changed(root.model);
+                            }
+                        }
+                        ToggleRow {
+                            title: "Typing indicator";
+                            subtitle: "Let others see when you are typing";
+                            checked: root.model.send-typing;
+                            toggled => {
+                                root.model.send-typing = !root.model.send-typing;
+                                root.changed(root.model);
+                            }
+                        }
+                        ToggleRow {
+                            title: "Show me as online";
+                            subtitle: "Let others see when you are online";
+                            checked: root.model.send-presence;
+                            toggled => {
+                                root.model.send-presence = !root.model.send-presence;
+                                root.changed(root.model);
+                            }
+                        }
+                        VerticalLayout {
+                            padding-left: 24px;
+                            padding-right: 24px;
+                            padding-top: 8px;
+                            padding-bottom: 4px;
+                            spacing: 2px;
+                            Text {
+                                text: "Default message timer";
+                                color: Theme.text;
+                                font-size: 15px;
+                            }
+                            Text {
+                                text: "Start new chats with disappearing messages";
+                                color: Theme.secondary;
+                                font-size: 13px;
+                            }
+                            Rectangle { height: 8px; }
+                            TimerChips { }
+                        }
+
+                        Divider { }
+
+                        AppLockSection { }
+
+                        Divider { }
+
+                        SectionHeader { text: "Blocked contacts (" + AccountState.blocked.length + ")"; }
+                        HorizontalLayout {
+                            padding-left: 24px;
+                            padding-right: 24px;
+                            alignment: start;
+                            ActionButton {
+                                text: root.picker-open ? "Close" : "Block a contact\u{2026}";
+                                min-width: 160px;
+                                clicked => {
+                                    root.picker-open = !root.picker-open;
+                                    if (root.picker-open) {
+                                        AccountState.find-candidates("");
+                                    }
+                                }
+                            }
+                        }
+                        if root.picker-open: VerticalLayout {
+                            padding-left: 24px;
+                            padding-right: 24px;
+                            spacing: 6px;
+                            Rectangle {
+                                height: 36px;
+                                background: Theme.input-bg;
+                                border-radius: 8px;
+                                if picker-input.text == "": Text {
+                                    x: 12px;
+                                    text: "Search your chats";
+                                    color: Theme.secondary;
+                                    font-size: 14px;
+                                    vertical-alignment: center;
+                                }
+                                picker-input := TextInput {
+                                    x: 12px;
+                                    width: parent.width - 24px;
+                                    height: parent.height;
+                                    color: Theme.text;
+                                    font-size: 14px;
+                                    single-line: true;
+                                    vertical-alignment: center;
+                                    edited => { AccountState.find-candidates(self.text); }
+                                }
+                            }
+                            Rectangle {
+                                height: min(260px, max(AccountState.candidates.length, 1) * 56px);
+                                background: Theme.panel;
+                                border-radius: 8px;
+                                clip: true;
+                                if AccountState.candidates.length == 0: Text {
+                                    text: "No chats to block";
+                                    color: Theme.secondary;
+                                    font-size: 13px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                Flickable {
+                                    VerticalLayout {
+                                        for c in AccountState.candidates: ContactRow {
+                                            item: c;
+                                            action: "Block";
+                                            clicked => {
+                                                ChatActions.confirm-jid = c.jid;
+                                                ChatActions.confirm-name = c.name;
+                                                ChatActions.confirm-kind = 1;
+                                                root.picker-open = false;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if AccountState.blocked.length == 0: VerticalLayout {
+                            padding-left: 24px;
+                            padding-right: 24px;
+                            NoteText {
+                                text: "No blocked contacts.";
+                            }
+                        }
+                        for b in AccountState.blocked: ContactRow {
+                            item: b;
+                            action: "Unblock";
+                            clicked => { AccountState.unblock(b.jid); }
+                        }
+
+                        Divider { }
+
+                        SectionHeader { text: "Account"; }
+                        InfoRow {
+                            title: "Profile";
+                            value: AccountState.name != "" ? AccountState.name : root.profile-name;
+                        }
+                        if !root.confirm-logout: Rectangle {
+                            height: 52px;
+                            HorizontalLayout {
+                                padding-left: 24px;
+                                padding-right: 24px;
+                                alignment: start;
+                                VerticalLayout {
+                                    alignment: center;
+                                    ActionButton {
+                                        text: "Log out";
+                                        fill: Theme.danger;
+                                        label-color: white;
+                                        clicked => { root.confirm-logout = true; }
+                                    }
+                                }
+                            }
+                        }
+                        if root.confirm-logout: VerticalLayout {
+                            padding-left: 24px;
+                            padding-right: 24px;
+                            spacing: 10px;
+                            Text {
+                                text: "Log out and remove this profile? The device is unlinked and its local data is deleted.";
+                                color: Theme.text;
+                                font-size: 14px;
+                                wrap: word-wrap;
+                            }
+                            HorizontalLayout {
+                                spacing: 12px;
+                                alignment: start;
+                                ActionButton {
+                                    text: "Yes, log out";
+                                    fill: Theme.danger;
+                                    label-color: white;
+                                    clicked => {
+                                        root.confirm-logout = false;
+                                        root.logout();
+                                    }
+                                }
+                                ActionButton {
+                                    text: "Cancel";
+                                    clicked => { root.confirm-logout = false; }
+                                }
+                            }
+                        }
+                    }
+
+                    // Chats
+                    if root.category == 2: VerticalLayout {
+                        alignment: start;
+                        spacing: 4px;
+                        SectionHeader { text: "Chats"; }
+                        ToggleRow {
+                            title: "Enter sends message";
+                            subtitle: "Off: Enter inserts a new line, Ctrl+Enter sends";
+                            checked: root.model.enter-sends;
+                            toggled => {
+                                root.model.enter-sends = !root.model.enter-sends;
+                                root.changed(root.model);
+                            }
+                        }
+                        ToggleRow {
+                            title: "Send link previews";
+                            subtitle: "Fetches the linked page from your computer when you send a link";
+                            checked: root.model.send-link-previews;
+                            toggled => {
+                                root.model.send-link-previews = !root.model.send-link-previews;
+                                root.changed(root.model);
+                            }
+                        }
+                        Rectangle {
+                            height: 56px;
+                            HorizontalLayout {
+                                padding-left: 24px;
+                                padding-right: 24px;
+                                spacing: 8px;
+                                Text {
+                                    text: "Font size";
+                                    color: Theme.text;
+                                    font-size: 15px;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle { }
+                                VerticalLayout {
+                                    alignment: center;
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        FontChoice {
+                                            width: 72px;
+                                            text: "Small";
+                                            selected: root.model.font-scale-index == 0;
+                                            clicked => {
+                                                root.model.font-scale-index = 0;
+                                                root.changed(root.model);
+                                            }
+                                        }
+                                        FontChoice {
+                                            width: 72px;
+                                            text: "Normal";
+                                            selected: root.model.font-scale-index == 1;
+                                            clicked => {
+                                                root.model.font-scale-index = 1;
+                                                root.changed(root.model);
+                                            }
+                                        }
+                                        FontChoice {
+                                            width: 72px;
+                                            text: "Large";
+                                            selected: root.model.font-scale-index == 2;
+                                            clicked => {
+                                                root.model.font-scale-index = 2;
+                                                root.changed(root.model);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Divider { }
+
+                        SectionHeader { text: "Media auto-download"; }
+                        ToggleRow {
+                            title: "Photos";
+                            checked: root.model.auto-download-images;
+                            toggled => {
+                                root.model.auto-download-images = !root.model.auto-download-images;
+                                root.changed(root.model);
+                            }
+                        }
+                        ToggleRow {
+                            title: "Voice messages";
+                            checked: root.model.auto-download-voice;
+                            toggled => {
+                                root.model.auto-download-voice = !root.model.auto-download-voice;
+                                root.changed(root.model);
+                            }
+                        }
+                        ToggleRow {
+                            title: "Documents";
+                            checked: root.model.auto-download-documents;
+                            toggled => {
+                                root.model.auto-download-documents = !root.model.auto-download-documents;
+                                root.changed(root.model);
+                            }
+                        }
+                        Rectangle {
+                            height: 56px;
+                            HorizontalLayout {
+                                padding-left: 24px;
+                                padding-right: 24px;
+                                spacing: 16px;
+                                Text {
+                                    text: "Maximum file size";
+                                    color: Theme.text;
+                                    font-size: 15px;
+                                    vertical-alignment: center;
+                                }
+                                SizeSlider {
+                                    value: root.model.auto-download-max-mb;
+                                    edited(v) => {
+                                        root.model.auto-download-max-mb = v;
+                                        root.changed(root.model);
+                                    }
+                                }
+                                Text {
+                                    text: root.model.auto-download-max-mb + " MB";
+                                    color: Theme.secondary;
+                                    font-size: 14px;
+                                    min-width: 56px;
+                                    horizontal-alignment: right;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    // Notifications
+                    if root.category == 3: VerticalLayout {
+                        alignment: start;
+                        spacing: 4px;
+                        SectionHeader { text: "Notifications"; }
+                        ToggleRow {
+                            title: "Desktop notifications";
+                            subtitle: "Show a toast for incoming messages";
+                            checked: root.model.notifications;
+                            toggled => {
+                                root.model.notifications = !root.model.notifications;
+                                root.changed(root.model);
+                            }
+                        }
+                        ToggleRow {
+                            title: "Show message preview";
+                            subtitle: "Off shows \"New message\" instead of the text";
+                            checked: root.model.notification-preview;
+                            enabled: root.model.notifications;
+                            toggled => {
+                                root.model.notification-preview = !root.model.notification-preview;
+                                root.changed(root.model);
+                            }
+                        }
+                        ToggleRow {
+                            title: "Notification sound";
+                            checked: root.model.notification-sound;
+                            enabled: root.model.notifications;
+                            toggled => {
+                                root.model.notification-sound = !root.model.notification-sound;
+                                root.changed(root.model);
+                            }
+                        }
+                    }
+
+                    // Storage
+                    if root.category == 4: VerticalLayout {
+                        alignment: start;
+                        spacing: 4px;
+                        SectionHeader { text: "Storage"; }
+                        Rectangle {
+                            height: 56px;
+                            HorizontalLayout {
+                                padding-left: 24px;
+                                padding-right: 24px;
+                                spacing: 16px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 2px;
+                                    Text {
+                                        text: "Downloaded media";
+                                        color: Theme.text;
+                                        font-size: 15px;
+                                    }
+                                    if root.cache-status != "": Text {
+                                        text: root.cache-status;
+                                        color: Theme.secondary;
+                                        font-size: 12px;
+                                    }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    ActionButton {
+                                        text: "Clear media cache";
+                                        clicked => { root.clear-cache(); }
+                                    }
+                                }
+                            }
+                        }
+
+                        if StorageState.data-path != "": VerticalLayout {
+                            spacing: 6px;
+                            Rectangle { height: 6px; }
+                            VerticalLayout {
+                                padding-left: 24px;
+                                padding-right: 24px;
+                                spacing: 2px;
+                                Text {
+                                    text: "Data folder";
+                                    color: Theme.text;
+                                    font-size: 15px;
+                                }
+                                Text {
+                                    text: StorageState.data-path;
+                                    color: Theme.secondary;
+                                    font-size: 12px;
+                                    wrap: word-wrap;
+                                }
+                                Text {
+                                    text: StorageState.size-text;
+                                    color: Theme.secondary;
+                                    font-size: 12px;
+                                }
+                            }
+                            HorizontalLayout {
+                                padding-left: 24px;
+                                padding-right: 24px;
+                                spacing: 12px;
+                                alignment: start;
+                                ActionButton {
+                                    text: "Open folder";
+                                    clicked => { StorageState.open-folder(StorageState.data-path); }
+                                }
+                                ActionButton {
+                                    text: "Change location…";
+                                    enabled: !StorageState.busy;
+                                    clicked => { StorageState.choose-location(); }
+                                }
+                            }
+                            if StorageState.status != "": Text {
+                                text: StorageState.status;
+                                color: Theme.danger;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
+                            if StorageState.confirm-text != "": VerticalLayout {
+                                padding-left: 24px;
+                                padding-right: 24px;
+                                spacing: 10px;
+                                Text {
+                                    text: StorageState.confirm-text;
+                                    color: Theme.text;
+                                    font-size: 14px;
+                                    wrap: word-wrap;
+                                }
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    alignment: start;
+                                    ActionButton {
+                                        text: "Restart and move";
+                                        fill: Theme.accent;
+                                        label-color: white;
+                                        clicked => { StorageState.confirm-move(); }
+                                    }
+                                    ActionButton {
+                                        text: "Cancel";
+                                        clicked => { StorageState.cancel-move(); }
+                                    }
+                                }
+                            }
+                            Rectangle { height: 4px; }
+                            for f in StorageState.folders: HorizontalLayout {
+                                padding-left: 24px;
+                                padding-right: 24px;
+                                spacing: 12px;
+                                height: 44px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 1px;
+                                    Text {
+                                        text: f.name;
+                                        color: Theme.text;
+                                        font-size: 13px;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: f.path;
+                                        color: Theme.secondary;
+                                        font-size: 11px;
+                                        overflow: elide;
+                                    }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    ActionButton {
+                                        text: "Open";
+                                        min-width: 64px;
+                                        height: 30px;
+                                        clicked => { StorageState.open-folder(f.path); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // App
+                    if root.category == 5: VerticalLayout {
+                        alignment: start;
+                        spacing: 4px;
+                        SectionHeader { text: "App"; }
+                        ToggleRow {
+                            title: "Close button minimizes to tray";
+                            subtitle: "Keep running in the background to receive messages";
+                            checked: root.model.close-to-tray;
+                            toggled => {
+                                root.model.close-to-tray = !root.model.close-to-tray;
+                                root.changed(root.model);
+                            }
+                        }
+                        ToggleRow {
+                            title: "Start with Windows";
+                            subtitle: "Launch minimized to the tray at sign-in";
+                            checked: root.model.start-with-windows;
+                            toggled => {
+                                root.model.start-with-windows = !root.model.start-with-windows;
+                                root.changed(root.model);
+                            }
+                        }
+
+                        Divider { }
+
+                        SectionHeader { text: "Incognito mode"; }
+                        VerticalLayout {
+                            padding-left: 24px;
+                            padding-right: 24px;
+                            NoteText {
+                                text: "The ghost button above the chat list turns off chat read receipts and status view receipts for this profile in one click. Turn it off again to restore them. Typing and online visibility are separate switches in Account.";
+                            }
+                        }
+                    }
+
+                    // Network
+                    if root.category == 6: VerticalLayout {
+                        alignment: start;
+                        spacing: 4px;
+                        ProxySection { }
+                    }
+
+                    // Help
+                    if root.category == 7: VerticalLayout {
+                        alignment: start;
+                        spacing: 4px;
+                        SectionHeader { text: "Help"; }
+                        InfoRow {
+                            title: "WaClient";
+                            value: "Version " + AccountState.app-version;
+                        }
+                        VerticalLayout {
+                            padding-left: 24px;
+                            padding-right: 24px;
+                            padding-top: 8px;
+                            spacing: 12px;
+                            NoteText {
+                                text: "WaClient is an unofficial WhatsApp client. It is not affiliated with WhatsApp or Meta, and using unofficial clients can get a number banned.";
+                            }
+                            if AccountState.has-readme: HorizontalLayout {
+                                alignment: start;
+                                ActionButton {
+                                    text: "Open README";
+                                    clicked => { AccountState.open-readme(); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

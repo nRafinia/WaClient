@@ -1,0 +1,139 @@
+import { ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { IconClose } from "icons.slint";
+import { MsgOps } from "msgops.slint";
+
+// Right panel: starred messages (of one chat or of every chat).
+export component StarredPanel inherits Rectangle {
+    background: Theme.chat-bg;
+    TouchArea { }
+
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: 60px;
+        background: Theme.panel;
+        Rectangle {
+            x: 8px;
+            y: 12px;
+            width: 36px;
+            height: 36px;
+            border-radius: 18px;
+            background: close-ta.has-hover ? Theme.hover : transparent;
+            IconClose {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                color: Theme.secondary;
+            }
+            close-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { MsgOps.panel-close(); }
+            }
+        }
+        Text {
+            x: 60px;
+            width: parent.width - 72px;
+            text: MsgOps.starred-title;
+            color: Theme.text;
+            font-size: 17px;
+            font-weight: 600;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    if MsgOps.starred-rows.length == 0: Text {
+        y: 60px;
+        height: parent.height - 60px;
+        width: parent.width;
+        text: MsgOps.starred-loading ? "Loading…" : "No starred messages";
+        color: Theme.secondary;
+        font-size: 14px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    ListView {
+        y: 60px;
+        height: parent.height - 60px - (MsgOps.starred-more ? 40px : 0px);
+        for r in MsgOps.starred-rows: Rectangle {
+            height: 86px;
+            background: row-ta.has-hover ? Theme.hover : transparent;
+            Text {
+                x: 16px;
+                y: 8px;
+                width: parent.width - 32px - 130px;
+                text: r.chat-name == "" ? r.sender : (r.sender == "" ? r.chat-name : r.chat-name + " · " + r.sender);
+                color: Theme.accent;
+                font-size: 13px;
+                font-weight: 600;
+                overflow: elide;
+            }
+            Text {
+                x: parent.width - 16px - 120px;
+                y: 8px;
+                width: 120px;
+                text: r.time;
+                color: Theme.secondary;
+                font-size: 12px;
+                horizontal-alignment: right;
+            }
+            Text {
+                x: 16px;
+                y: 28px;
+                width: parent.width - 32px;
+                height: 36px;
+                text: r.text;
+                color: Theme.text;
+                font-size: 14px;
+                wrap: word-wrap;
+                overflow: elide;
+            }
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.divider;
+            }
+            row-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { MsgOps.starred-jump(r.chat-jid, r.id); }
+            }
+            // On top of the row's own click.
+            Rectangle {
+                x: parent.width - 16px - 64px;
+                y: parent.height - 22px;
+                width: 64px;
+                height: 18px;
+                Text {
+                    text: "Unstar";
+                    color: unstar-ta.has-hover ? Theme.text : Theme.secondary;
+                    font-size: 12px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+                unstar-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { MsgOps.starred-unstar(r.chat-jid, r.id); }
+                }
+            }
+        }
+    }
+
+    if MsgOps.starred-more: Rectangle {
+        y: parent.height - 40px;
+        height: 40px;
+        background: Theme.panel;
+        Text {
+            text: MsgOps.starred-loading ? "Loading…" : "Load more";
+            color: Theme.accent;
+            font-size: 14px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => { MsgOps.starred-load-more(); }
+        }
+    }
+}

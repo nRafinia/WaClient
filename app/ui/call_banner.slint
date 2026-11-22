@@ -1,0 +1,163 @@
+import { Theme, Avatar } from "theme.slint";
+import { IconClose, IconPhone, IconVideo } from "icons.slint";
+
+export struct CallBannerItem {
+    // Identifies the call across profiles; passed back by the callbacks.
+    key: string,
+    title: string,
+    subtitle: string,
+    avatar: image,
+    has-avatar: bool,
+    initials: string,
+    tint: color,
+    is-video: bool,
+    // Decline was sent; waiting for the call to end.
+    declining: bool,
+    // The caller hung up: shown briefly, without buttons.
+    missed: bool,
+}
+
+export global CallState {
+    // Newest first.
+    in property <[CallBannerItem]> items;
+    callback decline(string);
+    callback open-chat(string);
+    // Hides the banner only; the call keeps ringing on the phone.
+    callback dismiss(string);
+}
+
+component CallButton inherits Rectangle {
+    in property <string> text;
+    in property <color> fill;
+    in property <color> fill-hover;
+    in property <bool> enabled: true;
+    callback clicked();
+    height: 32px;
+    min-width: 96px;
+    border-radius: 16px;
+    background: !root.enabled ? root.fill.darker(0.3) : touch.has-hover ? root.fill-hover : root.fill;
+    Text {
+        text: root.text;
+        color: white;
+        font-size: 13px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component CallCard inherits Rectangle {
+    in property <CallBannerItem> item;
+    callback decline();
+    callback open-chat();
+    callback dismiss();
+
+    background: Theme.panel;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: Theme.divider;
+    drop-shadow-blur: 16px;
+    drop-shadow-color: #000000aa;
+    drop-shadow-offset-y: 4px;
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+        HorizontalLayout {
+            spacing: 12px;
+            Avatar {
+                size: 44px;
+                source: root.item.avatar;
+                has-image: root.item.has-avatar;
+                initials: root.item.initials;
+                tint: root.item.tint;
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text {
+                    text: root.item.title;
+                    color: Theme.text;
+                    font-size: 16px;
+                    font-weight: 600;
+                    overflow: elide;
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    if root.item.is-video: IconVideo {
+                        size: 16px;
+                        color: root.item.missed ? Theme.danger : Theme.accent;
+                        y: (parent.height - self.height) / 2;
+                    }
+                    if !root.item.is-video: IconPhone {
+                        size: 16px;
+                        color: root.item.missed ? Theme.danger : Theme.accent;
+                        y: (parent.height - self.height) / 2;
+                    }
+                    Text {
+                        text: root.item.subtitle;
+                        color: Theme.secondary;
+                        font-size: 13px;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: 14px;
+                background: close-touch.has-hover ? Theme.hover : transparent;
+                IconClose {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    size: 14px;
+                    color: Theme.secondary;
+                }
+                close-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.dismiss(); }
+                }
+            }
+        }
+        if !root.item.missed: Text {
+            text: "Answer on your phone";
+            color: Theme.text;
+            font-size: 13px;
+        }
+        if !root.item.missed: HorizontalLayout {
+            spacing: 8px;
+            alignment: end;
+            CallButton {
+                text: "Open chat";
+                fill: Theme.input-bg;
+                fill-hover: Theme.selected.brighter(0.2);
+                clicked => { root.open-chat(); }
+            }
+            CallButton {
+                text: root.item.declining ? "Declining…" : "Decline";
+                fill: Theme.danger;
+                fill-hover: Theme.danger.brighter(0.15);
+                enabled: !root.item.declining;
+                clicked => { root.decline(); }
+            }
+        }
+    }
+}
+
+// Stack of ringing calls, newest on top; sized to its cards so the rest of the
+// window stays clickable.
+export component CallBanners inherits VerticalLayout {
+    spacing: 8px;
+    for item in CallState.items: CallCard {
+        item: item;
+        decline => { CallState.decline(item.key); }
+        open-chat => { CallState.open-chat(item.key); }
+        dismiss => { CallState.dismiss(item.key); }
+    }
+}

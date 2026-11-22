@@ -1,0 +1,234 @@
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { IconViewOnce } from "icons.slint";
+
+// One pending attachment. `thumb` is only meaningful when `has-thumb` is set
+// (images); other kinds show a generic file tile with `kind-label`.
+export struct AttachItem {
+    name: string,
+    size-text: string,
+    kind-label: string,
+    thumb: image,
+    has-thumb: bool,
+}
+
+// Options of the staged files that the app reads when it sends them.
+export global AttachOptions {
+    // Send the single photo or video as view once (reset when the preview closes).
+    in-out property <bool> view-once;
+}
+
+component AttachTile inherits Rectangle {
+    in property <AttachItem> item;
+    in property <length> side: 120px;
+    callback remove();
+
+    width: root.side;
+    height: root.side + 34px;
+
+    Rectangle {
+        y: 0;
+        width: parent.width;
+        height: root.side;
+        background: Theme.input-bg;
+        border-radius: 8px;
+        clip: true;
+        if root.item.has-thumb: Image {
+            width: parent.width;
+            height: parent.height;
+            source: root.item.thumb;
+            image-fit: cover;
+        }
+        if !root.item.has-thumb: Text {
+            text: root.item.kind-label;
+            color: Theme.secondary;
+            font-size: 22px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        // Remove button, drawn as a cross: no icon font is bundled.
+        Rectangle {
+            x: parent.width - self.width - 4px;
+            y: 4px;
+            width: 22px;
+            height: 22px;
+            border-radius: 11px;
+            background: rm.has-hover ? Theme.danger : #000000b0;
+            Path {
+                width: 10px;
+                height: 10px;
+                x: 6px;
+                y: 6px;
+                viewbox-width: 10;
+                viewbox-height: 10;
+                commands: "M 1 1 L 9 9 M 9 1 L 1 9";
+                stroke: white;
+                stroke-width: 1.5px;
+            }
+            rm := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.remove(); }
+            }
+        }
+    }
+    Text {
+        y: root.side + 4px;
+        width: parent.width;
+        text: root.item.name;
+        color: Theme.text;
+        font-size: 12px;
+        overflow: elide;
+    }
+    Text {
+        y: root.side + 20px;
+        width: parent.width;
+        text: root.item.size-text;
+        color: Theme.secondary;
+        font-size: 11px;
+        overflow: elide;
+    }
+}
+
+// Overlay shown before sending pasted or dropped files. The caption box only
+// appears for a single attachment (WhatsApp captions one media item).
+export component AttachPreview inherits Rectangle {
+    in property <[AttachItem]> items;
+    in property <bool> can-caption: root.items.length == 1;
+    in property <bool> busy: false;
+    in-out property <string> caption;
+    // View once only applies to one photo or video.
+    property <bool> once-ok: root.items.length == 1 && (root.items[0].kind-label == "IMAGE" || root.items[0].kind-label == "VIDEO");
+    callback send(string);
+    callback cancel();
+    callback remove(int);
+
+    background: #000000b8;
+
+    // Swallow clicks so the chat behind is not interactive.
+    TouchArea { }
+
+    Rectangle {
+        width: min(parent.width - 48px, 640px);
+        height: min(parent.height - 48px, 520px);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.panel;
+        border-radius: 12px;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            Text {
+                text: root.items.length == 1 ? "Send 1 file" : "Send " + root.items.length + " files";
+                color: Theme.text;
+                font-size: 16px;
+                font-weight: 600;
+            }
+
+            sv := ScrollView {
+                vertical-stretch: 1;
+                content-width: self.width;
+                content-height: max(self.height, grid.height);
+                grid := Rectangle {
+                    property <int> per-row: max(1, floor(sv.width / 132px));
+                    width: sv.width;
+                    height: ceil(root.items.length / self.per-row) * 154px;
+                    for it[i] in root.items: AttachTile {
+                        item: it;
+                        x: mod(i, grid.per-row) * 132px;
+                        y: floor(i / grid.per-row) * 154px;
+                        remove => { root.remove(i); }
+                    }
+                }
+            }
+
+            if root.can-caption: LineEdit {
+                placeholder-text: "Add a caption";
+                text <=> root.caption;
+                accepted => { root.send(root.caption); }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                Rectangle {
+                    width: 118px;
+                    height: 32px;
+                    border-radius: 16px;
+                    border-width: 1px;
+                    border-color: AttachOptions.view-once && root.once-ok ? Theme.accent : Theme.divider;
+                    background: AttachOptions.view-once && root.once-ok ? #00a8842e : (once-ta.has-hover && root.once-ok ? Theme.selected : transparent);
+                    opacity: root.once-ok ? 1.0 : 0.4;
+                    IconViewOnce {
+                        x: 10px;
+                        y: (parent.height - self.height) / 2;
+                        size: 18px;
+                        color: AttachOptions.view-once && root.once-ok ? Theme.accent : Theme.text;
+                    }
+                    Text {
+                        x: 34px;
+                        text: "View once";
+                        color: AttachOptions.view-once && root.once-ok ? Theme.accent : Theme.text;
+                        font-size: 13px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                    once-ta := TouchArea {
+                        enabled: root.once-ok && !root.busy;
+                        mouse-cursor: root.once-ok ? pointer : default;
+                        clicked => { AttachOptions.view-once = !AttachOptions.view-once; }
+                    }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+                Button {
+                    text: "Cancel";
+                    enabled: !root.busy;
+                    clicked => { root.cancel(); }
+                }
+                Button {
+                    text: "Send";
+                    primary: true;
+                    enabled: !root.busy && root.items.length > 0;
+                    clicked => { root.send(root.can-caption ? root.caption : ""); }
+                }
+            }
+        }
+    }
+}
+
+// Full-pane highlight shown while files are dragged over the window. It does
+// not take input so the drop reaches the window underneath.
+export component DropOverlay inherits Rectangle {
+    background: #0b141acc;
+
+    Rectangle {
+        x: 24px;
+        y: 24px;
+        width: parent.width - 48px;
+        height: parent.height - 48px;
+        border-radius: 16px;
+        border-width: 3px;
+        border-color: Theme.accent;
+        background: #00a8841a;
+        VerticalLayout {
+            alignment: center;
+            spacing: 6px;
+            Text {
+                text: "Drop files here";
+                color: Theme.text;
+                font-size: 22px;
+                font-weight: 600;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "They are shown for review before sending";
+                color: Theme.secondary;
+                font-size: 13px;
+                horizontal-alignment: center;
+            }
+        }
+    }
+}

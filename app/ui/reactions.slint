@@ -1,0 +1,92 @@
+import { Theme } from "theme.slint";
+
+export struct ReactionChipItem {
+    emoji: string,
+    count: int,
+    mine: bool,
+}
+
+// Chips shown under a message bubble. Clicking a chip toggles the user's own
+// reaction with that emoji.
+export component ReactionBar inherits Rectangle {
+    in property <[ReactionChipItem]> chips;
+    callback toggle(string);
+
+    height: 24px;
+    preferred-width: row.preferred-width;
+
+    row := HorizontalLayout {
+        spacing: 4px;
+        alignment: start;
+
+        for chip in root.chips: Rectangle {
+            width: label.preferred-width + 16px;
+            border-radius: 12px;
+            background: chip.mine ? #00a88433 : (ta.has-hover ? Theme.selected : Theme.panel);
+            border-width: 1px;
+            border-color: chip.mine ? Theme.accent : Theme.divider;
+
+            label := Text {
+                text: chip.count > 1 ? chip.emoji + " " + chip.count : chip.emoji;
+                color: Theme.text;
+                font-size: 13px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.toggle(chip.emoji); }
+            }
+        }
+    }
+}
+
+// Floating strip of quick reactions plus a "+" that should open the full picker.
+export component QuickReactPopup inherits Rectangle {
+    in property <[string]> quick: ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+    callback react(string);
+    callback more();
+
+    height: 44px;
+    width: (root.quick.length + 1) * 38px + 12px;
+    background: Theme.panel;
+    border-radius: 22px;
+    border-width: 1px;
+    border-color: Theme.divider;
+
+    HorizontalLayout {
+        padding: 6px;
+        spacing: 0px;
+        for e in root.quick: Rectangle {
+            width: 38px;
+            border-radius: 16px;
+            background: qta.has-hover ? Theme.selected : transparent;
+            Text {
+                text: e;
+                font-size: 22px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            qta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.react(e); }
+            }
+        }
+        Rectangle {
+            width: 38px;
+            border-radius: 16px;
+            background: mta.has-hover ? Theme.selected : transparent;
+            Text {
+                text: "+";
+                color: Theme.secondary;
+                font-size: 22px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            mta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.more(); }
+            }
+        }
+    }
+}

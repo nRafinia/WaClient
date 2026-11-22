@@ -1,0 +1,157 @@
+import { PopupState, Theme, Avatar } from "theme.slint";
+import { MsgItem } from "msg.slint";
+import { ShareState } from "share_contact.slint";
+
+// Text button of the card.
+component CardButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 32px;
+    border-radius: 6px;
+    background: ta.has-hover && root.enabled ? Theme.selected : transparent;
+    Text {
+        text: root.label;
+        color: root.enabled ? Theme.accent : Theme.secondary;
+        font-size: 13px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if (root.enabled) {
+                root.clicked();
+            }
+        }
+    }
+}
+
+// Shared-contact bubble content: one contact with Message / Copy number, or
+// several with a "View all" list.
+export component ContactCard inherits VerticalLayout {
+    in property <MsgItem> m;
+    in property <length> content-w: 260px;
+    callback message(string);
+    callback copy(string);
+
+    property <bool> many: root.m.contact-count > 1;
+    property <int> shown: min(root.m.contact-count, 5);
+
+    width: root.content-w;
+    spacing: 6px;
+
+    HorizontalLayout {
+        spacing: 10px;
+        padding-top: 2px;
+        Avatar {
+            size: 44px;
+            initials: root.m.contact-initials;
+            tint: root.m.contact-tint;
+            has-image: false;
+        }
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.many ? root.m.contact-count + " contacts" : root.m.contact-name;
+                color: Theme.text;
+                font-size: 15px;
+                font-weight: 600;
+                overflow: elide;
+            }
+            Text {
+                text: root.many ? root.m.contact-name + " and " + (root.m.contact-count - 1) + " more" : root.m.contact-phone;
+                color: Theme.secondary;
+                font-size: 13px;
+                overflow: elide;
+            }
+        }
+    }
+    Rectangle {
+        height: 1px;
+        background: Theme.divider;
+    }
+    HorizontalLayout {
+        spacing: 4px;
+        if !root.many: CardButton {
+            label: "Message";
+            enabled: root.m.contact-digits != "";
+            clicked => { root.message(root.m.contact-digits); }
+        }
+        if !root.many: CardButton {
+            label: "Copy number";
+            enabled: root.m.contact-phone != "";
+            clicked => { root.copy(root.m.contact-phone); }
+        }
+        if root.many: CardButton {
+            label: "View all";
+            clicked => { all-popup.show(); }
+        }
+        CardButton {
+            label: root.many ? "Share contacts" : "Share contact";
+            clicked => { ShareState.share-card(root.m.id); }
+        }
+    }
+
+    property <bool> all-popup-shown: all-popup.is-open;
+    changed all-popup-shown => { PopupState.open = max(0, PopupState.open + (self.all-popup-shown ? 1 : -1)); }
+    all-popup := PopupWindow {
+        x: 0px;
+        y: 0px - self.height - 4px;
+        width: 290px;
+        height: 12px + 56px * root.shown;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.panel;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.divider;
+            VerticalLayout {
+                padding-top: 6px;
+                padding-bottom: 6px;
+                for c[i] in root.m.contacts: Rectangle {
+                    height: i < root.shown ? 56px : 0px;
+                    visible: i < root.shown;
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 8px;
+                        spacing: 10px;
+                        Avatar {
+                            size: 36px;
+                            initials: c.initials;
+                            tint: c.tint;
+                            has-image: false;
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: c.name;
+                                color: Theme.text;
+                                font-size: 14px;
+                                font-weight: 600;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: c.phone;
+                                color: Theme.secondary;
+                                font-size: 12px;
+                                overflow: elide;
+                            }
+                        }
+                        CardButton {
+                            width: 76px;
+                            label: "Message";
+                            enabled: c.digits != "";
+                            clicked => {
+                                root.message(c.digits);
+                                all-popup.close();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

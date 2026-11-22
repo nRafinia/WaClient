@@ -1,0 +1,150 @@
+import { Button } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+// One choice of the disappearing-messages timer (the app fills the list so
+// the labels exist in one place only).
+export struct TimerOption {
+    secs: int,
+    label: string,
+}
+
+// Disappearing-message timers: the open chat's value (info row, header and
+// bubble marker), the dialog that changes it, and the profile default.
+export global TimerState {
+    in property <[TimerOption]> options;
+    // Open chat.
+    in property <bool> chat-on;
+    in property <string> chat-label;
+    in property <int> chat-secs;
+    // Dialog of the open chat.
+    in-out property <bool> dialog-open;
+    in-out property <int> dialog-pick;
+    callback open-dialog();
+    callback apply(int);
+    callback cancel-dialog();
+    // Default for new chats (Settings, Account, Privacy).
+    in property <int> default-secs;
+    callback set-default(int);
+}
+
+// Segmented choice of the default timer.
+export component TimerChips inherits HorizontalLayout {
+    spacing: 8px;
+    for o in TimerState.options: Rectangle {
+        property <bool> on: o.secs == TimerState.default-secs;
+        height: 34px;
+        min-width: 76px;
+        border-radius: 17px;
+        border-width: 1px;
+        border-color: self.on ? Theme.accent : Theme.divider;
+        background: self.on ? Theme.accent : (chip-ta.has-hover ? Theme.selected : transparent);
+        Text {
+            text: o.label;
+            color: parent.on ? #111b21 : Theme.text;
+            font-size: 13px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        chip-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { TimerState.set-default(o.secs); }
+        }
+    }
+}
+
+// Modal with the radio list of timers for the open chat. Covers its parent.
+export component TimerDialog inherits Rectangle {
+    background: #000000b0;
+    TouchArea { }
+
+    FocusScope {
+        width: parent.width;
+        height: parent.height;
+        init => { self.focus(); }
+        capture-key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                TimerState.cancel-dialog();
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            width: min(380px, parent.width - 32px);
+            height: 40px + 26px + 36px + 48px * TimerState.options.length + 4px * (TimerState.options.length + 3) + 12px + 40px;
+            background: Theme.panel;
+            border-radius: 12px;
+
+            VerticalLayout {
+                padding: 20px;
+                spacing: 4px;
+                Text {
+                    height: 26px;
+                    text: "Disappearing messages";
+                    color: Theme.text;
+                    font-size: 18px;
+                    font-weight: 600;
+                    overflow: elide;
+                }
+                Text {
+                    height: 36px;
+                    text: "New messages in this chat disappear after the chosen time.";
+                    color: Theme.secondary;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+                for o in TimerState.options: Rectangle {
+                    property <bool> on: o.secs == TimerState.dialog-pick;
+                    height: 48px;
+                    border-radius: 8px;
+                    background: opt-ta.has-hover ? Theme.selected : transparent;
+                    Rectangle {
+                        x: 10px;
+                        y: (parent.height - self.height) / 2;
+                        width: 20px;
+                        height: 20px;
+                        border-radius: 10px;
+                        border-width: 2px;
+                        border-color: parent.on ? Theme.accent : Theme.secondary;
+                        if parent.on: Rectangle {
+                            x: 4px;
+                            y: 4px;
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: Theme.accent;
+                        }
+                    }
+                    Text {
+                        x: 44px;
+                        text: o.label;
+                        color: Theme.text;
+                        font-size: 15px;
+                        vertical-alignment: center;
+                    }
+                    opt-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { TimerState.dialog-pick = o.secs; }
+                    }
+                }
+                Rectangle {
+                    height: 12px;
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+                    Button {
+                        text: "Cancel";
+                        clicked => { TimerState.cancel-dialog(); }
+                    }
+                    Button {
+                        text: "Save";
+                        primary: true;
+                        clicked => { TimerState.apply(TimerState.dialog-pick); }
+                    }
+                }
+            }
+        }
+    }
+}

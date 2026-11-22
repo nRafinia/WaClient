@@ -1,0 +1,123 @@
+import { Theme } from "theme.slint";
+import { IconCheck } from "icons.slint";
+
+export struct PollOptionItem {
+    name: string,
+    votes: int,
+    // 0..100, share of all votes cast.
+    percent: int,
+    mine: bool,
+}
+
+// Votes of poll bubbles; the controller (app/poll_ui.rs) computes the new
+// selection from its cached tally and sends it.
+export global PollActions {
+    // Message id, index of the clicked option.
+    callback vote(string, int);
+}
+
+// Poll rendering for the inside of a message bubble: a click on an option row
+// votes (single-answer polls: radio, multi-answer polls: checkboxes). The
+// layout is the root so the bubble row gets the real content height.
+export component PollBubble inherits VerticalLayout {
+    in property <string> msg-id;
+    in property <string> question;
+    in property <[PollOptionItem]> options;
+    in property <int> total-votes;
+    in property <bool> multi;
+    // False for read-only views: no hover, no clicks.
+    in property <bool> enabled: true;
+    in property <length> content-w: 260px;
+
+    min-width: root.content-w;
+    spacing: 8px;
+
+    Text {
+        text: root.question;
+        color: Theme.text;
+        font-size: 15px * Theme.font-scale;
+        font-weight: 700;
+        wrap: word-wrap;
+    }
+
+    Text {
+        text: root.multi ? "Select one or more" : "Select one";
+        color: Theme.secondary;
+        font-size: 12px;
+    }
+
+    for o[i] in root.options: Rectangle {
+        height: row.preferred-height + 8px;
+        border-radius: 6px;
+        background: root.enabled && row-ta.has-hover ? Theme.selected : transparent;
+
+        row := VerticalLayout {
+            x: 0px;
+            y: 4px;
+            width: parent.width;
+            spacing: 3px;
+
+            HorizontalLayout {
+                spacing: 6px;
+
+                Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    border-radius: root.multi ? 4px : 9px;
+                    border-width: o.mine ? 0px : 1.5px;
+                    border-color: Theme.secondary;
+                    background: o.mine ? Theme.accent : transparent;
+
+                    if o.mine: IconCheck {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        size: 13px;
+                        color: white;
+                    }
+                }
+
+                Text {
+                    text: o.name;
+                    color: Theme.text;
+                    font-size: 14px * Theme.font-scale;
+                    wrap: word-wrap;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: o.votes;
+                    color: Theme.text;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle {
+                height: 5px;
+                border-radius: 2.5px;
+                background: Theme.input-bg;
+                clip: true;
+
+                Rectangle {
+                    x: 0px;
+                    width: parent.width * clamp(o.percent, 0, 100) / 100;
+                    height: parent.height;
+                    background: o.mine ? Theme.accent : Theme.secondary;
+                }
+            }
+        }
+
+        row-ta := TouchArea {
+            enabled: root.enabled;
+            mouse-cursor: root.enabled ? pointer : default;
+            clicked => { PollActions.vote(root.msg-id, i); }
+        }
+    }
+
+    Text {
+        text: "\{root.total-votes} \{root.total-votes == 1 ? "vote" : "votes"}";
+        color: Theme.secondary;
+        font-size: 12px;
+    }
+}

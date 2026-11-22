@@ -1,0 +1,234 @@
+import { Button } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+// Down arrow drawn as a path: no icon font is bundled and U+2304 is missing from the UI font.
+export component Chevron inherits Path {
+    in property <color> tint: Theme.text;
+
+    width: 10px;
+    height: 6px;
+    viewbox-width: 10;
+    viewbox-height: 6;
+    commands: "M 1 1 L 5 5 L 9 1";
+    stroke: root.tint;
+    stroke-width: 1.5px;
+    fill: transparent;
+}
+
+export component MenuRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> danger;
+    callback clicked();
+
+    height: 34px;
+    background: ta.has-hover ? Theme.selected : transparent;
+    Text {
+        x: 16px;
+        width: parent.width - 32px;
+        text: root.label;
+        color: root.danger ? Theme.danger : Theme.text;
+        font-size: 14px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Context menu of a message bubble. Only the actions that apply are shown.
+export component MsgMenu inherits Rectangle {
+    in property <bool> can-reply;
+    in property <bool> can-react;
+    in property <bool> can-copy;
+    in property <bool> can-download;
+    in property <bool> can-open;
+    in property <bool> can-reveal;
+    in property <bool> can-save;
+    in property <bool> can-edit;
+    in property <bool> can-forward;
+    in property <bool> can-pin;
+    in property <bool> pinned;
+    in property <bool> can-star;
+    in property <bool> starred;
+    in property <bool> can-info;
+    callback reply();
+    callback react();
+    callback copy();
+    callback download();
+    callback open();
+    callback show-in-folder();
+    callback save-as();
+    callback delete();
+    callback edit();
+    callback forward();
+    callback pin();
+    callback star();
+    callback info();
+    callback select();
+
+    width: 190px;
+    height: body.preferred-height + 12px;
+    background: Theme.panel;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.divider;
+
+    body := VerticalLayout {
+        padding-top: 6px;
+        padding-bottom: 6px;
+        if root.can-reply: MenuRow {
+            label: "Reply";
+            clicked => { root.reply(); }
+        }
+        if root.can-react: MenuRow {
+            label: "React";
+            clicked => { root.react(); }
+        }
+        if root.can-copy: MenuRow {
+            label: "Copy";
+            clicked => { root.copy(); }
+        }
+        if root.can-forward: MenuRow {
+            label: "Forward";
+            clicked => { root.forward(); }
+        }
+        if root.can-star: MenuRow {
+            label: root.starred ? "Unstar" : "Star";
+            clicked => { root.star(); }
+        }
+        if root.can-pin: MenuRow {
+            label: root.pinned ? "Unpin" : "Pin";
+            clicked => { root.pin(); }
+        }
+        if root.can-edit: MenuRow {
+            label: "Edit";
+            clicked => { root.edit(); }
+        }
+        if root.can-info: MenuRow {
+            label: "Info";
+            clicked => { root.info(); }
+        }
+        if root.can-download: MenuRow {
+            label: "Download";
+            clicked => { root.download(); }
+        }
+        if root.can-open: MenuRow {
+            label: "Open";
+            clicked => { root.open(); }
+        }
+        if root.can-save: MenuRow {
+            label: "Save as…";
+            clicked => { root.save-as(); }
+        }
+        if root.can-reveal: MenuRow {
+            label: "Show in folder";
+            clicked => { root.show-in-folder(); }
+        }
+        MenuRow {
+            label: "Select";
+            clicked => { root.select(); }
+        }
+        MenuRow {
+            label: "Delete";
+            danger: true;
+            clicked => { root.delete(); }
+        }
+    }
+}
+
+// Modal "Delete message?" dialog; covers its parent.
+export component DeleteDialog inherits Rectangle {
+    in property <bool> for-everyone-allowed;
+    in property <string> title: "Delete message?";
+    callback delete-for-me();
+    callback delete-for-everyone();
+    callback cancel();
+
+    background: #000000b0;
+    TouchArea { }
+
+    FocusScope {
+        init => { self.focus(); }
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.cancel();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    Rectangle {
+        width: min(400px, parent.width - 32px);
+        height: dialog-body.preferred-height;
+        background: Theme.panel;
+        border-radius: 12px;
+
+        dialog-body := VerticalLayout {
+            padding: 20px;
+            spacing: 14px;
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: 18px;
+                font-weight: 600;
+            }
+            HorizontalLayout {
+                alignment: end;
+                spacing: 10px;
+                Button {
+                    text: "Cancel";
+                    clicked => { root.cancel(); }
+                }
+                Button {
+                    text: "Delete for me";
+                    clicked => { root.delete-for-me(); }
+                }
+                if root.for-everyone-allowed: Button {
+                    text: "Delete for everyone";
+                    primary: true;
+                    clicked => { root.delete-for-everyone(); }
+                }
+            }
+        }
+    }
+}
+
+// Short confirmation ("Copied").
+export component Toast inherits Rectangle {
+    in property <string> text;
+    // Optional clickable text after the message ("Show in folder").
+    in property <string> action;
+    callback action-clicked();
+
+    width: label.preferred-width + 32px + (root.action != "" ? act.preferred-width + 16px : 0px);
+    height: 34px;
+    border-radius: 17px;
+    background: #111b21f0;
+    border-width: 1px;
+    border-color: Theme.divider;
+    label := Text {
+        x: 16px;
+        width: self.preferred-width;
+        text: root.text;
+        color: Theme.text;
+        font-size: 14px;
+        vertical-alignment: center;
+    }
+    act := Text {
+        visible: root.action != "";
+        x: label.x + label.width + 16px;
+        width: self.preferred-width;
+        text: root.action;
+        color: Theme.accent;
+        font-size: 14px;
+        font-weight: 600;
+        vertical-alignment: center;
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.action-clicked(); }
+        }
+    }
+}

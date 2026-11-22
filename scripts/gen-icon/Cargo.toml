@@ -1,0 +1,11 @@
+[package]
+name = "gen-icon"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Standalone: keeps this tool out of the main workspace.
+[workspace]
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "ico"] }

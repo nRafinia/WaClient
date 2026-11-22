@@ -1,0 +1,340 @@
+import { Button, ListView, CheckBox } from "std-widgets.slint";
+import { Theme, Avatar } from "theme.slint";
+import { IconSearch, IconCheck } from "icons.slint";
+
+// One tab of the folder strip above the chat list.
+export struct FolderTab {
+    id: string,
+    name: string,
+    // Chats with unread messages in the folder.
+    unread: int,
+    // Every unread chat of the folder is muted (grey badge).
+    grey: bool,
+    // Built-in folders cannot be edited, deleted or moved.
+    builtin: bool,
+    can-left: bool,
+    can-right: bool,
+}
+
+// A chat of the folder dialog's picker.
+export struct FolderPickRow {
+    key: string,
+    name: string,
+    initials: string,
+    tint: color,
+    group: bool,
+    selected: bool,
+}
+
+// A custom folder in the "Add to folder" menu of a chat row.
+export struct FolderMenuRow {
+    id: string,
+    name: string,
+    member: bool,
+}
+
+// State of the chat folders (Rust: app/src/app/folders_ui.rs).
+export global FolderState {
+    in property <bool> enabled: true;
+    in property <[FolderTab]> tabs;
+    in-out property <string> selected: "all";
+    // At least one custom folder exists (the chat menu offers "Add to folder").
+    in property <bool> has-custom;
+    in property <[FolderMenuRow]> menu-rows;
+
+    // Dialog: 0 none, 1 new / edit form, 2 delete confirmation.
+    in-out property <int> dialog;
+    in property <string> form-title;
+    in property <string> form-action: "Create";
+    in-out property <string> name;
+    in property <string> error;
+    in-out property <bool> rule-unread;
+    in-out property <bool> rule-groups;
+    in-out property <bool> rule-personal;
+    in-out property <bool> rule-exclude-muted;
+    in property <[FolderPickRow]> rows;
+    in property <int> picked;
+    in property <string> delete-name;
+
+    callback select(string);
+    // Ctrl+Alt+1..9: the folder at that (zero-based) position.
+    callback select-at(int);
+    callback new-folder();
+    callback edit(string);
+    callback delete-ask(string);
+    callback move(string, int);
+    callback toggle-enabled();
+    callback prepare-menu(string);
+    callback menu-toggle(string, string);
+    callback pick-search(string);
+    callback toggle-pick(string);
+    callback save();
+    callback confirm-delete();
+    callback cancel();
+}
+
+// Modal dialogs of the folders; they cover their parent.
+export component FolderDialogs inherits Rectangle {
+    background: #000000b0;
+    TouchArea { }
+
+    FocusScope {
+        width: parent.width;
+        height: parent.height;
+        capture-key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                FolderState.cancel();
+                return accept;
+            }
+            return reject;
+        }
+
+        // ---- 1: name, rules and chats of a folder ----
+        if FolderState.dialog == 1: Rectangle {
+            width: min(440px, parent.width - 32px);
+            height: min(640px, parent.height - 32px);
+            background: Theme.panel;
+            border-radius: 12px;
+            clip: true;
+
+            Text {
+                x: 20px;
+                y: 16px;
+                width: parent.width - 40px;
+                height: 26px;
+                text: FolderState.form-title;
+                color: Theme.text;
+                font-size: 18px;
+                font-weight: 600;
+                overflow: elide;
+            }
+            Rectangle {
+                x: 16px;
+                y: 52px;
+                width: parent.width - 32px;
+                height: 38px;
+                background: Theme.input-bg;
+                border-radius: 8px;
+                if FolderState.name == "": Text {
+                    x: 12px;
+                    text: "Folder name";
+                    color: Theme.secondary;
+                    font-size: 14px;
+                    vertical-alignment: center;
+                }
+                TextInput {
+                    x: 12px;
+                    y: (parent.height - self.preferred-height) / 2;
+                    width: parent.width - 24px;
+                    color: Theme.text;
+                    font-size: 14px;
+                    single-line: true;
+                    text <=> FolderState.name;
+                    init => { self.focus(); }
+                    accepted => { FolderState.save(); }
+                }
+            }
+            Text {
+                x: 20px;
+                y: 94px;
+                width: parent.width - 40px;
+                height: 18px;
+                text: FolderState.error;
+                color: Theme.danger;
+                font-size: 12px;
+                overflow: elide;
+            }
+            VerticalLayout {
+                x: 20px;
+                y: 114px;
+                width: parent.width - 40px;
+                spacing: 2px;
+                CheckBox {
+                    text: "Include all unread";
+                    checked <=> FolderState.rule-unread;
+                }
+                CheckBox {
+                    text: "Include all groups";
+                    checked <=> FolderState.rule-groups;
+                }
+                CheckBox {
+                    text: "Include all personal chats";
+                    checked <=> FolderState.rule-personal;
+                }
+                CheckBox {
+                    text: "Exclude muted";
+                    checked <=> FolderState.rule-exclude-muted;
+                }
+            }
+            Rectangle {
+                x: 16px;
+                y: 236px;
+                width: parent.width - 32px;
+                height: 36px;
+                background: Theme.input-bg;
+                border-radius: 8px;
+                IconSearch {
+                    x: 12px;
+                    y: (parent.height - self.height) / 2;
+                    size: 15px;
+                    color: Theme.secondary;
+                }
+                if pick-search.text == "": Text {
+                    x: 40px;
+                    text: "Search chats to include";
+                    color: Theme.secondary;
+                    font-size: 14px;
+                    vertical-alignment: center;
+                }
+                pick-search := TextInput {
+                    x: 40px;
+                    width: parent.width - 52px;
+                    height: parent.height;
+                    color: Theme.text;
+                    font-size: 14px;
+                    single-line: true;
+                    vertical-alignment: center;
+                    edited => { FolderState.pick-search(self.text); }
+                }
+            }
+            if FolderState.rows.length == 0: Text {
+                y: 280px;
+                width: parent.width;
+                height: 60px;
+                text: "No chats";
+                color: Theme.secondary;
+                font-size: 14px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            ListView {
+                x: 0px;
+                y: 280px;
+                width: parent.width;
+                height: parent.height - 280px - 68px;
+                for c in FolderState.rows: Rectangle {
+                    height: 52px;
+                    background: row-ta.has-hover ? Theme.selected : transparent;
+                    Avatar {
+                        x: 16px;
+                        y: (parent.height - self.height) / 2;
+                        size: 36px;
+                        has-image: false;
+                        initials: c.initials;
+                        tint: c.tint;
+                    }
+                    VerticalLayout {
+                        x: 64px;
+                        width: parent.width - 64px - 60px;
+                        alignment: center;
+                        Text {
+                            text: c.name;
+                            color: Theme.text;
+                            font-size: 15px;
+                            overflow: elide;
+                        }
+                        if c.group: Text {
+                            text: "Group";
+                            color: Theme.secondary;
+                            font-size: 12px;
+                        }
+                    }
+                    Rectangle {
+                        x: parent.width - 40px;
+                        y: (parent.height - self.height) / 2;
+                        width: 22px;
+                        height: 22px;
+                        border-radius: 11px;
+                        border-width: 2px;
+                        border-color: c.selected ? Theme.accent : Theme.secondary;
+                        background: c.selected ? Theme.accent : transparent;
+                        if c.selected: IconCheck {
+                            x: 1px;
+                            y: 1px;
+                            size: 16px;
+                            color: #111b21;
+                        }
+                    }
+                    row-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { FolderState.toggle-pick(c.key); }
+                    }
+                }
+            }
+            Rectangle {
+                y: parent.height - 68px;
+                height: 68px;
+                background: Theme.panel;
+                Rectangle {
+                    height: 1px;
+                    background: Theme.divider;
+                }
+                Text {
+                    x: 20px;
+                    width: parent.width - 240px;
+                    text: FolderState.picked == 1 ? "1 chat selected" : FolderState.picked + " chats selected";
+                    color: Theme.secondary;
+                    font-size: 13px;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+                HorizontalLayout {
+                    x: parent.width - 232px;
+                    width: 220px;
+                    alignment: end;
+                    spacing: 8px;
+                    padding-top: 16px;
+                    padding-bottom: 16px;
+                    Button {
+                        text: "Cancel";
+                        clicked => { FolderState.cancel(); }
+                    }
+                    Button {
+                        text: FolderState.form-action;
+                        primary: true;
+                        clicked => { FolderState.save(); }
+                    }
+                }
+            }
+        }
+
+        // ---- 2: delete confirmation ----
+        if FolderState.dialog == 2: Rectangle {
+            width: min(400px, parent.width - 32px);
+            height: del-body.preferred-height + 40px;
+            background: Theme.panel;
+            border-radius: 12px;
+
+            del-body := VerticalLayout {
+                padding: 20px;
+                spacing: 14px;
+                Text {
+                    text: "Delete folder " + FolderState.delete-name + "?";
+                    color: Theme.text;
+                    font-size: 18px;
+                    font-weight: 600;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "The chats stay in your chat list; only the folder is removed.";
+                    color: Theme.secondary;
+                    font-size: 14px;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 10px;
+                    Button {
+                        text: "Cancel";
+                        clicked => { FolderState.cancel(); }
+                    }
+                    Button {
+                        text: "Delete";
+                        primary: true;
+                        clicked => { FolderState.confirm-delete(); }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,149 @@
+import { Button, TextEdit } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+// One member whose change was refused, shown in the failure dialog.
+export struct MemberFailure {
+    name: string,
+    error: string,
+}
+
+// Group administration state shared by the info panel and its dialogs.
+// Permissions and settings come with the panel's model; this global holds what
+// the user is doing right now. Driven from Rust (app/group_admin_ui.rs).
+export global GroupAdmin {
+    // Modal dialog: 0 none, 1 description editor, 2 remove a member,
+    // 3 exit the group, 4 reset the invite link, 5 failed member changes.
+    in-out property <int> dialog;
+    // Sub-view of the panel: 0 none, 1 invite link, 2 group settings.
+    in-out property <int> view;
+    // The group name in the panel header is being edited.
+    in-out property <bool> editing-name;
+    in-out property <string> name-draft;
+    in-out property <string> description-draft;
+    // Member a confirm dialog is about.
+    in-out property <string> target-jid;
+    in-out property <string> target-name;
+    in-out property <string> group-name;
+    in property <string> invite-link;
+    in property <bool> invite-loading;
+    in property <string> failures-title;
+    in property <[MemberFailure]> failures;
+    // At least one failure can be answered with an invite link.
+    in property <bool> failures-invite;
+
+    callback save-name(string);
+    callback save-description(string);
+    callback change-photo();
+    callback remove-photo();
+    callback add-members();
+    // 0 make admin, 1 dismiss as admin.
+    callback member-role(string, int);
+    callback remove-member(string);
+    callback open-invite();
+    callback copy-invite();
+    callback reset-invite();
+    // 0 only admins send, 1 only admins edit info, 2 approve new members.
+    callback set-setting(int, bool);
+    callback leave();
+    callback send-invites();
+    callback close-view();
+}
+
+// Modal confirmation and form dialogs of group administration. Covers its parent.
+export component GroupDialogs inherits Rectangle {
+    background: #000000b0;
+    TouchArea { }
+
+    function close() { GroupAdmin.dialog = 0; }
+
+    Rectangle {
+        width: min(400px, parent.width - 32px);
+        height: body.preferred-height + 40px;
+        background: Theme.panel;
+        border-radius: 12px;
+
+        body := VerticalLayout {
+            padding: 20px;
+            spacing: 14px;
+            Text {
+                text: GroupAdmin.dialog == 1 ? "Group description"
+                    : GroupAdmin.dialog == 2 ? "Remove " + GroupAdmin.target-name + "?"
+                    : GroupAdmin.dialog == 3 ? "Exit \"" + GroupAdmin.group-name + "\"?"
+                    : GroupAdmin.dialog == 4 ? "Reset this link?"
+                    : GroupAdmin.failures-title;
+                color: Theme.text;
+                font-size: 18px;
+                font-weight: 600;
+                wrap: word-wrap;
+            }
+            if GroupAdmin.dialog == 1: Rectangle {
+                height: 140px;
+                TextEdit {
+                    width: parent.width;
+                    height: parent.height;
+                    wrap: word-wrap;
+                    text <=> GroupAdmin.description-draft;
+                    init => { self.focus(); }
+                }
+            }
+            if GroupAdmin.dialog == 2: Text {
+                text: GroupAdmin.target-name + " will be removed from this group.";
+                color: Theme.secondary;
+                font-size: 14px;
+                wrap: word-wrap;
+            }
+            if GroupAdmin.dialog == 3: Text {
+                text: "You will stop receiving messages from this group. The chat stays on this device.";
+                color: Theme.secondary;
+                font-size: 14px;
+                wrap: word-wrap;
+            }
+            if GroupAdmin.dialog == 4: Text {
+                text: "The current link will stop working.";
+                color: Theme.secondary;
+                font-size: 14px;
+                wrap: word-wrap;
+            }
+            if GroupAdmin.dialog == 5: VerticalLayout {
+                spacing: 8px;
+                for f in GroupAdmin.failures: Text {
+                    text: f.name + " — " + f.error;
+                    color: Theme.text;
+                    font-size: 14px;
+                    wrap: word-wrap;
+                }
+            }
+            HorizontalLayout {
+                alignment: end;
+                spacing: 10px;
+                Button {
+                    text: GroupAdmin.dialog == 5 ? "Close" : "Cancel";
+                    clicked => { close(); }
+                }
+                if GroupAdmin.dialog == 5 && GroupAdmin.failures-invite: Button {
+                    text: "Send invite link";
+                    primary: true;
+                    clicked => { GroupAdmin.send-invites(); }
+                }
+                if GroupAdmin.dialog != 5: Button {
+                    text: GroupAdmin.dialog == 1 ? "Save"
+                        : GroupAdmin.dialog == 2 ? "Remove"
+                        : GroupAdmin.dialog == 3 ? "Exit group" : "Reset link";
+                    primary: true;
+                    clicked => {
+                        // Rust closes the dialog (a rejected description keeps it open).
+                        if (GroupAdmin.dialog == 1) {
+                            GroupAdmin.save-description(GroupAdmin.description-draft);
+                        } else if (GroupAdmin.dialog == 2) {
+                            GroupAdmin.remove-member(GroupAdmin.target-jid);
+                        } else if (GroupAdmin.dialog == 3) {
+                            GroupAdmin.leave();
+                        } else {
+                            GroupAdmin.reset-invite();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

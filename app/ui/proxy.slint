@@ -1,0 +1,379 @@
+import { Theme } from "theme.slint";
+
+// Settings › Network › Proxy. The form fields live here so Rust can fill them
+// (loading, pasted links) and read them back (save, test).
+export global ProxyState {
+    in-out property <bool> enabled;
+    // 0 SOCKS5, 1 HTTP.
+    in-out property <int> kind;
+    in-out property <string> host;
+    in-out property <string> port;
+    in-out property <string> username;
+    in-out property <string> password;
+    in-out property <bool> show-password;
+    // Result of the last "Test connection", and whether it succeeded.
+    in property <string> status;
+    in property <bool> status-ok;
+    in property <bool> testing;
+    // Validation / save problem, shown in red under the form.
+    in property <string> error;
+    in property <string> notice;
+    in property <bool> needs-restart;
+    // The saved proxy cannot be used, so nothing connected (see ProxyBlockedView).
+    in-out property <bool> blocked;
+    in property <string> blocked-reason;
+    callback connect-direct();
+    callback save();
+    callback cancel();
+    callback test();
+    callback fill-link(string);
+    callback restart();
+}
+
+component ProxyField inherits Rectangle {
+    in property <string> placeholder;
+    in property <bool> masked: false;
+    in-out property <string> text <=> input.text;
+    height: 38px;
+    border-radius: 8px;
+    background: Theme.input-bg;
+    if input.text == "": Text {
+        x: 12px;
+        text: root.placeholder;
+        color: Theme.secondary;
+        font-size: 14px;
+        vertical-alignment: center;
+    }
+    input := TextInput {
+        x: 12px;
+        width: parent.width - 24px;
+        height: parent.height;
+        color: Theme.text;
+        font-size: 14px;
+        single-line: true;
+        input-type: root.masked ? InputType.password : InputType.text;
+        vertical-alignment: center;
+    }
+}
+
+component ProxyButton inherits Rectangle {
+    in property <string> text;
+    in property <color> fill: Theme.input-bg;
+    in property <color> label-color: Theme.text;
+    in property <bool> enabled: true;
+    callback clicked();
+    height: 36px;
+    min-width: 96px;
+    border-radius: 18px;
+    opacity: root.enabled ? 1.0 : 0.5;
+    background: area.pressed ? root.fill.darker(0.2) : (area.has-hover ? root.fill.brighter(0.1) : root.fill);
+    area := TouchArea {
+        mouse-cursor: pointer;
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+    Text {
+        text: root.text;
+        color: root.label-color;
+        font-size: 14px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component ProxyChip inherits Rectangle {
+    in property <string> text;
+    in property <bool> on;
+    callback clicked();
+    height: 34px;
+    min-width: 80px;
+    border-radius: 17px;
+    border-width: 1px;
+    border-color: root.on ? Theme.accent : Theme.divider;
+    background: root.on ? Theme.accent : (area.has-hover ? Theme.selected : transparent);
+    Text {
+        text: root.text;
+        color: root.on ? #111b21 : Theme.text;
+        font-size: 13px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    area := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component ProxyNote inherits HorizontalLayout {
+    in property <string> text;
+    in property <color> color: Theme.secondary;
+    padding-left: 24px;
+    padding-right: 24px;
+    Text {
+        text: root.text;
+        color: root.color;
+        font-size: 13px;
+        wrap: word-wrap;
+    }
+}
+
+export component ProxySection inherits VerticalLayout {
+    alignment: start;
+    spacing: 8px;
+
+    Rectangle {
+        height: 28px;
+        Text {
+            x: 24px;
+            width: parent.width - 48px;
+            text: "Proxy";
+            color: Theme.accent;
+            font-size: 13px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+    }
+    ProxyNote {
+        text: "Send all WhatsApp traffic of every profile through a SOCKS5 or HTTP proxy. Changes apply after WaClient restarts.";
+    }
+    Rectangle {
+        height: 44px;
+        background: use-ta.has-hover ? Theme.hover : transparent;
+        use-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { ProxyState.enabled = !ProxyState.enabled; }
+        }
+        HorizontalLayout {
+            padding-left: 24px;
+            padding-right: 24px;
+            spacing: 12px;
+            Text {
+                text: "Use proxy";
+                color: Theme.text;
+                font-size: 15px;
+                vertical-alignment: center;
+            }
+            Rectangle { }
+            Rectangle {
+                width: 40px;
+                height: 22px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 11px;
+                background: ProxyState.enabled ? Theme.accent : Theme.input-bg;
+                Rectangle {
+                    x: ProxyState.enabled ? parent.width - self.width - 3px : 3px;
+                    width: 16px;
+                    height: 16px;
+                    border-radius: 8px;
+                    background: white;
+                    animate x { duration: 120ms; }
+                }
+            }
+        }
+    }
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        spacing: 8px;
+        alignment: start;
+        ProxyChip {
+            text: "SOCKS5";
+            on: ProxyState.kind == 0;
+            clicked => { ProxyState.kind = 0; }
+        }
+        ProxyChip {
+            text: "HTTP";
+            on: ProxyState.kind == 1;
+            clicked => { ProxyState.kind = 1; }
+        }
+    }
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        spacing: 8px;
+        alignment: start;
+        ProxyField {
+            width: 230px;
+            placeholder: "Host (e.g. 127.0.0.1)";
+            text <=> ProxyState.host;
+        }
+        ProxyField {
+            width: 82px;
+            placeholder: "Port";
+            text <=> ProxyState.port;
+        }
+    }
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        alignment: start;
+        ProxyField {
+            width: 320px;
+            placeholder: "Username (optional)";
+            text <=> ProxyState.username;
+        }
+    }
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        spacing: 8px;
+        alignment: start;
+        ProxyField {
+            width: 230px;
+            placeholder: "Password (optional)";
+            masked: !ProxyState.show-password;
+            text <=> ProxyState.password;
+        }
+        ProxyButton {
+            min-width: 82px;
+            text: ProxyState.show-password ? "Hide" : "Show";
+            clicked => { ProxyState.show-password = !ProxyState.show-password; }
+        }
+    }
+    ProxyNote {
+        text: "Paste a link such as socks5://user:pass@host:1080, http://host:8080 or a Telegram proxy link (tg://socks?server=\u{2026}) to fill the fields.";
+    }
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        spacing: 8px;
+        alignment: start;
+        link := ProxyField {
+            width: 230px;
+            placeholder: "Proxy link";
+        }
+        ProxyButton {
+            min-width: 82px;
+            text: "Fill";
+            clicked => {
+                ProxyState.fill-link(link.text);
+                link.text = "";
+            }
+        }
+    }
+    if ProxyState.error != "": ProxyNote {
+        text: ProxyState.error;
+        color: Theme.danger;
+    }
+    if ProxyState.notice != "": ProxyNote {
+        text: ProxyState.notice;
+        color: Theme.accent;
+    }
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        spacing: 8px;
+        alignment: start;
+        ProxyButton {
+            text: ProxyState.testing ? "Testing\u{2026}" : "Test connection";
+            enabled: !ProxyState.testing;
+            min-width: 140px;
+            clicked => { ProxyState.test(); }
+        }
+        ProxyButton {
+            text: "Save";
+            fill: Theme.accent;
+            label-color: #111b21;
+            clicked => { ProxyState.save(); }
+        }
+        ProxyButton {
+            text: "Cancel";
+            clicked => { ProxyState.cancel(); }
+        }
+    }
+    if ProxyState.status != "": ProxyNote {
+        text: ProxyState.status;
+        color: ProxyState.status-ok ? Theme.accent : Theme.danger;
+    }
+    if ProxyState.needs-restart: VerticalLayout {
+        spacing: 8px;
+        ProxyNote {
+            text: "Restart WaClient to apply the proxy.";
+            color: Theme.text;
+        }
+        HorizontalLayout {
+            padding-left: 24px;
+            padding-right: 24px;
+            alignment: start;
+            ProxyButton {
+                text: "Restart now";
+                fill: Theme.accent;
+                label-color: #111b21;
+                clicked => { ProxyState.restart(); }
+            }
+        }
+    }
+}
+
+// Shown over the content while the engines are held back because the proxy
+// settings are unusable: connecting directly would expose the user's IP.
+export component ProxyBlockedView inherits Rectangle {
+    private property <bool> form-open;
+    background: Theme.bg;
+
+    TouchArea { }
+
+    if !root.form-open: VerticalLayout {
+        alignment: center;
+        spacing: 16px;
+        padding: 32px;
+        Text {
+            text: "Proxy settings couldn't be read. WaClient didn't connect, so your IP isn't exposed.";
+            color: Theme.text;
+            font-size: 20px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        Text {
+            text: ProxyState.blocked-reason;
+            color: Theme.secondary;
+            font-size: 14px;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: center;
+            spacing: 12px;
+            ProxyButton {
+                text: "Open proxy settings";
+                fill: Theme.accent;
+                label-color: #111b21;
+                min-width: 190px;
+                clicked => { root.form-open = true; }
+            }
+            ProxyButton {
+                text: "Connect without proxy";
+                min-width: 190px;
+                clicked => { ProxyState.connect-direct(); }
+            }
+        }
+        Text {
+            text: "Connecting without a proxy shows your real IP address to WhatsApp. It applies to this run only: proxy.json is not changed.";
+            color: Theme.secondary;
+            font-size: 13px;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+    if root.form-open: VerticalLayout {
+        padding-top: 16px;
+        spacing: 8px;
+        HorizontalLayout {
+            padding-left: 24px;
+            alignment: start;
+            ProxyButton {
+                text: "Back";
+                clicked => { root.form-open = false; }
+            }
+        }
+        Flickable {
+            content-height: sec.preferred-height;
+            sec := ProxySection {
+                width: parent.width;
+            }
+        }
+    }
+}

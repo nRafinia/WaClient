@@ -1,0 +1,527 @@
+import { Spinner } from "std-widgets.slint";
+import { PopupState, Theme, Avatar } from "theme.slint";
+import { IconPlay } from "icons.slint";
+import { MenuRow } from "msg_menu.slint";
+import { StatusPost } from "status_post.slint";
+
+// One contact's statuses. index -1 is "My status" in `open`.
+export struct StatusEntry {
+    name: string,
+    initials: string,
+    color: color,
+    count: int,
+    all-viewed: bool,
+    time: string,
+    preview: string,
+}
+
+// kind: 0 text, 1 image, 2 video, 3 other.
+export struct StatusSlideItem {
+    kind: int,
+    text: string,
+    bg: color,
+    // Empty is the default font.
+    font-family: string,
+    thumb: image,
+    has-thumb: bool,
+    full: image,
+    has-full: bool,
+    // The download or decode failed: show "Couldn't load" and Retry.
+    failed: bool,
+    downloading: bool,
+    has-local: bool,
+    time: string,
+}
+
+component StatusRow inherits Rectangle {
+    in property <StatusEntry> e;
+    callback clicked();
+
+    height: 72px;
+    background: ta.has-hover ? Theme.hover : transparent;
+
+    ta := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 14px;
+        alignment: start;
+
+        Rectangle {
+            width: 54px;
+            height: 54px;
+            y: (root.height - self.height) / 2;
+            border-radius: 27px;
+            border-width: 3px;
+            border-color: root.e.all-viewed ? Theme.secondary : Theme.accent;
+
+            Avatar {
+                x: 5px;
+                y: 5px;
+                size: 44px;
+                initials: root.e.initials;
+                tint: root.e.color;
+                has-image: false;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 3px;
+
+            Text {
+                text: root.e.name;
+                color: Theme.text;
+                font-size: 16px;
+                overflow: elide;
+            }
+
+            Text {
+                text: root.e.count > 1 ? "\{root.e.count} updates · \{root.e.time}" : root.e.time;
+                color: Theme.secondary;
+                font-size: 13px;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+export component StatusListPanel inherits Rectangle {
+    in property <[StatusEntry]> entries;
+    in property <StatusEntry> mine;
+    in property <bool> has-mine;
+    callback open(int);
+
+    background: Theme.bg;
+
+    VerticalLayout {
+        alignment: start;
+
+        // New status: a text status, or a photo / video from a file.
+        Rectangle {
+            height: 56px;
+            background: new-ta.has-hover ? Theme.hover : transparent;
+            Rectangle {
+                x: 16px;
+                y: (parent.height - self.height) / 2;
+                width: 40px;
+                height: 40px;
+                border-radius: 20px;
+                background: Theme.accent;
+                Path {
+                    x: 11px;
+                    y: 11px;
+                    width: 18px;
+                    height: 18px;
+                    viewbox-width: 18;
+                    viewbox-height: 18;
+                    commands: "M 9 1 L 9 17 M 1 9 L 17 9";
+                    stroke: #111b21;
+                    stroke-width: 2px;
+                    stroke-line-cap: round;
+                    fill: transparent;
+                }
+            }
+            Text {
+                x: 70px;
+                text: "New status";
+                color: Theme.text;
+                font-size: 16px;
+                vertical-alignment: center;
+            }
+            new-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { new-menu.show(); }
+            }
+            property <bool> new-menu-shown: new-menu.is-open;
+            changed new-menu-shown => { PopupState.open = max(0, PopupState.open + (self.new-menu-shown ? 1 : -1)); }
+            new-menu := PopupWindow {
+                x: 16px;
+                y: parent.height - 6px;
+                width: 220px;
+                height: 12px + 34px * 2;
+                close-policy: close-on-click-outside;
+                Rectangle {
+                    background: Theme.panel;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: Theme.divider;
+                    VerticalLayout {
+                        padding-top: 6px;
+                        padding-bottom: 6px;
+                        MenuRow {
+                            label: "Text status";
+                            clicked => {
+                                StatusPost.open-text();
+                                new-menu.close();
+                            }
+                        }
+                        MenuRow {
+                            label: "Photo or video";
+                            clicked => {
+                                StatusPost.open-media();
+                                new-menu.close();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.has-mine: StatusRow {
+            e: root.mine;
+            clicked => {
+                root.open(-1);
+            }
+        }
+
+        if !root.has-mine: Rectangle {
+            height: 72px;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 14px;
+                alignment: start;
+                Avatar {
+                    size: 54px;
+                    initials: "+";
+                    tint: Theme.input-bg;
+                    has-image: false;
+                    y: 9px;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: "My status";
+                        color: Theme.text;
+                        font-size: 16px;
+                    }
+                    Text {
+                        text: "No updates yet";
+                        color: Theme.secondary;
+                        font-size: 13px;
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 28px;
+            Text {
+                x: 16px;
+                text: "Recent updates";
+                color: Theme.accent;
+                font-size: 13px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+        }
+
+        if root.entries.length == 0: Rectangle {
+            height: 120px;
+            Text {
+                text: "No status updates";
+                color: Theme.secondary;
+                font-size: 14px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        for e[i] in root.entries: StatusRow {
+            e: e;
+            clicked => {
+                root.open(i);
+            }
+        }
+    }
+}
+
+export component StatusViewer inherits Rectangle {
+    // Current slide of the current group, and where we are in the group.
+    in property <StatusSlideItem> slide;
+    in property <int> slide-count;
+    in property <int> current;
+    // 0..1 fill of the current segment; the Rust side updates it (~50ms).
+    in property <float> progress;
+    in property <string> sender-name;
+    in property <string> sender-initials;
+    in property <color> sender-color;
+    in-out property <bool> paused;
+
+    callback next();
+    callback prev();
+    callback close();
+    callback download();
+    callback open-media();
+    callback pause(bool);
+
+    background: #000000;
+
+    // Slide content.
+    Rectangle {
+        background: root.slide.kind == 0 ? root.slide.bg : #000000;
+
+        if root.slide.kind == 0: Text {
+            x: 32px;
+            width: parent.width - 64px;
+            height: parent.height;
+            text: root.slide.text;
+            color: white;
+            font-family: root.slide.font-family;
+            font-size: 32px;
+            font-weight: 600;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        if root.slide.kind == 1 || root.slide.kind == 2: Image {
+            width: parent.width;
+            height: parent.height;
+            source: root.slide.has-full ? root.slide.full : root.slide.thumb;
+            image-fit: contain;
+        }
+
+        if (root.slide.kind == 1 || root.slide.kind == 2) && root.slide.text != "": Rectangle {
+            y: parent.height - 44px;
+            height: 44px;
+            background: #000000a0;
+            Text {
+                x: 16px;
+                width: parent.width - 32px;
+                height: parent.height;
+                text: root.slide.text;
+                color: white;
+                font-size: 14px;
+                overflow: elide;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+        }
+
+        if (root.slide.kind == 1 || root.slide.kind == 2) && root.slide.failed: Text {
+            y: parent.height / 2 - 70px;
+            width: parent.width;
+            text: "Couldn't load";
+            color: white;
+            font-size: 16px;
+            font-weight: 600;
+            horizontal-alignment: center;
+        }
+
+        if root.slide.kind == 3: Text {
+            text: "Unsupported status";
+            color: Theme.secondary;
+            font-size: 16px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        if (root.slide.kind == 1 || root.slide.kind == 2) && root.slide.downloading: Spinner {
+            indeterminate: true;
+            width: 40px;
+            height: 40px;
+        }
+    }
+
+    // Tap left third = previous, otherwise next; press-and-hold pauses.
+    property <bool> holding: false;
+    // Set once a hold has paused playback; the release that follows must not
+    // navigate. Cleared by the next press.
+    property <bool> hold-fired: false;
+    tap := TouchArea {
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.left) {
+                if (e.kind == PointerEventKind.down) {
+                    root.holding = false;
+                    root.hold-fired = false;
+                } else if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) {
+                    if (root.holding) {
+                        root.holding = false;
+                        root.paused = false;
+                        root.pause(false);
+                    }
+                }
+            }
+        }
+        clicked => {
+            if (root.hold-fired) {
+                return;
+            }
+            if (self.mouse-x < self.width * 0.3) {
+                root.prev();
+            } else {
+                root.next();
+            }
+        }
+    }
+
+    // Distinguishes a hold from a tap: 250ms of continuous press is a hold,
+    // after which the release must not navigate.
+    hold-timer := Timer {
+        interval: 250ms;
+        running: tap.pressed;
+        triggered => {
+            if (!root.holding) {
+                root.holding = true;
+                root.hold-fired = true;
+                root.paused = true;
+                root.pause(true);
+            }
+        }
+    }
+
+    // Readability scrim for the header.
+    Rectangle {
+        y: 0px;
+        height: 96px;
+        background: @linear-gradient(180deg, #000000b0 0%, #00000000 100%);
+        visible: root.slide.kind != 0;
+        // Let taps through to the navigation area.
+        TouchArea { enabled: false; }
+    }
+
+    // Progress segments.
+    HorizontalLayout {
+        x: 8px;
+        y: 8px;
+        width: parent.width - 16px;
+        height: 3px;
+        spacing: 4px;
+
+        for i in root.slide-count: Rectangle {
+            height: 3px;
+            border-radius: 1.5px;
+            background: #ffffff55;
+            clip: true;
+
+            Rectangle {
+                x: 0px;
+                height: parent.height;
+                background: white;
+                width: i < root.current ? parent.width
+                    : (i == root.current ? parent.width * clamp(root.progress, 0.0, 1.0) : 0px);
+            }
+        }
+    }
+
+    // Sender line.
+    HorizontalLayout {
+        x: 8px;
+        y: 20px;
+        width: parent.width - 16px;
+        height: 44px;
+        spacing: 10px;
+
+        Avatar {
+            size: 36px;
+            initials: root.sender-initials;
+            tint: root.sender-color;
+            has-image: false;
+            y: 4px;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text {
+                text: root.sender-name;
+                color: white;
+                font-size: 15px;
+                font-weight: 600;
+                overflow: elide;
+            }
+            Text {
+                text: root.slide.time;
+                color: #ffffffcc;
+                font-size: 12px;
+            }
+        }
+
+        Rectangle {
+            width: 36px;
+            height: 36px;
+            y: 4px;
+            border-radius: 18px;
+            background: close-ta.has-hover ? #ffffff30 : transparent;
+
+            Path {
+                x: 12px;
+                y: 12px;
+                width: 12px;
+                height: 12px;
+                viewbox-width: 12;
+                viewbox-height: 12;
+                commands: "M 0 0 L 12 12 M 12 0 L 0 12";
+                stroke: white;
+                stroke-width: 2px;
+            }
+
+            close-ta := TouchArea {
+                clicked => {
+                    root.close();
+                }
+            }
+        }
+    }
+
+    // Video: Slint cannot play it, so "Play" hands it to the external player.
+    if root.slide.kind == 2 && root.slide.has-local: Rectangle {
+        y: parent.height - 100px;
+        x: (parent.width - 160px) / 2;
+        width: 160px;
+        height: 44px;
+        border-radius: 22px;
+        background: play-ta.has-hover ? Theme.accent.darker(0.2) : Theme.accent;
+
+        HorizontalLayout {
+            alignment: center;
+            spacing: 8px;
+            VerticalLayout { alignment: center; IconPlay { size: 14px; color: white; } }
+            Text {
+                text: "Play";
+                color: white;
+                font-size: 15px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+        }
+
+        play-ta := TouchArea {
+            clicked => {
+                root.open-media();
+            }
+        }
+    }
+
+    // Download or decode failed (a download starts by itself on entering).
+    if (root.slide.kind == 1 || root.slide.kind == 2) && root.slide.failed: Rectangle {
+        y: parent.height - 100px;
+        x: (parent.width - 160px) / 2;
+        width: 160px;
+        height: 44px;
+        border-radius: 22px;
+        background: dl-ta.has-hover ? Theme.accent.darker(0.2) : Theme.accent;
+
+        Text {
+            text: "Retry";
+            color: white;
+            font-size: 15px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        dl-ta := TouchArea {
+            clicked => {
+                root.download();
+            }
+        }
+    }
+}

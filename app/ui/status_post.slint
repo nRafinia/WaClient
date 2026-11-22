@@ -1,0 +1,638 @@
+import { Button, ListView, Spinner } from "std-widgets.slint";
+import { Theme, Avatar } from "theme.slint";
+import { PickItem } from "msgops.slint";
+import { IconClose, IconPlay } from "icons.slint";
+
+// State of the "New status" editor and its audience chooser (Rust:
+// app/status_post_ui.rs). The status list opens the editor through the
+// callbacks `open-text` and `open-media`.
+export global StatusPost {
+    in-out property <bool> open;
+    // 0 text status, 1 photo or video.
+    in property <int> mode;
+    in-out property <string> text;
+    in-out property <string> caption;
+    in property <[color]> palette;
+    in property <int> bg-index;
+    in property <string> font-name;
+    in property <string> font-family;
+    // Characters in the text (or caption) and the "12/700" label.
+    in property <int> count;
+    in property <string> counter;
+    in property <bool> over-limit;
+    // Photo or video: file name, a detail line, and a picture when there is one.
+    in property <string> media-name;
+    in property <string> media-detail;
+    in property <image> media-preview;
+    in property <bool> has-preview;
+    in property <string> audience-label;
+    in property <bool> can-post;
+    in property <bool> posting;
+    in property <string> error;
+
+    // Audience chooser: 0 my contacts, 1 my contacts except, 2 only share with.
+    in-out property <bool> picker-open;
+    in property <int> audience-kind;
+    in property <[PickItem]> picker-rows;
+    in property <string> picker-note;
+    in property <bool> picker-can-done;
+
+    callback open-text();
+    callback open-media();
+    callback pick-media();
+    callback text-edited(string);
+    callback cycle-font();
+    callback set-bg(int);
+    callback audience-open();
+    callback picker-kind(int);
+    callback picker-search(string);
+    callback picker-toggle(string);
+    callback picker-done();
+    callback picker-cancel();
+    callback post();
+    callback cancel();
+}
+
+component Radio inherits Rectangle {
+    in property <string> label;
+    in property <string> hint;
+    in property <bool> checked;
+    callback clicked();
+    height: 52px;
+    background: ta.has-hover ? Theme.hover : transparent;
+    Rectangle {
+        x: 20px;
+        y: (parent.height - self.height) / 2;
+        width: 20px;
+        height: 20px;
+        border-radius: 10px;
+        border-width: 2px;
+        border-color: root.checked ? Theme.accent : Theme.secondary;
+        if root.checked: Rectangle {
+            x: 3px;
+            y: 3px;
+            width: 10px;
+            height: 10px;
+            border-radius: 5px;
+            background: Theme.accent;
+        }
+    }
+    Text {
+        x: 54px;
+        y: 8px;
+        width: parent.width - 70px;
+        height: 20px;
+        text: root.label;
+        color: Theme.text;
+        font-size: 15px;
+        overflow: elide;
+    }
+    Text {
+        x: 54px;
+        y: 28px;
+        width: parent.width - 70px;
+        height: 16px;
+        text: root.hint;
+        color: Theme.secondary;
+        font-size: 12px;
+        overflow: elide;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Who sees the status: everyone, everyone but some, or only some. Covers its
+// parent (the editor).
+export component AudiencePicker inherits Rectangle {
+    background: #000000b0;
+    TouchArea { }
+
+    FocusScope {
+        width: parent.width;
+        height: parent.height;
+        init => { self.focus(); }
+        capture-key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                StatusPost.picker-cancel();
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            width: min(420px, parent.width - 32px);
+            height: min(600px, parent.height - 32px);
+            background: Theme.panel;
+            border-radius: 12px;
+            clip: true;
+
+            Text {
+                x: 20px;
+                y: 16px;
+                width: parent.width - 40px;
+                height: 26px;
+                text: "Who can see this status?";
+                color: Theme.text;
+                font-size: 18px;
+                font-weight: 600;
+                overflow: elide;
+            }
+            Rectangle {
+                y: 52px;
+                width: parent.width;
+                height: 156px;
+                Radio {
+                    y: 0px;
+                    label: "My contacts";
+                    hint: "Everyone in your contacts";
+                    checked: StatusPost.audience-kind == 0;
+                    clicked => { StatusPost.picker-kind(0); }
+                }
+                Radio {
+                    y: 52px;
+                    label: "My contacts except...";
+                    hint: "Hide it from the contacts you pick";
+                    checked: StatusPost.audience-kind == 1;
+                    clicked => { StatusPost.picker-kind(1); }
+                }
+                Radio {
+                    y: 104px;
+                    label: "Only share with...";
+                    hint: "Only the contacts you pick";
+                    checked: StatusPost.audience-kind == 2;
+                    clicked => { StatusPost.picker-kind(2); }
+                }
+            }
+            if StatusPost.audience-kind != 0: Rectangle {
+                y: 214px;
+                width: parent.width;
+                height: parent.height - 214px - 68px;
+                Rectangle {
+                    x: 16px;
+                    y: 0px;
+                    width: parent.width - 32px;
+                    height: 38px;
+                    background: Theme.input-bg;
+                    border-radius: 8px;
+                    if search.text == "": Text {
+                        x: 12px;
+                        text: "Search contacts";
+                        color: Theme.secondary;
+                        font-size: 14px;
+                        vertical-alignment: center;
+                    }
+                    search := TextInput {
+                        x: 12px;
+                        y: (parent.height - self.preferred-height) / 2;
+                        width: parent.width - 24px;
+                        color: Theme.text;
+                        font-size: 14px;
+                        single-line: true;
+                        edited => { StatusPost.picker-search(self.text); }
+                    }
+                }
+                ListView {
+                    y: 48px;
+                    width: parent.width;
+                    height: parent.height - 48px;
+                    for c in StatusPost.picker-rows: Rectangle {
+                        height: 52px;
+                        background: row-ta.has-hover ? Theme.selected : transparent;
+                        Avatar {
+                            x: 16px;
+                            y: (parent.height - self.height) / 2;
+                            size: 36px;
+                            source: c.avatar;
+                            has-image: c.has-avatar;
+                            initials: c.initials;
+                            tint: c.tint;
+                        }
+                        Text {
+                            x: 64px;
+                            width: parent.width - 64px - 60px;
+                            text: c.name;
+                            color: Theme.text;
+                            font-size: 15px;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                        Rectangle {
+                            x: parent.width - 40px;
+                            y: (parent.height - self.height) / 2;
+                            width: 22px;
+                            height: 22px;
+                            border-radius: 11px;
+                            border-width: 2px;
+                            border-color: c.selected ? Theme.accent : Theme.secondary;
+                            background: c.selected ? Theme.accent : transparent;
+                            if c.selected: Path {
+                                x: 4px;
+                                y: 5px;
+                                width: 10px;
+                                height: 8px;
+                                viewbox-width: 10;
+                                viewbox-height: 8;
+                                commands: "M 0 4 L 3.5 7.5 L 10 0.5";
+                                stroke: #111b21;
+                                stroke-width: 2px;
+                                fill: transparent;
+                            }
+                        }
+                        row-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { StatusPost.picker-toggle(c.jid); }
+                        }
+                    }
+                }
+                if StatusPost.picker-rows.length == 0: Text {
+                    y: 70px;
+                    width: parent.width;
+                    text: "No contacts found";
+                    color: Theme.secondary;
+                    font-size: 14px;
+                    horizontal-alignment: center;
+                }
+            }
+            Rectangle {
+                y: parent.height - 68px;
+                height: 68px;
+                Rectangle {
+                    height: 1px;
+                    background: Theme.divider;
+                }
+                Text {
+                    x: 20px;
+                    width: parent.width - 220px;
+                    text: StatusPost.picker-note;
+                    color: Theme.secondary;
+                    font-size: 13px;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+                HorizontalLayout {
+                    x: parent.width - 212px;
+                    width: 200px;
+                    alignment: end;
+                    spacing: 8px;
+                    padding-top: 16px;
+                    padding-bottom: 16px;
+                    Button {
+                        text: "Cancel";
+                        clicked => { StatusPost.picker-cancel(); }
+                    }
+                    Button {
+                        text: "Done";
+                        primary: true;
+                        enabled: StatusPost.picker-can-done;
+                        clicked => { StatusPost.picker-done(); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The status editor: a text status written on its colour (what you see is what
+// is posted), or a photo / video with a caption; plus the audience.
+export component StatusPostDialog inherits Rectangle {
+    background: #000000b0;
+    TouchArea { }
+
+    // The chooser is a sibling of this dialog; it takes the focus while open.
+    property <bool> picker-shown: StatusPost.picker-open;
+    changed picker-shown => {
+        if (!self.picker-shown) {
+            scope.focus();
+        }
+    }
+
+    scope := FocusScope {
+        width: parent.width;
+        height: parent.height;
+        capture-key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                StatusPost.cancel();
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            width: min(460px, parent.width - 32px);
+            height: min(660px, parent.height - 32px);
+            background: Theme.panel;
+            border-radius: 12px;
+            clip: true;
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 10px;
+
+                Rectangle {
+                    height: 28px;
+                    Text {
+                        width: parent.width - 40px;
+                        text: StatusPost.mode == 0 ? "New text status" : "New photo or video status";
+                        color: Theme.text;
+                        font-size: 18px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    Rectangle {
+                        x: parent.width - 28px;
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 14px;
+                        background: close-ta.has-hover ? Theme.selected : transparent;
+                        IconClose {
+                            x: 6px;
+                            y: 6px;
+                            size: 16px;
+                        }
+                        close-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { StatusPost.cancel(); }
+                        }
+                    }
+                }
+
+                // Text status: the editor is the preview.
+                if StatusPost.mode == 0: Rectangle {
+                    vertical-stretch: 1;
+                    min-height: 140px;
+                    border-radius: 10px;
+                    clip: true;
+                    background: StatusPost.palette[StatusPost.bg-index];
+                    if StatusPost.text == "": Text {
+                        x: 24px;
+                        width: parent.width - 48px;
+                        height: parent.height - 48px;
+                        text: "Type a status";
+                        color: #ffffffb0;
+                        font-size: 26px;
+                        font-family: StatusPost.font-family;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    TextInput {
+                        x: 24px;
+                        y: max(12px, (parent.height - 36px - self.preferred-height) / 2);
+                        width: parent.width - 48px;
+                        height: min(self.preferred-height, parent.height - 48px);
+                        text <=> StatusPost.text;
+                        color: white;
+                        font-size: StatusPost.count <= 100 ? 26px : (StatusPost.count <= 260 ? 19px : 14px);
+                        font-family: StatusPost.font-family;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                        single-line: false;
+                        init => { self.focus(); }
+                        edited => { StatusPost.text-edited(self.text); }
+                    }
+                    Rectangle {
+                        x: 10px;
+                        y: parent.height - 34px;
+                        width: font-text.preferred-width + 24px;
+                        height: 26px;
+                        border-radius: 13px;
+                        background: #00000066;
+                        font-text := Text {
+                            text: "Aa  " + StatusPost.font-name;
+                            color: white;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { StatusPost.cycle-font(); }
+                        }
+                    }
+                    Text {
+                        x: parent.width - 110px;
+                        y: parent.height - 34px;
+                        width: 100px;
+                        height: 26px;
+                        text: StatusPost.counter;
+                        color: StatusPost.over-limit ? #ff8a80 : #ffffffc0;
+                        font-size: 12.5px;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                }
+                if StatusPost.mode == 0: Rectangle {
+                    height: 30px;
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 12px;
+                        for col[i] in StatusPost.palette: Rectangle {
+                            width: 28px;
+                            height: 28px;
+                            y: 1px;
+                            border-radius: 14px;
+                            border-width: 3px;
+                            border-color: i == StatusPost.bg-index ? white : transparent;
+                            Rectangle {
+                                x: 3px;
+                                y: 3px;
+                                width: 16px;
+                                height: 16px;
+                                border-radius: 8px;
+                                background: col;
+                            }
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { StatusPost.set-bg(i); }
+                            }
+                        }
+                    }
+                }
+
+                // Photo or video.
+                if StatusPost.mode == 1: Rectangle {
+                    vertical-stretch: 1;
+                    min-height: 140px;
+                    border-radius: 10px;
+                    clip: true;
+                    background: #0b141a;
+                    if StatusPost.has-preview: Image {
+                        width: parent.width;
+                        height: parent.height;
+                        source: StatusPost.media-preview;
+                        image-fit: contain;
+                    }
+                    if !StatusPost.has-preview: Rectangle {
+                        Rectangle {
+                            x: (parent.width - self.width) / 2;
+                            y: parent.height / 2 - 42px;
+                            width: 56px;
+                            height: 56px;
+                            border-radius: 28px;
+                            background: #ffffff22;
+                            IconPlay {
+                                x: 16px;
+                                y: 16px;
+                                size: 24px;
+                            }
+                        }
+                        Text {
+                            y: parent.height / 2 + 28px;
+                            width: parent.width;
+                            text: "Video";
+                            color: Theme.secondary;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                        }
+                    }
+                    Rectangle {
+                        y: parent.height - 40px;
+                        height: 40px;
+                        background: #000000a0;
+                        Text {
+                            x: 12px;
+                            width: parent.width - 120px;
+                            text: StatusPost.media-name + (StatusPost.media-detail != "" ? "  ·  " + StatusPost.media-detail : "");
+                            color: white;
+                            font-size: 12.5px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        Rectangle {
+                            x: parent.width - 104px;
+                            y: 7px;
+                            width: 94px;
+                            height: 26px;
+                            border-radius: 13px;
+                            background: #ffffff30;
+                            Text {
+                                text: "Change...";
+                                color: white;
+                                font-size: 12.5px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { StatusPost.pick-media(); }
+                            }
+                        }
+                    }
+                }
+                if StatusPost.mode == 1: Rectangle {
+                    height: 38px;
+                    background: Theme.input-bg;
+                    border-radius: 8px;
+                    if caption-input.text == "": Text {
+                        x: 12px;
+                        text: "Add a caption";
+                        color: Theme.secondary;
+                        font-size: 14px;
+                        vertical-alignment: center;
+                    }
+                    caption-input := TextInput {
+                        x: 12px;
+                        y: (parent.height - self.preferred-height) / 2;
+                        width: parent.width - 24px - 70px;
+                        color: Theme.text;
+                        font-size: 14px;
+                        single-line: true;
+                        text <=> StatusPost.caption;
+                        edited => { StatusPost.text-edited(self.text); }
+                    }
+                    Text {
+                        x: parent.width - 76px;
+                        width: 66px;
+                        text: StatusPost.counter;
+                        color: StatusPost.over-limit ? Theme.danger : Theme.secondary;
+                        font-size: 12px;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                }
+
+                if StatusPost.mode == 1: Text {
+                    text: "Photos: JPEG, PNG or WebP. Videos: MP4, MOV or 3GP, up to 60 seconds.";
+                    color: Theme.secondary;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+
+                // Audience.
+                Rectangle {
+                    height: 44px;
+                    background: aud-ta.has-hover ? Theme.selected : Theme.input-bg;
+                    border-radius: 8px;
+                    Text {
+                        x: 14px;
+                        text: "Who can see this";
+                        color: Theme.secondary;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        x: 130px;
+                        width: parent.width - 130px - 34px;
+                        text: StatusPost.audience-label;
+                        color: Theme.text;
+                        font-size: 14.5px;
+                        font-weight: 600;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    Path {
+                        x: parent.width - 24px;
+                        y: (parent.height - self.height) / 2;
+                        width: 8px;
+                        height: 12px;
+                        viewbox-width: 8;
+                        viewbox-height: 12;
+                        commands: "M 1.5 1.5 L 6.5 6 L 1.5 10.5";
+                        stroke: Theme.secondary;
+                        stroke-width: 1.6px;
+                        fill: transparent;
+                    }
+                    aud-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { StatusPost.audience-open(); }
+                    }
+                }
+                Text {
+                    text: "Your phone's status privacy setting isn't available here \u{2014} choose who sees this status.";
+                    color: Theme.secondary;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+                if StatusPost.error != "": Text {
+                    text: StatusPost.error;
+                    color: Theme.danger;
+                    font-size: 12.5px;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    height: 36px;
+                    alignment: end;
+                    spacing: 8px;
+                    if StatusPost.posting: Spinner {
+                        width: 24px;
+                        height: 24px;
+                        indeterminate: true;
+                    }
+                    Button {
+                        text: "Cancel";
+                        clicked => { StatusPost.cancel(); }
+                    }
+                    Button {
+                        text: StatusPost.posting ? "Posting..." : "Post";
+                        primary: true;
+                        enabled: StatusPost.can-post;
+                        clicked => { StatusPost.post(); }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,379 @@
+import { Theme } from "theme.slint";
+import { IconLock } from "icons.slint";
+
+// App passcode lock (see app/src/app/lock_ui.rs). The Rust side owns every
+// decision; this file only shows the state and forwards the clicks.
+export global LockState {
+    // The lock screen covers the whole window.
+    in property <bool> locked;
+    in property <bool> has-passcode;
+    // 0 off, 1 one minute, 2 five minutes, 3 one hour, 4 five hours.
+    in property <int> auto-lock;
+    in property <bool> lock-on-tray;
+    // Lock screen: the last failure, and whether the back-off is running.
+    in property <string> error;
+    in property <bool> blocked;
+    // The lock file is damaged: the screen stays up with a message and no way
+    // to unlock (deleting the file is the documented reset).
+    in property <bool> damaged;
+    // The passcode is being checked on a worker thread.
+    in property <bool> verifying;
+    // Settings form: 0 closed, 1 set, 2 change, 3 turn off.
+    in-out property <int> form-mode;
+    in property <string> form-error;
+    in property <string> status;
+    callback unlock(string);
+    callback lock-now();
+    // (current, new, confirm)
+    callback save-passcode(string, string, string);
+    callback turn-off(string);
+    callback set-auto-lock(int);
+    callback set-lock-on-tray(bool);
+}
+
+// Opaque cover for the whole window, above dialogs, banners and call banners.
+export component LockScreen inherits Rectangle {
+    background: Theme.bg;
+
+    // Swallows the mouse so nothing underneath can be reached.
+    TouchArea {
+        clicked => { input.focus(); }
+    }
+
+    FocusScope {
+        width: parent.width;
+        height: parent.height;
+        init => { input.focus(); }
+        // Esc does nothing here and Tab must not leave the field.
+        capture-key-pressed(e) => {
+            if (e.text == Key.Escape || e.text == Key.Tab || e.text == Key.Backtab) {
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 14px;
+            padding: 24px;
+
+            HorizontalLayout {
+                alignment: center;
+                IconLock {
+                    size: 56px;
+                    color: Theme.accent;
+                }
+            }
+            Text {
+                text: "WaClient";
+                color: Theme.text;
+                font-size: 26px;
+                font-weight: 600;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: LockState.damaged ? "" : "Enter your passcode to unlock";
+                color: Theme.secondary;
+                font-size: 14px;
+                horizontal-alignment: center;
+            }
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    visible: !LockState.damaged;
+                    width: min(300px, root.width - 48px);
+                    height: LockState.damaged ? 0px : 44px;
+                    border-radius: 8px;
+                    background: Theme.input-bg;
+                    border-width: 1px;
+                    border-color: LockState.error != "" ? Theme.danger : transparent;
+                    input := TextInput {
+                        x: 14px;
+                        width: parent.width - 28px;
+                        height: parent.height;
+                        color: Theme.text;
+                        font-size: 16px;
+                        single-line: true;
+                        input-type: password;
+                        vertical-alignment: center;
+                        enabled: !LockState.damaged && !LockState.verifying;
+                        accepted => {
+                            if (!LockState.verifying) {
+                                LockState.unlock(self.text);
+                                self.text = "";
+                            }
+                        }
+                    }
+                }
+            }
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    visible: !LockState.damaged;
+                    width: min(300px, root.width - 48px);
+                    height: LockState.damaged ? 0px : 40px;
+                    border-radius: 20px;
+                    opacity: LockState.blocked || LockState.verifying ? 0.5 : 1.0;
+                    background: unlock-ta.pressed ? Theme.accent.darker(0.2) : (unlock-ta.has-hover ? Theme.accent.brighter(0.1) : Theme.accent);
+                    Text {
+                        text: LockState.verifying ? "Checking…" : "Unlock";
+                        color: #111b21;
+                        font-size: 15px;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    unlock-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        enabled: !LockState.blocked && !LockState.verifying && !LockState.damaged;
+                        clicked => {
+                            LockState.unlock(input.text);
+                            input.text = "";
+                            input.focus();
+                        }
+                    }
+                }
+            }
+            Text {
+                text: LockState.error;
+                color: Theme.danger;
+                font-size: 14px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+component LockField inherits Rectangle {
+    in property <string> placeholder;
+    out property <string> text: input.text;
+    border-radius: 8px;
+    background: Theme.input-bg;
+    if input.text == "": Text {
+        x: 12px;
+        text: root.placeholder;
+        color: Theme.secondary;
+        font-size: 14px;
+        vertical-alignment: center;
+    }
+    input := TextInput {
+        x: 12px;
+        width: parent.width - 24px;
+        height: parent.height;
+        color: Theme.text;
+        font-size: 14px;
+        single-line: true;
+        input-type: password;
+        vertical-alignment: center;
+    }
+}
+
+component LockButton inherits Rectangle {
+    in property <string> text;
+    in property <color> fill: Theme.input-bg;
+    in property <color> label-color: Theme.text;
+    callback clicked();
+    height: 36px;
+    min-width: 96px;
+    border-radius: 18px;
+    background: area.pressed ? root.fill.darker(0.2) : (area.has-hover ? root.fill.brighter(0.1) : root.fill);
+    area := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    Text {
+        text: root.text;
+        color: root.label-color;
+        font-size: 14px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// Settings › Privacy › App lock.
+export component AppLockSection inherits VerticalLayout {
+    alignment: start;
+    spacing: 8px;
+
+    Rectangle {
+        height: 28px;
+        Text {
+            x: 24px;
+            width: parent.width - 48px;
+            text: "App lock";
+            color: Theme.accent;
+            font-size: 13px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+    }
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        Text {
+            text: LockState.has-passcode
+                ? "WaClient asks for the passcode when it starts, after the idle time below and when you press Ctrl+L. Messages keep arriving while it is locked."
+                : "Hide your chats behind a passcode (4 to 32 characters). This is a screen lock only: it does not encrypt anything.";
+            color: Theme.secondary;
+            font-size: 13px;
+            wrap: word-wrap;
+        }
+    }
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        spacing: 8px;
+        alignment: start;
+        if !LockState.has-passcode: LockButton {
+            text: "Set passcode\u{2026}";
+            clicked => {
+                LockState.status = "";
+                LockState.form-mode = 1;
+            }
+        }
+        if LockState.has-passcode: LockButton {
+            text: "Change passcode\u{2026}";
+            clicked => { LockState.form-mode = 2; }
+        }
+        if LockState.has-passcode: LockButton {
+            text: "Turn off\u{2026}";
+            clicked => { LockState.form-mode = 3; }
+        }
+        Rectangle { }
+    }
+    if LockState.form-mode != 0: VerticalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        spacing: 8px;
+        current := LockField {
+            max-width: 320px;
+            visible: LockState.form-mode >= 2;
+            height: self.visible ? 38px : 0px;
+            placeholder: "Current passcode";
+        }
+        new-code := LockField {
+            max-width: 320px;
+            visible: LockState.form-mode <= 2;
+            height: self.visible ? 38px : 0px;
+            placeholder: "New passcode";
+        }
+        confirm := LockField {
+            max-width: 320px;
+            visible: LockState.form-mode <= 2;
+            height: self.visible ? 38px : 0px;
+            placeholder: "Repeat the new passcode";
+        }
+        if LockState.form-error != "": Text {
+            text: LockState.form-error;
+            color: Theme.danger;
+            font-size: 13px;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            LockButton {
+                text: LockState.form-mode == 3 ? "Turn off" : "Save";
+                fill: LockState.form-mode == 3 ? Theme.danger : Theme.accent;
+                label-color: LockState.form-mode == 3 ? white : #111b21;
+                clicked => {
+                    if (LockState.form-mode == 3) {
+                        LockState.turn-off(current.text);
+                    } else {
+                        LockState.save-passcode(LockState.form-mode == 2 ? current.text : "", new-code.text, confirm.text);
+                    }
+                }
+            }
+            LockButton {
+                text: "Cancel";
+                clicked => { LockState.form-mode = 0; }
+            }
+        }
+    }
+    if LockState.status != "": HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        Text {
+            text: LockState.status;
+            color: Theme.accent;
+            font-size: 13px;
+        }
+    }
+    if LockState.has-passcode: VerticalLayout {
+        spacing: 8px;
+        HorizontalLayout {
+            padding-left: 24px;
+            padding-right: 24px;
+            Text {
+                text: "Auto-lock after no keyboard or mouse use in WaClient";
+                color: Theme.text;
+                font-size: 15px;
+                wrap: word-wrap;
+            }
+        }
+        HorizontalLayout {
+            padding-left: 24px;
+            padding-right: 24px;
+            spacing: 8px;
+            alignment: start;
+            for label[i] in ["Off", "1 min", "5 min", "1 hour", "5 hours"]: Rectangle {
+                property <bool> on: i == LockState.auto-lock;
+                height: 34px;
+                min-width: 70px;
+                border-radius: 17px;
+                border-width: 1px;
+                border-color: self.on ? Theme.accent : Theme.divider;
+                background: self.on ? Theme.accent : (chip-ta.has-hover ? Theme.selected : transparent);
+                Text {
+                    text: label;
+                    color: parent.on ? #111b21 : Theme.text;
+                    font-size: 13px;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                chip-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { LockState.set-auto-lock(i); }
+                }
+            }
+        }
+        Rectangle {
+            height: 44px;
+            background: tray-ta.has-hover ? Theme.hover : transparent;
+            tray-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { LockState.set-lock-on-tray(!LockState.lock-on-tray); }
+            }
+            HorizontalLayout {
+                padding-left: 24px;
+                padding-right: 24px;
+                spacing: 12px;
+                Text {
+                    text: "Lock when minimised to tray";
+                    color: Theme.text;
+                    font-size: 15px;
+                    vertical-alignment: center;
+                }
+                Rectangle { }
+                Rectangle {
+                    width: 40px;
+                    height: 22px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: 11px;
+                    background: LockState.lock-on-tray ? Theme.accent : Theme.input-bg;
+                    Rectangle {
+                        x: LockState.lock-on-tray ? parent.width - self.width - 3px : 3px;
+                        width: 16px;
+                        height: 16px;
+                        border-radius: 8px;
+                        background: white;
+                        animate x { duration: 120ms; }
+                    }
+                }
+            }
+        }
+    }
+}

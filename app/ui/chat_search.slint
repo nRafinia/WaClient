@@ -1,0 +1,202 @@
+import { Theme } from "theme.slint";
+import { ListView } from "std-widgets.slint";
+import { IconArrowUp, IconArrowDown, IconClose } from "icons.slint";
+
+// One row of the optional result list. The snippet is pre-split by the glue
+// code so the match can be drawn in a different colour.
+export struct SearchResultItem {
+    id: string,
+    date: string,
+    sender: string,
+    before: string,
+    matched: string,
+    after: string,
+}
+
+// Slides in under the chat header. `current` is 1-based, 0 when there is no
+// result. Esc closes, Enter = next, Shift+Enter = previous.
+export component ChatSearchBar inherits Rectangle {
+    in property <bool> open: false;
+    in property <int> current;
+    in property <int> total;
+    in property <bool> searching: false;
+    in-out property <string> query;
+
+    callback search(string);
+    callback next();
+    callback prev();
+    callback close();
+
+    public function focus-field() {
+        input.focus();
+    }
+
+    height: root.open ? 48px : 0px;
+    background: Theme.panel;
+    clip: true;
+    animate height { duration: 150ms; easing: ease-out; }
+
+    Rectangle {
+        x: 12px;
+        y: 8px;
+        width: parent.width - 24px - 148px;
+        height: 32px;
+        border-radius: 16px;
+        background: Theme.input-bg;
+        clip: true;
+
+        if input.text == "": Text {
+            x: 14px;
+            width: parent.width - 28px;
+            height: parent.height;
+            text: "Search in chat";
+            color: Theme.secondary;
+            font-size: 14px;
+            vertical-alignment: center;
+        }
+        input := TextInput {
+            x: 14px;
+            width: parent.width - 28px;
+            height: parent.height;
+            color: Theme.text;
+            font-size: 14px;
+            vertical-alignment: center;
+            text <=> root.query;
+            edited => { root.search(self.text); }
+            key-pressed(e) => {
+                if (e.text == Key.Escape) {
+                    root.close();
+                    return accept;
+                }
+                if (e.text == Key.Return) {
+                    if (e.modifiers.shift) {
+                        root.prev();
+                    } else {
+                        root.next();
+                    }
+                    return accept;
+                }
+                return reject;
+            }
+        }
+    }
+
+    Text {
+        x: parent.width - 148px;
+        y: 0px;
+        width: 56px;
+        height: parent.height;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        font-size: 13px;
+        color: Theme.secondary;
+        text: root.total > 0 ? root.current + " of " + root.total
+            : (root.query != "" && !root.searching ? "No results" : "");
+        overflow: elide;
+    }
+
+    for i in 3: Rectangle {
+        x: parent.width - 88px + i * 28px;
+        y: 10px;
+        width: 28px;
+        height: 28px;
+        border-radius: 14px;
+        background: ta.has-hover ? Theme.hover : transparent;
+        opacity: (i < 2 && root.total == 0) ? 0.4 : 1.0;
+        if i == 0: IconArrowUp {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            size: 18px;
+        }
+        if i == 1: IconArrowDown {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            size: 18px;
+        }
+        if i == 2: IconClose {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            size: 18px;
+        }
+        ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                if (i == 0) {
+                    root.prev();
+                } else if (i == 1) {
+                    root.next();
+                } else {
+                    root.close();
+                }
+            }
+        }
+    }
+}
+
+// Optional side list of every hit, newest first.
+export component SearchResultList inherits Rectangle {
+    in property <[SearchResultItem]> results;
+    in property <int> selected: -1;
+
+    callback picked(string);
+
+    background: Theme.bg;
+
+    ListView {
+        for r[i] in root.results: Rectangle {
+            height: 64px;
+            background: i == root.selected ? Theme.selected : (row-ta.has-hover ? Theme.hover : transparent);
+
+            Text {
+                x: 16px;
+                y: 8px;
+                width: parent.width - 32px - 90px;
+                text: r.sender;
+                color: Theme.text;
+                font-size: 14px;
+                overflow: elide;
+            }
+            Text {
+                x: parent.width - 16px - 90px;
+                y: 9px;
+                width: 90px;
+                text: r.date;
+                color: Theme.secondary;
+                font-size: 12px;
+                horizontal-alignment: right;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                x: 16px;
+                y: 32px;
+                width: parent.width - 32px;
+                height: 24px;
+                alignment: start;
+                Text {
+                    text: r.before;
+                    color: Theme.secondary;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: r.matched;
+                    color: Theme.accent;
+                    font-size: 13px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: r.after;
+                    color: Theme.secondary;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+            row-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.picked(r.id); }
+            }
+        }
+    }
+}

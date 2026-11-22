@@ -1,0 +1,786 @@
+import { Palette, Button } from "std-widgets.slint";
+import { PopupState, Theme, ChatItem, ProfileItem } from "theme.slint";
+import { MsgItem, ReactionConfig, ContactEntry, PhoneLinks } from "msg.slint";
+import { PollOptionItem, PollActions } from "poll_bubble.slint";
+import { PollState, PollField, CreatePollDialog } from "poll_create.slint";
+import { ReactionChipItem } from "reactions.slint";
+import { EmojiRow, EmojiTab } from "emoji_picker.slint";
+import { AccountState, ChatActions, ChatConfirmDialog, ContactRowItem } from "account.slint";
+import { SettingsPage, SettingsModel, StorageState, StorageFolder, MovingWindow } from "settings.slint";
+import { StatusEntry, StatusSlideItem, StatusViewer } from "status_view.slint";
+import { StatusPost, StatusPostDialog, AudiencePicker } from "status_post.slint";
+import { LocationState, SendLocationDialog } from "send_location.slint";
+import { LocationActions } from "location_card.slint";
+import { ProfileRail, ProfileDialog } from "profile_rail.slint";
+import { IconClose } from "icons.slint";
+import { LoginView } from "login.slint";
+import { ChatList } from "chat_list.slint";
+import { ChatView, MentionItem, Mentions, AttachActions } from "chat_view.slint";
+import { Toast } from "msg_menu.slint";
+import { MsgOps, PickItem, ReceiptRow, StarredRow } from "msgops.slint";
+import { MessageInfoPanel } from "message_info.slint";
+import { StarredPanel } from "starred.slint";
+import { AttachItem, AttachPreview, AttachOptions, DropOverlay } from "attach_preview.slint";
+import { ShareState, ShareRow, SharePicker } from "share_contact.slint";
+import { TimerState, TimerOption, TimerDialog } from "timer_dialog.slint";
+import { ContactInfoPanel, ContactInfoModel, GroupMemberItem, GalleryThumb, GalleryDoc, GalleryLink, InfoGallery } from "contact_info.slint";
+import { GroupAdmin, GroupDialogs, MemberFailure } from "group_admin.slint";
+import { GroupNew, GroupNewDialogs } from "group_new.slint";
+import { CallState, CallBannerItem, CallBanners } from "call_banner.slint";
+import { LockState, LockScreen } from "lock.slint";
+import { ProxyState, ProxyBlockedView } from "proxy.slint";
+import { FolderState, FolderTab, FolderPickRow, FolderMenuRow, FolderDialogs } from "folders.slint";
+
+export { ProxyState, FolderState, FolderTab, FolderPickRow, FolderMenuRow, CallState, CallBannerItem, GroupAdmin, GroupNew, MemberFailure, LockState, PollActions, PollState, PollField, StatusPost, LocationState, LocationActions, MsgOps, PickItem, ReceiptRow, StarredRow, AccountState, ChatActions, ContactRowItem, StorageState, StorageFolder, MovingWindow, Theme, ChatItem, MsgItem, ProfileItem, ReactionConfig, PollOptionItem, ReactionChipItem, EmojiRow, EmojiTab, SettingsModel, StatusEntry, StatusSlideItem, ContactInfoModel, GroupMemberItem, ContactEntry, GalleryThumb, GalleryDoc, GalleryLink, InfoGallery, AttachItem, AttachOptions, ShareState, ShareRow, TimerState, TimerOption, MentionItem, Mentions, PhoneLinks, AttachActions }
+
+export component MainWindow inherits Window {
+    in property <string> window-title: "WaClient";
+    title: root.window-title;
+    preferred-width: 1200px;
+    preferred-height: 780px;
+    min-width: 800px;
+    min-height: 500px;
+    background: Theme.bg;
+
+    // Login
+    in property <bool> logged-in;
+    in property <image> qr;
+    in property <bool> has-qr;
+    in property <string> login-status;
+    in property <bool> show-retry-qr;
+    in property <string> login-profile;
+
+    // Profile rail
+    in property <[ProfileItem]> profiles;
+    in property <ProfileItem> active-profile;
+    in property <bool> can-add-profile: true;
+    in property <string> add-profile-tip;
+    // 0 none, 1 rename, 2 log out and remove.
+    private property <int> dialog-kind;
+    private property <string> dialog-id;
+    private property <string> dialog-name;
+
+    // Chat list
+    in property <[ChatItem]> chats;
+    in property <string> selected-jid;
+    in property <string> sync-text;
+    in-out property <bool> archived-mode;
+    in property <bool> has-archived;
+    in property <int> archived-unread;
+    // Incognito: no read receipts for chats or statuses (see ChatList).
+    in property <bool> incognito;
+    // Chat read receipts are off for the whole profile.
+    in property <bool> receipts-global-off;
+
+    // Chat view
+    in property <[MsgItem]> messages;
+    in property <bool> has-chat;
+    // The open chat is a blocked contact.
+    in property <bool> chat-blocked;
+    // Non-empty: a group that does not let us send (replaces the composer).
+    in property <string> composer-blocked-text;
+    // The chat view shows an old window while newer messages exist.
+    in property <bool> new-below;
+    in property <string> header-name;
+    in property <string> header-subtitle;
+    in property <bool> header-receipts-off;
+    in property <image> header-avatar;
+    in property <bool> header-has-avatar;
+    in property <string> header-initials;
+    in property <color> header-tint;
+    in property <bool> has-reply;
+    in property <string> reply-sender;
+    in property <string> reply-text;
+
+    // Settings page of the active profile.
+    in-out property <bool> show-settings;
+    in-out property <SettingsModel> settings;
+    in property <string> settings-profile;
+    // Category the settings page opens on (demo aid; 0 = Profile).
+    in property <int> settings-start-category: 0;
+    in property <string> cache-status;
+    in property <bool> enter-sends: true;
+
+    // Status list (tab above the chat list) and viewer.
+    in-out property <bool> status-mode;
+    in property <[StatusEntry]> status-entries;
+    in property <StatusEntry> status-mine;
+    in property <bool> status-has-mine;
+    in property <bool> status-unviewed;
+    in-out property <bool> viewer-open;
+    in property <StatusSlideItem> status-slide;
+    in property <int> status-slide-count;
+    in property <int> status-current;
+    in property <float> status-progress;
+    in property <string> status-sender-name;
+    in property <string> status-sender-initials;
+    in property <color> status-sender-color;
+
+    // Emoji picker and reactions.
+    in property <[EmojiRow]> emoji-rows;
+    in property <[EmojiTab]> emoji-tabs;
+    in property <[string]> emoji-recents;
+
+    // Voice recording
+    in property <bool> recording;
+    // The microphone stopped by itself; the bar waits for Send / Cancel.
+    in property <bool> rec-stopped;
+    in property <string> rec-time;
+    in property <float> rec-level;
+
+    // Contact / group info panel on the right of the chat.
+    in-out property <bool> contact-info-open;
+    in property <ContactInfoModel> contact-info;
+    in property <[GroupMemberItem]> contact-members;
+
+    // In-chat search (see ChatView).
+    in-out property <bool> search-open;
+    in-out property <string> search-query;
+    in property <int> search-current;
+    in property <int> search-total;
+    in property <bool> search-searching;
+    in property <string> highlight-id;
+
+    // Files staged by paste or drag and drop, reviewed before sending.
+    in property <bool> attach-open;
+    in property <[AttachItem]> attach-items;
+    in property <bool> attach-busy;
+    in-out property <string> attach-caption;
+    in property <bool> drop-hover;
+
+    // Short confirmation near the bottom of the chat ("Copied").
+    in property <string> toast-text;
+    in property <string> toast-action;
+
+    // Banner: 0 hidden, 1 error, 2 fatal.
+    in property <int> banner-kind;
+    in property <string> banner-text;
+
+    // Connection strip with a Reconnect button (shown while disconnected).
+    in property <bool> show-reconnect;
+    in property <string> reconnect-text;
+
+    callback search(string);
+    callback chat-selected(string);
+    callback incognito-toggled();
+    // (chat, enabled)
+    callback chat-receipts(string, bool);
+    callback chat-read-now(string);
+    callback send-message(string);
+    callback composing(string);
+    callback attach();
+    callback reply-to(string);
+    callback cancel-reply();
+    // Ctrl+Tab / Alt+Down (true = forward) and Up in an empty composer.
+    callback step-chat(bool);
+    callback step-unread-chat(bool);
+    callback edit-last();
+    // Window-level Esc; true when it closed something.
+    callback escape() -> bool;
+    callback download(string);
+    callback open(string);
+    callback show-in-folder(string);
+    callback save-as(string);
+    callback toast-action-clicked();
+    callback toggle-play(string);
+    callback start-record();
+    callback cancel-record();
+    callback send-record();
+    callback load-older();
+    callback unblock-chat();
+    in property <int> delete-selected-count;
+    callback delete-selected();
+    callback cancel-delete-selected();
+    callback jump-latest();
+    callback dismiss-banner();
+    callback retry-qr();
+    callback reconnect();
+    callback profile-selected(string);
+    callback add-profile();
+    callback rename-profile(string, string);
+    callback remove-profile(string);
+    // (profile id, new position in the rail)
+    callback move-profile(string, int);
+    // Ctrl+1..5: switch to the profile at that (zero-based) position.
+    callback profile-at(int);
+    callback settings-opened();
+    callback settings-changed(SettingsModel);
+    callback clear-cache();
+    callback settings-logout();
+    callback status-tab-changed(bool);
+    callback status-open(int);
+    callback status-next();
+    callback status-prev();
+    callback status-close();
+    callback status-download();
+    callback status-open-media();
+    callback status-pause(bool);
+    callback react(string, string);
+    callback emoji-search(string);
+    callback emoji-picked(string);
+    callback emoji-insert(string);
+    callback copy-text(string);
+    callback delete-message(string, bool);
+    callback open-link(string);
+    callback contact-message(string);
+    callback contact-copy(string);
+    callback phone-lookup(string);
+    callback chats-visible(int, int);
+    callback info-open();
+    callback info-close();
+    callback info-open-photo();
+    callback info-open-member(string);
+    callback info-copy-phone();
+    callback info-member-search(string);
+    callback chat-mark-read(string);
+    callback chat-pin(string, bool);
+    callback chat-mute(string, int);
+    callback chat-archive(string, bool);
+    callback archived-toggled();
+    callback msg-search(string);
+    callback msg-search-next();
+    callback msg-search-prev();
+    callback msg-search-close();
+    callback paste-requested() -> bool;
+    callback paste-unfocused();
+    callback attach-send(string);
+    callback attach-cancel();
+    callback attach-remove(int);
+
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+    }
+
+    public function scroll-to-bottom() { view.scroll-to-bottom(); }
+    public pure function at-bottom() -> bool { return view.at-bottom(); }
+    public pure function content-short() -> bool { return view.content-short(); }
+    public pure function scroll-y() -> length { return view.scroll-y(); }
+    public pure function content-h() -> length { return view.content-h(); }
+    public function restore-scroll(y: length, h: length) { view.restore-scroll(y, h); }
+    public function show-delete(id: string, everyone: bool) { view.show-delete(id, everyone); }
+    public function focus-composer() { view.focus-composer(); }
+    public function clear-composer() { view.clear-composer(); }
+    public function clear-search() { list.clear-search(); }
+    public function jump-to(ratio: float) { view.jump-to(ratio); }
+    public pure function composer-text() -> string { return view.composer-text(); }
+    public pure function composer-cursor() -> int { return view.composer-cursor(); }
+    public function set-composer(text: string, cursor: int) { view.set-composer(text, cursor); }
+
+    // Esc is decided at the window level (see App::escape), whichever element
+    // has the focus. Dialogs and the settings page keep their own Esc.
+    FocusScope {
+        width: parent.width;
+        height: parent.height;
+        init => { self.focus(); }
+        capture-key-pressed(e) => {
+            // The lock screen owns the keyboard (its own handler swallows Esc and Tab).
+            if (LockState.locked) {
+                return reject;
+            }
+            if (e.modifiers.control && !e.modifiers.shift && !e.modifiers.alt && LockState.has-passcode
+                && (e.text == "l" || e.text == "L" || e.text == "\u{c}")) {
+                LockState.lock-now();
+                return accept;
+            }
+            // Ctrl+Alt+1..9: chat folder N (Ctrl+1..5 is the profile switch).
+            if (e.modifiers.control && e.modifiers.alt && !e.modifiers.shift && root.dialog-kind == 0 && !root.show-settings
+                && !root.viewer-open && !root.attach-open && root.logged-in && FolderState.dialog == 0) {
+                if (e.text == "1") { FolderState.select-at(0); return accept; }
+                if (e.text == "2") { FolderState.select-at(1); return accept; }
+                if (e.text == "3") { FolderState.select-at(2); return accept; }
+                if (e.text == "4") { FolderState.select-at(3); return accept; }
+                if (e.text == "5") { FolderState.select-at(4); return accept; }
+                if (e.text == "6") { FolderState.select-at(5); return accept; }
+                if (e.text == "7") { FolderState.select-at(6); return accept; }
+                if (e.text == "8") { FolderState.select-at(7); return accept; }
+                if (e.text == "9") { FolderState.select-at(8); return accept; }
+            }
+            if (e.modifiers.control && !e.modifiers.shift && !e.modifiers.alt && root.dialog-kind == 0) {
+                if (e.text == "1") { root.profile-at(0); return accept; }
+                if (e.text == "2") { root.profile-at(1); return accept; }
+                if (e.text == "3") { root.profile-at(2); return accept; }
+                if (e.text == "4") { root.profile-at(3); return accept; }
+                if (e.text == "5") { root.profile-at(4); return accept; }
+            }
+            // Telegram-style chat switching: Ctrl+Tab / Ctrl+Shift+Tab and
+            // Alt+Down / Alt+Up (Rust ignores them while a dialog is open).
+            if (root.dialog-kind == 0 && !root.show-settings && !root.viewer-open && !root.attach-open && root.logged-in
+                && !root.status-mode && PopupState.open == 0) {
+                if (e.modifiers.control && !e.modifiers.alt && (e.text == Key.Tab || e.text == Key.Backtab)) {
+                    root.step-chat(!(e.modifiers.shift || e.text == Key.Backtab));
+                    return accept;
+                }
+                if (e.modifiers.alt && !e.modifiers.control && !e.modifiers.shift && (e.text == Key.DownArrow || e.text == Key.UpArrow)) {
+                    root.step-unread-chat(e.text == Key.DownArrow);
+                    return accept;
+                }
+            }
+            if (e.text != Key.Escape || root.dialog-kind != 0 || root.show-settings) {
+                return reject;
+            }
+            // An open popup takes this Esc (Slint closes the topmost one). The
+            // count is reset so a popup that vanished without reporting cannot
+            // block Esc for good.
+            if (PopupState.open > 0) {
+                PopupState.open = 0;
+                return reject;
+            }
+            if (root.escape()) {
+                return accept;
+            }
+            return reject;
+        }
+        // Bubble phase: only reached when the focused element (a text field
+        // takes Ctrl+V / Ctrl+F itself) did not handle the key, e.g. after a
+        // click on the message list or the chat background.
+        key-pressed(e) => {
+            if (e.modifiers.control && !e.modifiers.shift && !e.modifiers.alt && root.dialog-kind == 0 && !root.show-settings
+                && !root.viewer-open && !root.attach-open && root.logged-in && root.has-chat && !LockState.locked) {
+                if (e.text == "f" || e.text == "F" || e.text == "\u{6}") {
+                    view.open-search();
+                    return accept;
+                }
+                if (e.text == "v" || e.text == "V" || e.text == "\u{16}") {
+                    root.paste-unfocused();
+                    return accept;
+                }
+            }
+            return reject;
+        }
+        content := Rectangle {
+            x: 64px;
+            width: parent.width - 64px;
+            if !root.logged-in: LoginView {
+                qr: root.qr;
+                has-qr: root.has-qr;
+                status: root.login-status;
+                show-retry: root.show-retry-qr;
+                profile-name: root.login-profile;
+                retry => { root.retry-qr(); }
+            }
+
+            Rectangle {
+                visible: root.logged-in;
+                list := ChatList {
+                    x: 0px;
+                    width: 360px;
+                    chats: root.chats;
+                    profile: root.active-profile;
+                    rename-profile => {
+                        root.dialog-id = root.active-profile.id;
+                        root.dialog-name = root.active-profile.name;
+                        root.dialog-kind = 1;
+                    }
+                    selected-jid: root.selected-jid;
+                    sync-text: root.sync-text;
+                    status-entries: root.status-entries;
+                    status-mine: root.status-mine;
+                    status-has-mine: root.status-has-mine;
+                    status-unviewed: root.status-unviewed;
+                    status-mode <=> root.status-mode;
+                    archived-mode <=> root.archived-mode;
+                    has-archived: root.has-archived;
+                    archived-unread: root.archived-unread;
+                    incognito: root.incognito;
+                    receipts-global-off: root.receipts-global-off;
+                    incognito-toggled => { root.incognito-toggled(); }
+                    receipts(jid, enabled) => { root.chat-receipts(jid, enabled); }
+                    read-now(jid) => { root.chat-read-now(jid); }
+                    mark-read(jid) => { root.chat-mark-read(jid); }
+                    pin(jid, on) => { root.chat-pin(jid, on); }
+                    mute(jid, choice) => { root.chat-mute(jid, choice); }
+                    archive(jid, on) => { root.chat-archive(jid, on); }
+                    archived-toggled => { root.archived-toggled(); }
+                    open-settings => {
+                        root.settings-opened();
+                        root.show-settings = true;
+                    }
+                    status-tab-changed(on) => { root.status-tab-changed(on); }
+                    open-status(i) => { root.status-open(i); }
+                    search(q) => { root.search(q); }
+                    chat-selected(jid) => { root.chat-selected(jid); }
+                    rows-visible(first, count) => { root.chats-visible(first, count); }
+                }
+                Rectangle {
+                    x: 360px;
+                    width: 1px;
+                    background: Theme.divider;
+                }
+                view := ChatView {
+                    x: 361px;
+                    width: parent.width - 361px - (root.contact-info-open || MsgOps.panel != 0 ? 360px : 0px);
+                    messages: root.messages;
+                    has-chat: root.has-chat;
+                    blocked: root.chat-blocked;
+                    composer-blocked-text: root.composer-blocked-text;
+                    new-below: root.new-below;
+                    unblock => { root.unblock-chat(); }
+                    delete-selected-count: root.delete-selected-count;
+                    delete-selected => { root.delete-selected(); }
+                    cancel-delete-selected => { root.cancel-delete-selected(); }
+                    jump-latest => { root.jump-latest(); }
+                    header-name: root.header-name;
+                    header-subtitle: root.header-subtitle;
+                    header-receipts-off: root.header-receipts-off;
+                    receipts-global-off: root.receipts-global-off;
+                    receipts-toggle => { root.chat-receipts(root.selected-jid, root.header-receipts-off); }
+                    read-now => { root.chat-read-now(root.selected-jid); }
+                    header-avatar: root.header-avatar;
+                    header-has-avatar: root.header-has-avatar;
+                    header-initials: root.header-initials;
+                    header-tint: root.header-tint;
+                    has-reply: root.has-reply;
+                    reply-sender: root.reply-sender;
+                    reply-text: root.reply-text;
+                    recording: root.recording;
+                    rec-stopped: root.rec-stopped;
+                    rec-time: root.rec-time;
+                    rec-level: root.rec-level;
+                    enter-sends: root.enter-sends;
+                    emoji-rows: root.emoji-rows;
+                    emoji-tabs: root.emoji-tabs;
+                    emoji-recents: root.emoji-recents;
+                    react(id, e) => { root.react(id, e); }
+                    emoji-search(q) => { root.emoji-search(q); }
+                    emoji-picked(e) => { root.emoji-picked(e); }
+                    emoji-insert(e) => { root.emoji-insert(e); }
+                    send-message(t) => { root.send-message(t); }
+                    composing(t) => { root.composing(t); }
+                    attach => { root.attach(); }
+                    reply-to(id) => { root.reply-to(id); }
+                    cancel-reply => { root.cancel-reply(); }
+                    edit-last => { root.edit-last(); }
+                    download(id) => { root.download(id); }
+                    open(id) => { root.open(id); }
+                    show-in-folder(id) => { root.show-in-folder(id); }
+                    save-as(id) => { root.save-as(id); }
+                    toggle-play(id) => { root.toggle-play(id); }
+                    start-record => { root.start-record(); }
+                    cancel-record => { root.cancel-record(); }
+                    send-record => { root.send-record(); }
+                    load-older => { root.load-older(); }
+                    copy-text(id) => { root.copy-text(id); }
+                    delete-message(id, everyone) => { root.delete-message(id, everyone); }
+                    open-link(url) => { root.open-link(url); }
+                    contact-message(digits) => { root.contact-message(digits); }
+                    contact-copy(phone) => { root.contact-copy(phone); }
+                    phone-lookup(digits) => { root.phone-lookup(digits); }
+                    header-clicked => {
+                        MsgOps.panel-close();
+                        root.info-open();
+                    }
+                    search-open <=> root.search-open;
+                    search-query <=> root.search-query;
+                    search-current: root.search-current;
+                    search-total: root.search-total;
+                    search-searching: root.search-searching;
+                    highlight-id: root.highlight-id;
+                    msg-search(q) => { root.msg-search(q); }
+                    msg-search-next => { root.msg-search-next(); }
+                    msg-search-prev => { root.msg-search-prev(); }
+                    msg-search-close => { root.msg-search-close(); }
+                    paste => { return root.paste-requested(); }
+                }
+                if root.contact-info-open: info-scope := FocusScope {
+                    x: parent.width - 360px;
+                    width: 360px;
+                    height: parent.height;
+                    init => { self.focus(); }
+                    key-pressed(e) => {
+                        if (e.text == Key.Escape) {
+                            root.info-close();
+                            return accept;
+                        }
+                        return reject;
+                    }
+                    ContactInfoPanel {
+                        width: parent.width;
+                        height: parent.height;
+                        model: root.contact-info;
+                        members: root.contact-members;
+                        close => { root.info-close(); }
+                        open-photo => { root.info-open-photo(); }
+                        open-member(jid) => { root.info-open-member(jid); }
+                        copy-phone => { root.info-copy-phone(); }
+                        member-search(q) => { root.info-member-search(q); }
+                    }
+                }
+                if MsgOps.panel != 0 && !root.contact-info-open: panel-scope := FocusScope {
+                    x: parent.width - 360px;
+                    width: 360px;
+                    height: parent.height;
+                    init => { self.focus(); }
+                    if MsgOps.panel == 1: MessageInfoPanel {
+                        width: parent.width;
+                        height: parent.height;
+                    }
+                    if MsgOps.panel == 2: StarredPanel {
+                        width: parent.width;
+                        height: parent.height;
+                    }
+                }
+                if root.toast-text != "": Toast {
+                    x: 361px + (parent.width - 361px - self.width) / 2;
+                    y: parent.height - 120px;
+                    text: root.toast-text;
+                    action: root.toast-action;
+                    action-clicked => { root.toast-action-clicked(); }
+                }
+                if root.show-settings: SettingsPage {
+                    x: 361px;
+                    width: parent.width - 361px;
+                    height: parent.height;
+                    model <=> root.settings;
+                    profile-name: root.settings-profile;
+                    category: root.settings-start-category;
+                    cache-status: root.cache-status;
+                    changed(m) => { root.settings-changed(m); }
+                    clear-cache => { root.clear-cache(); }
+                    logout => {
+                        root.show-settings = false;
+                        root.settings-logout();
+                    }
+                    close => { root.show-settings = false; }
+                }
+                if root.attach-open: attach-scope := FocusScope {
+                    width: parent.width;
+                    height: parent.height;
+                    init => { self.focus(); }
+                    key-pressed(e) => {
+                        if (e.text == Key.Escape && !root.attach-busy) {
+                            root.attach-cancel();
+                            return accept;
+                        }
+                        return reject;
+                    }
+                    AttachPreview {
+                        width: parent.width;
+                        height: parent.height;
+                        items: root.attach-items;
+                        busy: root.attach-busy;
+                        caption <=> root.attach-caption;
+                        send(c) => { root.attach-send(c); }
+                        cancel => { root.attach-cancel(); }
+                        remove(i) => { root.attach-remove(i); }
+                    }
+                }
+                if ShareState.open: SharePicker {
+                    width: parent.width;
+                    height: parent.height;
+                }
+                if TimerState.dialog-open: TimerDialog {
+                    width: parent.width;
+                    height: parent.height;
+                }
+                if root.drop-hover: DropOverlay {
+                    width: parent.width;
+                    height: parent.height;
+                }
+                if root.banner-kind > 0: Rectangle {
+                    y: 0px;
+                    height: 38px;
+                    background: root.banner-kind == 2 ? Theme.danger : Theme.warn;
+                    Text {
+                        x: 16px;
+                        width: parent.width - 64px;
+                        text: root.banner-text;
+                        color: root.banner-kind == 2 ? white : #111b21;
+                        font-size: 14px;
+                        font-weight: 600;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        x: parent.width - 40px;
+                        width: 32px;
+                        IconClose {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            size: 16px;
+                            color: root.banner-kind == 2 ? white : #111b21;
+                        }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.dismiss-banner(); }
+                        }
+                    }
+                }
+                if root.show-reconnect: Rectangle {
+                    y: root.banner-kind > 0 ? 38px : 0px;
+                    height: 44px;
+                    background: Theme.panel;
+                    Text {
+                        x: 16px;
+                        width: parent.width - 160px;
+                        text: root.reconnect-text;
+                        color: Theme.text;
+                        font-size: 14px;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                    Button {
+                        x: parent.width - 132px;
+                        y: (parent.height - self.height) / 2;
+                        width: 116px;
+                        text: "Reconnect";
+                        primary: true;
+                        clicked => { root.reconnect(); }
+                    }
+                }
+            }
+            if ProxyState.blocked: ProxyBlockedView {
+                width: parent.width;
+                height: parent.height;
+            }
+        }
+
+        if root.viewer-open: viewer-scope := FocusScope {
+            x: 64px;
+            width: parent.width - 64px;
+            height: parent.height;
+            init => { self.focus(); }
+            key-pressed(e) => {
+                if (e.text == Key.Escape) {
+                    root.status-close();
+                    return accept;
+                } else if (e.text == Key.RightArrow) {
+                    root.status-next();
+                    return accept;
+                } else if (e.text == Key.LeftArrow) {
+                    root.status-prev();
+                    return accept;
+                }
+                return reject;
+            }
+            StatusViewer {
+                width: parent.width;
+                height: parent.height;
+                slide: root.status-slide;
+                slide-count: root.status-slide-count;
+                current: root.status-current;
+                progress: root.status-progress;
+                sender-name: root.status-sender-name;
+                sender-initials: root.status-sender-initials;
+                sender-color: root.status-sender-color;
+                next => { root.status-next(); }
+                prev => { root.status-prev(); }
+                close => { root.status-close(); }
+                download => { root.status-download(); }
+                open-media => { root.status-open-media(); }
+                pause(p) => { root.status-pause(p); }
+            }
+        }
+
+        ProfileRail {
+            x: 0px;
+            width: 64px;
+            height: parent.height;
+            profiles: root.profiles;
+            can-add: root.can-add-profile;
+            add-tip: root.add-profile-tip;
+            selected(id) => { root.profile-selected(id); }
+            add => { root.add-profile(); }
+            move(id, to) => { root.move-profile(id, to); }
+            rename(id, name) => {
+                root.dialog-id = id;
+                root.dialog-name = name;
+                root.dialog-kind = 1;
+            }
+            remove(id, name) => {
+                root.dialog-id = id;
+                root.dialog-name = name;
+                root.dialog-kind = 2;
+            }
+        }
+
+        // Below the dialogs, over the chat: centred on the content area.
+        if CallState.items.length > 0: CallBanners {
+            x: 64px + (parent.width - 64px - self.width) / 2;
+            y: 12px;
+            width: 420px;
+            height: self.preferred-height;
+        }
+
+        if ChatActions.confirm-kind != 0: ChatConfirmDialog {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+        }
+
+        if FolderState.dialog != 0: FolderDialogs {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+        }
+
+        if GroupNew.dialog != 0: GroupNewDialogs {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+        }
+
+        if GroupAdmin.dialog != 0: GroupDialogs {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+        }
+
+        if root.dialog-kind != 0: ProfileDialog {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            kind: root.dialog-kind;
+            name: root.dialog-name;
+            cancel => { root.dialog-kind = 0; }
+            accept-rename(name) => {
+                root.dialog-kind = 0;
+                root.rename-profile(root.dialog-id, name);
+            }
+            accept-remove => {
+                root.dialog-kind = 0;
+                root.remove-profile(root.dialog-id);
+            }
+        }
+
+        if PollState.open: CreatePollDialog {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+        }
+
+        if LocationState.open: SendLocationDialog {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+        }
+
+        if StatusPost.open: StatusPostDialog {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+        }
+
+        if StatusPost.open && StatusPost.picker-open: AudiencePicker {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+        }
+
+        // Last child: above everything, including dialogs and call banners.
+        if LockState.locked: LockScreen {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+        }
+    }
+}

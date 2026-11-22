@@ -1,0 +1,129 @@
+import { Button, CheckBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+// A contact in the blocked list or in the "Block a contact" picker.
+export struct ContactRowItem {
+    jid: string,
+    name: string,
+    subtitle: string,
+    initials: string,
+    tint: color,
+    avatar: image,
+    has-avatar: bool,
+}
+
+// Own profile and block list shown in Settings. Driven from Rust
+// (app/account_ui.rs); the callbacks are answered there as well.
+export global AccountState {
+    in-out property <string> name;
+    in-out property <string> about;
+    in-out property <string> phone;
+    in-out property <string> initials;
+    in-out property <color> tint: #00a884;
+    in-out property <image> photo;
+    in-out property <bool> has-photo;
+    // The photo file dialog is open or the engine is working on it.
+    in-out property <bool> photo-busy;
+    // Set when the engine rejected the last change (shown under the fields).
+    in-out property <string> error;
+    in-out property <[ContactRowItem]> blocked;
+    in-out property <[ContactRowItem]> candidates;
+    callback set-name(string);
+    callback set-about(string);
+    callback change-photo();
+    callback remove-photo();
+    in-out property <string> app-version;
+    // README.md exists next to the program (the installer ships it).
+    in-out property <bool> has-readme;
+    callback open-readme();
+    callback unblock(string);
+    // The picker asks for the chats matching the text (empty: all).
+    callback find-candidates(string);
+    // Cuts the text to the limit of the field: 0 name, 1 about.
+    pure callback clamp(int, string) -> string;
+}
+
+// What the chat-list row menu asks for. confirm-kind: 0 none, 1 block,
+// 2 unblock, 3 clear chat.
+export global ChatActions {
+    in-out property <int> confirm-kind;
+    in-out property <string> confirm-jid;
+    in-out property <string> confirm-name;
+    in-out property <bool> keep-starred: true;
+    // The header menu entry stays hidden until the starred list exists.
+    in-out property <bool> starred-enabled;
+    callback mark-unread(string);
+    callback set-blocked(string, bool);
+    callback clear-chat(string, bool);
+    callback open-starred();
+}
+
+export component ChatConfirmDialog inherits Rectangle {
+    background: #000000b0;
+    TouchArea { }
+
+    function close() { ChatActions.confirm-kind = 0; }
+
+    Rectangle {
+        width: min(400px, parent.width - 32px);
+        height: body.preferred-height + 40px;
+        background: Theme.panel;
+        border-radius: 12px;
+
+        body := VerticalLayout {
+            padding: 20px;
+            spacing: 14px;
+            FocusScope {
+                height: 0px;
+                init => { self.focus(); }
+                key-pressed(e) => {
+                    if (e.text == Key.Escape) {
+                        close();
+                        return accept;
+                    }
+                    return reject;
+                }
+            }
+            Text {
+                text: ChatActions.confirm-kind == 1 ? "Block " + ChatActions.confirm-name + "?"
+                    : (ChatActions.confirm-kind == 2 ? "Unblock " + ChatActions.confirm-name + "?" : "Clear this chat?");
+                color: Theme.text;
+                font-size: 18px;
+                font-weight: 600;
+                wrap: word-wrap;
+            }
+            Text {
+                text: ChatActions.confirm-kind == 1 ? "Blocked contacts can no longer send you messages or see your last seen, online status and profile photo."
+                    : (ChatActions.confirm-kind == 2 ? "This contact will be able to send you messages again."
+                    : "All messages of " + ChatActions.confirm-name + " are removed from this account. This cannot be undone.");
+                color: Theme.secondary;
+                font-size: 14px;
+                wrap: word-wrap;
+            }
+            if ChatActions.confirm-kind == 3: CheckBox {
+                text: "Keep starred messages";
+                checked <=> ChatActions.keep-starred;
+            }
+            HorizontalLayout {
+                alignment: end;
+                spacing: 10px;
+                Button {
+                    text: "Cancel";
+                    clicked => { close(); }
+                }
+                Button {
+                    text: ChatActions.confirm-kind == 1 ? "Block" : (ChatActions.confirm-kind == 2 ? "Unblock" : "Clear chat");
+                    primary: true;
+                    clicked => {
+                        if (ChatActions.confirm-kind == 3) {
+                            ChatActions.clear-chat(ChatActions.confirm-jid, ChatActions.keep-starred);
+                        } else {
+                            ChatActions.set-blocked(ChatActions.confirm-jid, ChatActions.confirm-kind == 1);
+                        }
+                        close();
+                    }
+                }
+            }
+        }
+    }
+}

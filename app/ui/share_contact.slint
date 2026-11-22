@@ -1,0 +1,243 @@
+import { Button, ListView } from "std-widgets.slint";
+import { Theme, Avatar } from "theme.slint";
+
+// One pickable row: a contact (name and number) or a chat (name only).
+export struct ShareRow {
+    key: string,
+    name: string,
+    phone: string,
+    initials: string,
+    tint: color,
+    avatar: image,
+    has-avatar: bool,
+    selected: bool,
+}
+
+// State of the share dialog. Two uses: pick contacts to send into the open
+// chat, or pick chats to send a known contact card to.
+export global ShareState {
+    in-out property <bool> open;
+    in property <string> title;
+    in property <string> hint;
+    in property <string> send-label: "Send";
+    in property <[ShareRow]> rows;
+    in property <int> picked;
+    in property <string> note;
+    in property <string> empty-text: "No contacts with a phone number";
+    // Exactly one contact is picked in contact mode: its card name can be edited.
+    in property <bool> can-edit-name;
+    in-out property <string> edit-name;
+    callback search(string);
+    callback toggle(string);
+    callback rename(string);
+    callback send();
+    callback cancel();
+    // Opens the chat picker to re-share the contact card of a message.
+    callback share-card(string);
+    // Opens the chat picker to share the contact shown in the info panel.
+    callback share-info();
+}
+
+export component SharePicker inherits Rectangle {
+    background: #000000b0;
+    TouchArea { }
+
+    FocusScope {
+        width: parent.width;
+        height: parent.height;
+        capture-key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                ShareState.cancel();
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            property <length> edit-h: ShareState.can-edit-name ? 62px : 0px;
+            width: min(420px, parent.width - 32px);
+            height: min(580px, parent.height - 32px);
+            background: Theme.panel;
+            border-radius: 12px;
+            clip: true;
+
+            Text {
+                x: 20px;
+                y: 16px;
+                width: parent.width - 40px;
+                height: 26px;
+                text: ShareState.title;
+                color: Theme.text;
+                font-size: 18px;
+                font-weight: 600;
+                overflow: elide;
+            }
+            Rectangle {
+                x: 16px;
+                y: 52px;
+                width: parent.width - 32px;
+                height: 38px;
+                background: Theme.input-bg;
+                border-radius: 8px;
+                if search.text == "": Text {
+                    x: 12px;
+                    text: ShareState.hint;
+                    color: Theme.secondary;
+                    font-size: 14px;
+                    vertical-alignment: center;
+                }
+                search := TextInput {
+                    x: 12px;
+                    y: (parent.height - self.preferred-height) / 2;
+                    width: parent.width - 24px;
+                    color: Theme.text;
+                    font-size: 14px;
+                    single-line: true;
+                    init => { self.focus(); }
+                    edited => { ShareState.search(self.text); }
+                }
+            }
+            if ShareState.rows.length == 0: Text {
+                y: 100px;
+                width: parent.width;
+                height: 60px;
+                text: ShareState.empty-text;
+                color: Theme.secondary;
+                font-size: 14px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            ListView {
+                x: 0px;
+                y: 100px;
+                width: parent.width;
+                height: parent.height - 100px - 68px - parent.edit-h;
+                for c in ShareState.rows: Rectangle {
+                    height: 56px;
+                    background: row-ta.has-hover ? Theme.selected : transparent;
+                    Avatar {
+                        x: 16px;
+                        y: (parent.height - self.height) / 2;
+                        size: 38px;
+                        source: c.avatar;
+                        has-image: c.has-avatar;
+                        initials: c.initials;
+                        tint: c.tint;
+                    }
+                    VerticalLayout {
+                        x: 66px;
+                        width: parent.width - 66px - 60px;
+                        alignment: center;
+                        Text {
+                            text: c.name;
+                            color: Theme.text;
+                            font-size: 15px;
+                            overflow: elide;
+                        }
+                        if c.phone != "": Text {
+                            text: c.phone;
+                            color: Theme.secondary;
+                            font-size: 12px;
+                            overflow: elide;
+                        }
+                    }
+                    Rectangle {
+                        x: parent.width - 40px;
+                        y: (parent.height - self.height) / 2;
+                        width: 22px;
+                        height: 22px;
+                        border-radius: 11px;
+                        border-width: 2px;
+                        border-color: c.selected ? Theme.accent : Theme.secondary;
+                        background: c.selected ? Theme.accent : transparent;
+                        if c.selected: Path {
+                            x: 4px;
+                            y: 5px;
+                            width: 10px;
+                            height: 8px;
+                            viewbox-width: 10;
+                            viewbox-height: 8;
+                            commands: "M 0 4 L 3.5 7.5 L 10 0.5";
+                            stroke: #111b21;
+                            stroke-width: 2px;
+                            fill: transparent;
+                        }
+                    }
+                    row-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { ShareState.toggle(c.key); }
+                    }
+                }
+            }
+            if ShareState.can-edit-name: Rectangle {
+                y: parent.height - 68px - parent.edit-h;
+                height: parent.edit-h;
+                Rectangle {
+                    height: 1px;
+                    background: Theme.divider;
+                }
+                Text {
+                    x: 20px;
+                    y: 8px;
+                    text: "Name shown on the card";
+                    color: Theme.secondary;
+                    font-size: 12px;
+                }
+                Rectangle {
+                    x: 16px;
+                    y: 26px;
+                    width: parent.width - 32px;
+                    height: 32px;
+                    background: Theme.input-bg;
+                    border-radius: 8px;
+                    TextInput {
+                        x: 12px;
+                        y: (parent.height - self.preferred-height) / 2;
+                        width: parent.width - 24px;
+                        color: Theme.text;
+                        font-size: 14px;
+                        single-line: true;
+                        text <=> ShareState.edit-name;
+                        edited => { ShareState.rename(self.text); }
+                    }
+                }
+            }
+            Rectangle {
+                y: parent.height - 68px;
+                height: 68px;
+                background: Theme.panel;
+                Rectangle {
+                    height: 1px;
+                    background: Theme.divider;
+                }
+                Text {
+                    x: 20px;
+                    width: parent.width - 220px;
+                    text: ShareState.note;
+                    color: Theme.secondary;
+                    font-size: 13px;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+                HorizontalLayout {
+                    x: parent.width - 212px;
+                    width: 200px;
+                    alignment: end;
+                    spacing: 8px;
+                    padding-top: 16px;
+                    padding-bottom: 16px;
+                    Button {
+                        text: "Cancel";
+                        clicked => { ShareState.cancel(); }
+                    }
+                    Button {
+                        text: ShareState.send-label;
+                        primary: true;
+                        enabled: ShareState.picked > 0;
+                        clicked => { ShareState.send(); }
+                    }
+                }
+            }
+        }
+    }
+}

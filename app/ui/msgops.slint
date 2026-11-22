@@ -1,0 +1,372 @@
+import { Button } from "std-widgets.slint";
+import { Theme, Avatar } from "theme.slint";
+import { IconClose } from "icons.slint";
+
+// One chat in the forward picker.
+export struct PickItem {
+    jid: string,
+    name: string,
+    initials: string,
+    tint: color,
+    avatar: image,
+    has-avatar: bool,
+    selected: bool,
+}
+
+// One recipient of the message-info panel. Empty strings: not (yet) happened.
+export struct ReceiptRow {
+    name: string,
+    initials: string,
+    tint: color,
+    read: string,
+    delivered: string,
+    played: string,
+}
+
+// One starred message of the starred list.
+export struct StarredRow {
+    id: string,
+    chat-jid: string,
+    chat-name: string,
+    sender: string,
+    text: string,
+    time: string,
+}
+
+// State and callbacks of the message operations (select / forward / pin /
+// star / edit / info). The controller (app/msgops_ui.rs) fills the `in`
+// properties; the bubbles and panels call the callbacks directly.
+export global MsgOps {
+    // Selection mode: checkboxes on the bubbles and a bar at the bottom.
+    in-out property <bool> selecting;
+    in property <int> selected-count;
+    in property <bool> all-starred;
+    callback toggle-select(string);
+    callback select-forward();
+    callback select-star();
+    callback select-copy();
+    callback select-delete();
+    callback select-cancel();
+
+    // Entries of a message's context menu.
+    callback begin-select(string);
+    callback forward-one(string);
+    callback begin-edit(string);
+    callback pin-chosen(string, int);
+    callback unpin(string);
+    callback toggle-star(string);
+    callback show-info(string);
+    // Message waiting for the pin duration answer ("" none).
+    in-out property <string> pin-ask-id;
+
+    // The pinned message of the open chat, shown under the header.
+    in property <bool> pin-visible;
+    in property <string> pin-text;
+    callback pin-jump();
+    callback pin-unpin();
+
+    // Edit mode of the composer.
+    in property <bool> editing;
+    in property <string> edit-text;
+    callback edit-cancel();
+
+    // Forward picker.
+    in-out property <bool> forward-open;
+    in property <[PickItem]> forward-chats;
+    in property <int> forward-picked;
+    in property <int> forward-msgs;
+    in property <string> forward-note;
+    callback forward-search(string);
+    callback forward-toggle(string);
+    callback forward-send();
+    callback forward-cancel();
+
+    // Right panel: 0 none, 1 message info, 2 starred messages.
+    in-out property <int> panel;
+    callback panel-close();
+
+    // Message info.
+    in property <string> info-preview;
+    in property <string> info-time;
+    in property <bool> info-loading;
+    in property <bool> info-compact;
+    in property <[ReceiptRow]> info-rows;
+
+    // Starred messages.
+    in property <string> starred-title;
+    in property <[StarredRow]> starred-rows;
+    in property <bool> starred-loading;
+    in property <bool> starred-more;
+    callback starred-jump(string, string);
+    callback starred-unstar(string, string);
+    callback starred-load-more();
+    // "Starred messages" of the open chat, from the chat header menu.
+    callback starred-open-chat();
+}
+
+// Five-pointed star, drawn so it never depends on the UI font.
+export component StarIcon inherits Path {
+    in property <color> color: Theme.secondary;
+    in property <length> size: 12px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 10;
+    viewbox-height: 10;
+    fill: root.color;
+    commands: "M 5 0 L 6.5 3.6 L 10 3.8 L 7.3 6.2 L 8.2 10 L 5 8 L 1.8 10 L 2.7 6.2 L 0 3.8 L 3.5 3.6 Z";
+}
+
+// Thin pill button used by the bars below.
+component BarButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> danger;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    width: t.preferred-width + 24px;
+    height: 32px;
+    border-radius: 16px;
+    background: ta.has-hover && root.enabled ? Theme.selected : transparent;
+    t := Text {
+        text: root.label;
+        color: !root.enabled ? Theme.secondary : (root.danger ? Theme.danger : Theme.text);
+        font-size: 14px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if (root.enabled) {
+                root.clicked();
+            }
+        }
+    }
+}
+
+// Bottom bar of the selection mode; replaces the composer.
+export component SelectionBar inherits Rectangle {
+    background: Theme.panel;
+    TouchArea { }
+    // Takes the keyboard away from the (hidden) composer.
+    FocusScope {
+        init => { self.focus(); }
+    }
+    Text {
+        x: 20px;
+        width: 140px;
+        text: MsgOps.selected-count + " selected";
+        color: Theme.text;
+        font-size: 15px;
+        vertical-alignment: center;
+    }
+    HorizontalLayout {
+        x: 160px;
+        y: (parent.height - 32px) / 2;
+        width: parent.width - 160px - 12px;
+        height: 32px;
+        alignment: end;
+        spacing: 4px;
+        BarButton {
+            label: "Forward";
+            enabled: MsgOps.selected-count > 0;
+            clicked => { MsgOps.select-forward(); }
+        }
+        BarButton {
+            label: MsgOps.all-starred ? "Unstar" : "Star";
+            enabled: MsgOps.selected-count > 0;
+            clicked => { MsgOps.select-star(); }
+        }
+        BarButton {
+            label: "Copy";
+            enabled: MsgOps.selected-count > 0;
+            clicked => { MsgOps.select-copy(); }
+        }
+        BarButton {
+            label: "Delete for me";
+            danger: true;
+            enabled: MsgOps.selected-count > 0;
+            clicked => { MsgOps.select-delete(); }
+        }
+        BarButton {
+            label: "Cancel";
+            clicked => { MsgOps.select-cancel(); }
+        }
+    }
+}
+
+// "Editing message" strip above the composer.
+export component EditBar inherits Rectangle {
+    height: 46px;
+    background: Theme.panel;
+    Rectangle {
+        x: 10px;
+        y: 4px;
+        width: parent.width - 20px;
+        height: 38px;
+        background: #1a262d;
+        border-radius: 8px;
+        Rectangle {
+            x: 0px;
+            width: 4px;
+            background: Theme.accent;
+        }
+        Text {
+            x: 14px;
+            y: 3px;
+            width: parent.width - 54px;
+            text: "Editing message";
+            color: Theme.accent;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        Text {
+            x: 14px;
+            y: 19px;
+            width: parent.width - 54px;
+            text: MsgOps.edit-text;
+            color: Theme.secondary;
+            font-size: 12px;
+            overflow: elide;
+        }
+        Rectangle {
+            x: parent.width - 34px;
+            width: 24px;
+            IconClose {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                color: Theme.secondary;
+            }
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { MsgOps.edit-cancel(); }
+            }
+        }
+    }
+}
+
+// Pinned message strip under the chat header.
+export component PinnedBar inherits Rectangle {
+    height: 44px;
+    background: Theme.panel;
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.divider;
+    }
+    Rectangle {
+        x: 14px;
+        y: 8px;
+        width: 3px;
+        height: parent.height - 16px;
+        background: Theme.accent;
+    }
+    Text {
+        x: 28px;
+        y: 6px;
+        width: parent.width - 28px - 52px;
+        text: "Pinned message";
+        color: Theme.accent;
+        font-size: 12px;
+        font-weight: 600;
+    }
+    Text {
+        x: 28px;
+        y: 22px;
+        width: parent.width - 28px - 52px;
+        text: MsgOps.pin-text;
+        color: Theme.text;
+        font-size: 13px;
+        overflow: elide;
+    }
+    TouchArea {
+        width: parent.width - 48px;
+        mouse-cursor: pointer;
+        clicked => { MsgOps.pin-jump(); }
+    }
+    Rectangle {
+        x: parent.width - 44px;
+        y: (parent.height - self.height) / 2;
+        width: 32px;
+        height: 32px;
+        border-radius: 16px;
+        background: close-ta.has-hover ? Theme.hover : transparent;
+        IconClose {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            color: Theme.secondary;
+        }
+        close-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { MsgOps.pin-unpin(); }
+        }
+    }
+}
+
+// Modal: how long a message stays pinned. Covers its parent.
+export component PinDialog inherits Rectangle {
+    background: #000000b0;
+    TouchArea { }
+
+    FocusScope {
+        init => { self.focus(); }
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                MsgOps.pin-ask-id = "";
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    Rectangle {
+        width: min(340px, parent.width - 32px);
+        height: body.preferred-height;
+        background: Theme.panel;
+        border-radius: 12px;
+        body := VerticalLayout {
+            padding: 20px;
+            spacing: 6px;
+            Text {
+                text: "Choose how long your pin lasts";
+                color: Theme.text;
+                font-size: 17px;
+                font-weight: 600;
+                wrap: word-wrap;
+            }
+            Text {
+                text: "You can unpin at any time.";
+                color: Theme.secondary;
+                font-size: 13px;
+            }
+            Rectangle { height: 8px; }
+            for choice[i] in ["24 hours", "7 days", "30 days"]: Rectangle {
+                height: 40px;
+                border-radius: 8px;
+                background: row-ta.has-hover ? Theme.selected : transparent;
+                Text {
+                    x: 12px;
+                    text: choice;
+                    color: Theme.text;
+                    font-size: 15px;
+                    vertical-alignment: center;
+                }
+                row-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        MsgOps.pin-chosen(MsgOps.pin-ask-id, i);
+                        MsgOps.pin-ask-id = "";
+                    }
+                }
+            }
+            HorizontalLayout {
+                alignment: end;
+                padding-top: 8px;
+                Button {
+                    text: "Cancel";
+                    clicked => { MsgOps.pin-ask-id = ""; }
+                }
+            }
+        }
+    }
+}

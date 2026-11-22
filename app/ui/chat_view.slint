@@ -1,0 +1,2133 @@
+import { ListView, Spinner, Button } from "std-widgets.slint";
+import { PopupState, Theme, Avatar } from "theme.slint";
+import { MsgItem, ReactionConfig, PhoneLinks } from "msg.slint";
+import { PollBubble } from "poll_bubble.slint";
+import { ContactCard } from "contact_card.slint";
+import { LocationCard } from "location_card.slint";
+import { ReactionBar, QuickReactPopup } from "reactions.slint";
+import { MsgMenu, DeleteDialog, Chevron, MenuRow } from "msg_menu.slint";
+import { EmojiPicker, EmojiRow, EmojiTab } from "emoji_picker.slint";
+import { ChatSearchBar } from "chat_search.slint";
+import { MsgOps, SelectionBar, EditBar, PinnedBar, PinDialog, StarIcon } from "msgops.slint";
+import { ForwardPicker } from "forward_picker.slint";
+import { TimerState } from "timer_dialog.slint";
+import { IconClose, IconCheck, IconCheckDouble, IconClock, IconPlay, IconArrowDown, IconSearch, IconTimer, IconContact, IconPin, IconFile, IconPoll } from "icons.slint";
+
+export struct MentionItem {
+    name: string,
+    phone: string,
+    initials: string,
+    tint: color,
+}
+
+// The @mention suggestions of the composer; driven by the controller.
+export global Mentions {
+    in-out property <[MentionItem]> items;
+    in-out property <bool> open;
+    in-out property <int> sel;
+    // (composer text, cursor byte offset) after every edit.
+    callback edited(string, int);
+    callback pick(int);
+    // Moves the highlighted row by the given step.
+    callback step(int);
+    // WhatsApp text formatting of the composer (format.rs): (text, selection
+    // anchor, cursor, kind 0 bold / 1 italic / 2 strike / 3 mono / 4 quote)
+    // -> the new text; the selection to restore is left in fmt-start/fmt-end.
+    callback format(string, int, int, int) -> string;
+    in-out property <int> fmt-start;
+    in-out property <int> fmt-end;
+}
+
+// One button of the formatting bar over the composer.
+component FmtButton inherits Rectangle {
+    in property <int> kind;
+    callback clicked;
+    width: 34px;
+    height: 30px;
+    border-radius: 6px;
+    background: ta.has-hover ? Theme.input-bg : transparent;
+    if root.kind == 0: Text {
+        text: "B";
+        color: Theme.text;
+        font-size: 15px;
+        font-weight: 800;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    if root.kind == 1: Text {
+        text: "I";
+        color: Theme.text;
+        font-size: 15px;
+        font-italic: true;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    if root.kind == 2: Text {
+        text: "S";
+        color: Theme.text;
+        font-size: 15px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        Rectangle {
+            y: parent.height / 2;
+            width: 11px;
+            height: 1.5px;
+            x: (parent.width - self.width) / 2;
+            background: Theme.text;
+        }
+    }
+    if root.kind == 3: Text {
+        text: "M";
+        color: Theme.text;
+        font-size: 14px;
+        font-family: "Consolas";
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    if root.kind == 4: Path {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 14px;
+        height: 14px;
+        viewbox-width: 14;
+        viewbox-height: 14;
+        commands: "M 0 0 L 2.5 0 L 2.5 14 L 0 14 Z M 5 2 L 14 2 L 14 4 L 5 4 Z M 5 6 L 14 6 L 14 8 L 5 8 Z M 5 10 L 11 10 L 11 12 L 5 12 Z";
+        fill: Theme.text;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Entries of the attach menu (the paperclip of the composer).
+export global AttachActions {
+    callback contact();
+    callback location();
+    callback poll();
+}
+
+component AttachRow inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+
+    height: 34px;
+    background: row-ta.has-hover ? Theme.selected : transparent;
+    Rectangle {
+        x: 16px;
+        width: 20px;
+        height: parent.height;
+        @children
+    }
+    Text {
+        x: 48px;
+        width: parent.width - 60px;
+        text: root.label;
+        color: Theme.text;
+        font-size: 14px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    row-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component Bubble inherits Rectangle {
+    in property <MsgItem> m;
+    in property <length> max-w;
+    callback reply();
+    callback download();
+    callback open();
+    callback show-in-folder();
+    callback save-as();
+    callback toggle-play();
+    callback react(string);
+    callback more-reactions();
+    callback copy();
+    callback delete();
+    callback open-link(string);
+    callback contact-message(string);
+    callback contact-copy(string);
+    callback phone-lookup(string);
+    // The current in-chat search hit.
+    in property <bool> highlighted;
+    // Geometry of the chat view in window coordinates, to keep the menu inside it.
+    in property <length> view-x;
+    in property <length> view-y;
+    in property <length> view-w;
+    in property <length> view-h;
+    property <length> menu-x;
+    property <length> menu-y;
+    // Which menu entries apply; the rows decide the menu height (see MsgMenu).
+    property <bool> can-download: root.m.media-kind > 0 && root.m.can-download && !root.m.downloading && !root.m.revoked;
+    property <bool> can-open: root.m.media-kind > 0 && root.m.media-kind != 5 && !root.m.can-download && !root.m.downloading && !root.m.revoked;
+    property <bool> can-save: root.m.media-kind > 0 && !root.m.revoked;
+    property <bool> can-reveal: (root.m.media-kind == 3 || root.m.media-kind == 4) && root.m.has-local && !root.m.revoked;
+    property <length> menu-w: 190px;
+    property <bool> can-info: root.m.mine && !root.m.revoked && root.m.status > 1;
+    property <length> menu-h: 12px + 34px * ((root.m.revoked ? 0 : 4) + (root.m.can-copy ? 1 : 0) + (root.can-download ? 1 : 0) + (root.can-open ? 1 : 0) + (root.can-save ? 1 : 0) + (root.can-reveal ? 1 : 0) + (root.m.can-share ? 1 : 0) + (root.m.can-edit ? 1 : 0) + (root.can-info ? 1 : 0) + 2);
+
+    // Opens the context menu with its corner at (px, py) of this bubble.
+    function open-menu(px: length, py: length) {
+        root.menu-x = clamp(root.m.mine ? px - root.menu-w : px, 6px - (root.absolute-position.x - root.view-x), root.view-w - root.menu-w - 6px - (root.absolute-position.x - root.view-x));
+        root.menu-y = (root.absolute-position.y - root.view-y) + py + root.menu-h > root.view-h - 8px ? max(py - root.menu-h, 64px - (root.absolute-position.y - root.view-y)) : py;
+        menu.show();
+    }
+
+    // The phone number a clicked phone link stands for, and its small menu.
+    property <string> phone;
+    property <length> phone-menu-x;
+    property <length> phone-menu-y;
+    property <length> phone-menu-h: 12px + 34px * 3;
+
+    // Opens the phone menu just under the bubble's text, inside the chat view.
+    function open-phone-menu() {
+        root.phone-menu-x = clamp(root.m.mine ? root.width - 8px - root.menu-w : 8px, 6px - (root.absolute-position.x - root.view-x), root.view-w - root.menu-w - 6px - (root.absolute-position.x - root.view-x));
+        root.phone-menu-y = (root.absolute-position.y - root.view-y) + root.height - 6px + root.phone-menu-h > root.view-h - 8px ? max(root.height / 2 - root.phone-menu-h, 64px - (root.absolute-position.y - root.view-y)) : root.height - 6px;
+        phone-menu.show();
+    }
+
+    property <length> media-w: min(330px, root.max-w - 20px);
+
+    background: root.m.media-kind == 2 ? transparent : (root.m.mine ? Theme.my-bubble : Theme.their-bubble);
+    border-radius: 8px;
+    border-width: root.highlighted ? 2px : 0px;
+    border-color: Theme.warn;
+    max-width: root.max-w;
+    min-width: root.m.poll || root.m.contact ? 280px : (root.m.media-kind == 4 ? 270px : (root.m.media-kind == 5 ? 250px : 0px));
+
+    bubble-ta := TouchArea {
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
+                root.open-menu(self.mouse-x, self.mouse-y);
+            }
+        }
+        // Links, media and other controls have their own TouchAreas on top, so
+        // only a double-click on plain bubble area replies.
+        double-clicked => {
+            if (!MsgOps.selecting && !root.m.revoked) {
+                root.reply();
+            }
+        }
+    }
+
+    VerticalLayout {
+        padding: 8px;
+        padding-top: 6px;
+        padding-bottom: 5px;
+        spacing: 3px;
+
+        if root.m.show-sender: Text {
+            text: root.m.sender;
+            color: root.m.sender-color;
+            font-size: 13px;
+            font-weight: 600;
+            overflow: elide;
+        }
+        if root.m.quoted != "": Rectangle {
+            height: quoted-text.preferred-height + 12px;
+            preferred-width: quoted-text.preferred-width + 24px;
+            background: #0000004d;
+            border-radius: 6px;
+            Rectangle {
+                x: 0px;
+                width: 4px;
+                background: Theme.accent;
+            }
+            quoted-text := Text {
+                x: 12px;
+                y: 6px;
+                width: parent.width - 20px;
+                text: root.m.quoted;
+                color: Theme.secondary;
+                font-size: 13px * Theme.font-scale;
+                overflow: elide;
+            }
+        }
+        // Image / sticker / video: picture (or placeholder) with a state overlay.
+        if root.m.media-kind >= 1 && root.m.media-kind <= 3: HorizontalLayout {
+            alignment: start;
+            vis := Rectangle {
+                property <image> pic: root.m.has-full ? root.m.full : root.m.thumb;
+                property <bool> has-pic: root.m.has-full || root.m.has-thumb;
+                property <float> max-w: root.m.media-kind == 2 ? 180 : root.media-w / 1px;
+                property <float> max-h: root.m.media-kind == 2 ? 180 : 400;
+                property <float> fit: min(self.max-w / max(1, self.pic.width), self.max-h / max(1, self.pic.height));
+                // Full images are never upscaled; thumbnails are tiny and are.
+                property <float> sc: root.m.has-full ? min(1.0, self.fit) : self.fit;
+
+                width: self.has-pic ? self.pic.width * self.sc * 1px : min(root.media-w, 240px);
+                height: self.has-pic ? self.pic.height * self.sc * 1px : 150px;
+                background: #0f171c;
+                border-radius: 6px;
+                clip: true;
+
+                if vis.has-pic: Image {
+                    width: 100%;
+                    height: 100%;
+                    source: vis.pic;
+                    image-fit: fill;
+                }
+                if !vis.has-pic: Text {
+                    text: root.m.media-kind == 3 ? "🎥" : "📷";
+                    font-size: 36px;
+                    color: Theme.secondary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                if root.m.downloading: Rectangle {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 52px;
+                    height: 52px;
+                    border-radius: 26px;
+                    background: #000000a0;
+                    Spinner {
+                        x: 12px;
+                        y: 12px;
+                        width: 28px;
+                        height: 28px;
+                        indeterminate: true;
+                    }
+                }
+                if !root.m.downloading && (root.m.can-download || root.m.media-kind == 3): Rectangle {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 52px;
+                    height: 52px;
+                    border-radius: 26px;
+                    background: #000000a0;
+                    if root.m.media-kind == 3: IconPlay {
+                        x: (parent.width - self.width) / 2 + 2px;
+                        y: (parent.height - self.height) / 2;
+                        size: 26px;
+                        color: white;
+                    }
+                    if root.m.media-kind != 3: IconArrowDown {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        size: 26px;
+                        color: white;
+                    }
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if (root.m.downloading) {
+                            return;
+                        }
+                        if (root.m.can-download && root.m.media-kind != 3) {
+                            root.download();
+                        } else {
+                            root.open();
+                        }
+                    }
+                }
+            }
+        }
+        if root.m.media-kind >= 1 && root.m.media-kind <= 3 && root.m.can-download && root.m.media-detail != "": Text {
+            text: root.m.media-detail;
+            color: Theme.secondary;
+            font-size: 12px;
+            overflow: elide;
+        }
+        if root.m.media-kind >= 1 && root.m.media-kind <= 3 && root.m.failed: Rectangle {
+            height: 18px;
+            Text {
+                text: "Download failed — tap to retry";
+                color: Theme.danger;
+                font-size: 12px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.download(); }
+            }
+        }
+
+        // Document: icon tile, name, type + size.
+        if root.m.media-kind == 4: Rectangle {
+            height: 48px;
+            Rectangle {
+                x: 0px;
+                y: 4px;
+                width: 40px;
+                height: 40px;
+                border-radius: 6px;
+                background: #0000004d;
+                Text {
+                    text: root.m.file-ext;
+                    color: Theme.tick-read;
+                    font-size: 11px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+            Text {
+                x: 50px;
+                y: 5px;
+                width: parent.width - 50px - 30px;
+                text: root.m.file-name;
+                color: Theme.text;
+                font-size: 14px;
+                font-weight: 600;
+                overflow: elide;
+            }
+            Text {
+                x: 50px;
+                y: 26px;
+                width: parent.width - 50px - 30px;
+                text: root.m.downloading ? "Downloading…" : (root.m.failed ? "Download failed — tap to retry" : root.m.media-detail);
+                color: root.m.failed ? Theme.danger : Theme.secondary;
+                font-size: 12px;
+                overflow: elide;
+            }
+            if root.m.downloading: Spinner {
+                x: parent.width - 26px;
+                y: 13px;
+                width: 22px;
+                height: 22px;
+                indeterminate: true;
+            }
+            if !root.m.downloading && root.m.can-download: IconArrowDown {
+                x: parent.width - 26px;
+                y: (parent.height - self.height) / 2;
+                size: 22px;
+                color: Theme.secondary;
+            }
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    if (!root.m.downloading) {
+                        root.open();
+                    }
+                }
+            }
+        }
+        if (root.m.media-kind == 3 || root.m.media-kind == 4) && root.m.has-local: HorizontalLayout {
+            alignment: start;
+            Rectangle {
+                width: folder-text.preferred-width;
+                height: 18px;
+                folder-text := Text {
+                    text: "Show in folder";
+                    color: Theme.tick-read;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.show-in-folder(); }
+                }
+            }
+        }
+        if (root.m.media-kind == 3 || root.m.media-kind == 4) && root.m.unsafe-file: Text {
+            text: "⚠ This file type is not opened from chat. Use Show in folder.";
+            color: Theme.warn;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+
+        // Voice note / audio: play button, progress, time.
+        if root.m.media-kind == 5: Rectangle {
+            height: 44px;
+            Rectangle {
+                x: 0px;
+                y: 4px;
+                width: 36px;
+                height: 36px;
+                border-radius: 18px;
+                background: Theme.accent;
+                if root.m.downloading: Spinner {
+                    x: 7px;
+                    y: 7px;
+                    width: 22px;
+                    height: 22px;
+                    indeterminate: true;
+                }
+                if !root.m.downloading && root.m.play-state != 1: Path {
+                    x: 14px;
+                    y: 11px;
+                    width: 13px;
+                    height: 14px;
+                    viewbox-width: 13;
+                    viewbox-height: 14;
+                    commands: "M 0 0 L 13 7 L 0 14 Z";
+                    fill: #111b21;
+                }
+                if !root.m.downloading && root.m.play-state == 1: Rectangle {
+                    x: 12px;
+                    y: 11px;
+                    width: 4px;
+                    height: 14px;
+                    background: #111b21;
+                }
+                if !root.m.downloading && root.m.play-state == 1: Rectangle {
+                    x: 20px;
+                    y: 11px;
+                    width: 4px;
+                    height: 14px;
+                    background: #111b21;
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if (!root.m.downloading) {
+                            root.toggle-play();
+                        }
+                    }
+                }
+            }
+            Rectangle {
+                x: 46px;
+                y: 14px;
+                width: parent.width - 46px;
+                height: 4px;
+                border-radius: 2px;
+                background: #ffffff33;
+                Rectangle {
+                    x: 0px;
+                    width: parent.width * root.m.play-progress;
+                    background: root.m.mine ? #ffffffcc : Theme.accent;
+                    border-radius: 2px;
+                }
+                if root.m.play-state > 0: Rectangle {
+                    x: parent.width * root.m.play-progress - 5px;
+                    y: -3px;
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 5px;
+                    background: root.m.mine ? white : Theme.accent;
+                }
+            }
+            Text {
+                x: 46px;
+                y: 24px;
+                width: parent.width - 46px;
+                text: root.m.downloading ? "Downloading…" : (root.m.failed ? "Download failed — tap to retry" : root.m.play-text);
+                color: root.m.failed ? Theme.danger : Theme.secondary;
+                font-size: 12px;
+                overflow: elide;
+            }
+            if root.m.failed && !root.m.downloading: TouchArea {
+                x: 46px;
+                mouse-cursor: pointer;
+                clicked => { root.toggle-play(); }
+            }
+        }
+
+        // Anything else that carries a label (e.g. unsupported messages).
+        if root.m.media-label != "" && root.m.media-kind == 0 && root.m.geo == "": Text {
+            text: root.m.media-label;
+            color: Theme.text;
+            font-size: 14px;
+            font-weight: 600;
+            overflow: elide;
+        }
+        if root.m.revoked: Text {
+            text: "🚫 This message was deleted";
+            color: Theme.secondary;
+            font-size: 14.5px;
+            font-italic: true;
+            wrap: word-wrap;
+        }
+        if root.m.poll && !root.m.revoked: PollBubble {
+            msg-id: root.m.id;
+            question: root.m.poll-question;
+            options: root.m.poll-options;
+            total-votes: root.m.poll-total;
+            multi: root.m.poll-multi;
+            content-w: min(260px, root.max-w - 20px);
+        }
+        if root.m.contact && !root.m.revoked: ContactCard {
+            m: root.m;
+            content-w: min(260px, root.max-w - 20px);
+            message(digits) => { root.contact-message(digits); }
+            copy(phone) => { root.contact-copy(phone); }
+        }
+        // Link preview card: picture, title, description and the site. A click
+        // goes through the same checked opener as links in the text.
+        if root.m.has-link-card && !root.m.revoked: card := Rectangle {
+            property <length> thumb-h: root.m.link-has-thumb ? 140px : 0px;
+            property <length> title-h: root.m.link-title != "" ? 38px : 0px;
+            property <length> desc-h: root.m.link-desc != "" ? 48px : 0px;
+            preferred-width: min(300px, root.max-w - 20px);
+            height: self.thumb-h + 10px + self.title-h + self.desc-h + 16px + 8px;
+            background: #0000004d;
+            border-radius: 6px;
+            clip: true;
+            if root.m.link-has-thumb: Image {
+                y: 0px;
+                width: parent.width;
+                height: card.thumb-h;
+                source: root.m.link-thumb;
+                image-fit: cover;
+            }
+            if root.m.link-title != "": Text {
+                x: 10px;
+                y: card.thumb-h + 8px;
+                width: parent.width - 20px;
+                height: card.title-h;
+                text: root.m.link-title;
+                color: Theme.text;
+                font-size: 14px;
+                font-weight: 600;
+                wrap: word-wrap;
+                overflow: elide;
+            }
+            if root.m.link-desc != "": Text {
+                x: 10px;
+                y: card.thumb-h + 8px + card.title-h;
+                width: parent.width - 20px;
+                height: card.desc-h;
+                text: root.m.link-desc;
+                color: Theme.secondary;
+                font-size: 12.5px;
+                wrap: word-wrap;
+                overflow: elide;
+            }
+            Text {
+                x: 10px;
+                y: card.thumb-h + 10px + card.title-h + card.desc-h;
+                width: parent.width - 20px;
+                height: 16px;
+                text: root.m.link-host;
+                color: Theme.secondary;
+                font-size: 11.5px;
+                overflow: elide;
+            }
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.open-link(root.m.link-url); }
+            }
+        }
+        if root.m.text != "" && !root.m.revoked && !root.m.poll && !root.m.has-links && !root.m.contact: Text {
+            text: root.m.text;
+            color: Theme.text;
+            font-size: 14.5px * Theme.font-scale;
+            wrap: word-wrap;
+        }
+        // Messages with links: StyledText renders them as clickable links. It
+        // takes every mouse event over the text, so the right-click menu is
+        // reachable from the rest of the bubble and from the footer arrow.
+        if root.m.has-links && !root.m.revoked && !root.m.poll: StyledText {
+            text: root.m.styled;
+            default-color: Theme.text;
+            default-font-size: 14.5px * Theme.font-scale;
+            link-color: Theme.tick-read;
+            selectable: true;
+            link-clicked(url) => {
+                root.phone = PhoneLinks.phone-of(url);
+                if (root.phone != "") {
+                    root.open-phone-menu();
+                } else {
+                    root.open-link(url);
+                }
+            }
+        }
+        // ---- location card (location_card.slint) ----
+        if root.m.geo != "" && !root.m.revoked: LocationCard {
+            geo: root.m.geo;
+            content-w: min(260px, root.max-w - 20px);
+            context-menu(px, py) => {
+                root.open-menu(self.absolute-position.x - root.absolute-position.x + px, self.absolute-position.y - root.absolute-position.y + py);
+            }
+        }
+        // ---- end location card ----
+        HorizontalLayout {
+            alignment: end;
+            spacing: 4px;
+            if root.m.edited && !root.m.revoked: Text {
+                text: "Edited";
+                color: Theme.secondary;
+                font-size: 11px;
+            }
+            // disappearing messages: timer marker
+            if root.m.expires && !root.m.revoked: Rectangle {
+                width: 11px;
+                IconTimer {
+                    x: 0px;
+                    y: (parent.height - self.height) / 2;
+                    size: 10px;
+                    color: Theme.secondary;
+                }
+            }
+            Text {
+                text: root.m.time;
+                color: Theme.secondary;
+                font-size: 11px;
+            }
+            if root.m.has-links: Rectangle {
+                width: 16px;
+                Chevron {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    tint: footer-ta.has-hover ? Theme.text : Theme.secondary;
+                }
+                footer-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.open-menu(root.width - 4px, root.height - 4px); }
+                }
+            }
+            if root.m.starred && !root.m.revoked: Rectangle {
+                width: 11px;
+                StarIcon {
+                    x: 0px;
+                    y: (parent.height - self.height) / 2;
+                    size: 10px;
+                    color: Theme.secondary;
+                }
+            }
+            if root.m.mine && root.m.status == 5: Text {
+                text: "!";
+                color: Theme.danger;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            if root.m.mine && root.m.status >= 1 && root.m.status <= 4: Rectangle {
+                width: 16px;
+                if root.m.status == 1: IconClock {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    size: 12px;
+                    color: Theme.secondary;
+                }
+                if root.m.status == 2: IconCheck {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    size: 12px;
+                    color: Theme.secondary;
+                }
+                if root.m.status == 3 || root.m.status == 4: IconCheckDouble {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    size: 14px;
+                    color: root.m.status == 4 ? Theme.tick-read : Theme.secondary;
+                }
+            }
+        }
+        if root.m.reactions.length > 0 && !root.m.revoked: ReactionBar {
+            chips: root.m.reactions;
+            toggle(e) => { root.react(e); }
+        }
+    }
+
+    if root.m.mentions-me: Rectangle {
+        x: 0px;
+        y: 5px;
+        width: 3px;
+        height: parent.height - 10px;
+        border-radius: 1.5px;
+        background: Theme.accent;
+    }
+
+    // Hover actions: react, reply and the menu arrow. Right-click opens the same menu.
+    Rectangle {
+        visible: bubble-ta.has-hover || reply-ta.has-hover || react-ta.has-hover || arrow-ta.has-hover;
+        x: parent.width - self.width - 4px;
+        y: 3px;
+        width: root.m.revoked ? 24px : 104px;
+        height: 20px;
+        border-radius: 10px;
+        background: root.m.mine ? #0b4a3e : #17212a;
+        if !root.m.revoked: Text {
+            x: 0px;
+            width: 26px;
+            text: "🙂";
+            color: Theme.text;
+            font-size: 13px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        react-ta := TouchArea {
+            x: 0px;
+            width: root.m.revoked ? 0px : 26px;
+            enabled: !root.m.revoked;
+            mouse-cursor: pointer;
+            clicked => { quick.show(); }
+        }
+        if !root.m.revoked: Text {
+            x: 26px;
+            width: 54px;
+            text: "↩ Reply";
+            color: Theme.text;
+            font-size: 11px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        reply-ta := TouchArea {
+            x: 26px;
+            width: root.m.revoked ? 0px : 54px;
+            enabled: !root.m.revoked;
+            mouse-cursor: pointer;
+            clicked => { root.reply(); }
+        }
+        Chevron {
+            x: parent.width - 24px + 7px;
+            y: (parent.height - self.height) / 2;
+        }
+        arrow-ta := TouchArea {
+            x: parent.width - 24px;
+            width: 24px;
+            mouse-cursor: pointer;
+            clicked => { root.open-menu(parent.x + parent.width - 6px, parent.y + parent.height); }
+        }
+    }
+
+    property <bool> menu-shown: menu.is-open;
+    changed menu-shown => { PopupState.open = max(0, PopupState.open + (self.menu-shown ? 1 : -1)); }
+    menu := PopupWindow {
+        x: root.menu-x;
+        y: root.menu-y;
+        width: root.menu-w;
+        height: root.menu-h;
+        close-policy: close-on-click-outside;
+        menu-body := MsgMenu {
+            can-reply: !root.m.revoked;
+            can-react: !root.m.revoked;
+            can-copy: root.m.can-copy;
+            can-download: root.can-download;
+            can-open: root.can-open;
+            can-reveal: root.can-reveal;
+            can-save: root.can-save;
+            can-edit: root.m.can-edit;
+            can-forward: root.m.can-share;
+            can-pin: !root.m.revoked;
+            pinned: root.m.pinned;
+            can-star: !root.m.revoked;
+            starred: root.m.starred;
+            can-info: root.can-info;
+            edit => {
+                MsgOps.begin-edit(root.m.id);
+                menu.close();
+            }
+            forward => {
+                MsgOps.forward-one(root.m.id);
+                menu.close();
+            }
+            pin => {
+                if (root.m.pinned) {
+                    MsgOps.unpin(root.m.id);
+                } else {
+                    MsgOps.pin-ask-id = root.m.id;
+                }
+                menu.close();
+            }
+            star => {
+                MsgOps.toggle-star(root.m.id);
+                menu.close();
+            }
+            info => {
+                MsgOps.show-info(root.m.id);
+                menu.close();
+            }
+            select => {
+                MsgOps.begin-select(root.m.id);
+                menu.close();
+            }
+            reply => {
+                root.reply();
+                menu.close();
+            }
+            react => {
+                quick.show();
+                menu.close();
+            }
+            copy => {
+                root.copy();
+                menu.close();
+            }
+            download => {
+                root.download();
+                menu.close();
+            }
+            open => {
+                root.open();
+                menu.close();
+            }
+            save-as => {
+                root.save-as();
+                menu.close();
+            }
+            show-in-folder => {
+                root.show-in-folder();
+                menu.close();
+            }
+            delete => {
+                root.delete();
+                menu.close();
+            }
+        }
+    }
+
+    property <bool> phone-menu-shown: phone-menu.is-open;
+    changed phone-menu-shown => { PopupState.open = max(0, PopupState.open + (self.phone-menu-shown ? 1 : -1)); }
+    phone-menu := PopupWindow {
+        x: root.phone-menu-x;
+        y: root.phone-menu-y;
+        width: root.menu-w;
+        height: root.phone-menu-h;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.panel;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.divider;
+            VerticalLayout {
+                padding-top: 6px;
+                padding-bottom: 6px;
+                MenuRow {
+                    label: "Chat on WhatsApp";
+                    clicked => {
+                        root.contact-message(root.phone);
+                        phone-menu.close();
+                    }
+                }
+                MenuRow {
+                    label: "Copy number";
+                    clicked => {
+                        root.contact-copy(root.phone);
+                        phone-menu.close();
+                    }
+                }
+                MenuRow {
+                    label: "Look up profile";
+                    clicked => {
+                        root.phone-lookup(root.phone);
+                        phone-menu.close();
+                    }
+                }
+            }
+        }
+    }
+
+    property <bool> quick-shown: quick.is-open;
+    changed quick-shown => { PopupState.open = max(0, PopupState.open + (self.quick-shown ? 1 : -1)); }
+    quick := PopupWindow {
+        x: root.m.mine ? root.width - self.width : 0px;
+        y: -50px;
+        width: quick-body.width;
+        height: quick-body.height;
+        close-policy: close-on-click-outside;
+        quick-body := QuickReactPopup {
+            quick: ReactionConfig.quick;
+            react(e) => {
+                root.react(e);
+                quick.close();
+            }
+            more => {
+                root.more-reactions();
+                quick.close();
+            }
+        }
+    }
+}
+
+component MsgRow inherits VerticalLayout {
+    in property <MsgItem> m;
+    in property <length> list-w;
+    callback reply(string);
+    callback download(string);
+    callback open(string);
+    callback show-in-folder(string);
+    callback save-as(string);
+    callback toggle-play(string);
+    callback react(string, string);
+    callback more-reactions(string);
+    callback copy(string);
+    callback delete(string, bool);
+    callback open-link(string);
+    callback contact-message(string);
+    callback contact-copy(string);
+    callback phone-lookup(string);
+    // Called with this row's position while a search jump is settling.
+    callback jump-here(length, length);
+    in property <length> view-x;
+    in property <length> view-y;
+    in property <length> view-w;
+    in property <length> view-h;
+    in property <string> highlight-id;
+    in property <int> jump-seq;
+    in property <bool> jumping;
+    property <bool> targeted: root.highlight-id != "" && root.m.id == root.highlight-id;
+
+    // Rows far from the viewport are created lazily; once the target row
+    // exists (and whenever its position or size changes) the view re-centres.
+    init => {
+        if (root.targeted && root.jumping) {
+            root.jump-here(root.y, root.height);
+        }
+    }
+    changed y => {
+        if (root.targeted && root.jumping) {
+            root.jump-here(root.y, root.height);
+        }
+    }
+    changed height => {
+        if (root.targeted && root.jumping) {
+            root.jump-here(root.y, root.height);
+        }
+    }
+    changed jump-seq => {
+        if (root.targeted) {
+            root.jump-here(root.y, root.height);
+        }
+    }
+
+    padding-left: 48px;
+    padding-right: 48px;
+    padding-top: 2px;
+    padding-bottom: 2px;
+
+    if root.m.is-sep: HorizontalLayout {
+        alignment: center;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        Rectangle {
+            background: Theme.panel;
+            border-radius: 8px;
+            width: sep-text.preferred-width + 20px;
+            height: 26px;
+            sep-text := Text {
+                text: root.m.sep-text;
+                color: Theme.secondary;
+                font-size: 12px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+    if root.m.is-notice: HorizontalLayout {
+        alignment: center;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        Rectangle {
+            background: Theme.panel;
+            border-radius: 13px;
+            width: min(root.list-w - 120px, notice-text.preferred-width + 44px);
+            height: 26px;
+            IconTimer {
+                x: 12px;
+                y: (parent.height - self.height) / 2;
+                size: 12px;
+                color: Theme.secondary;
+            }
+            notice-text := Text {
+                x: 30px;
+                width: parent.width - 42px;
+                text: root.m.text;
+                color: Theme.secondary;
+                font-size: 12px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            TouchArea {
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.right) {
+                        notice-menu.show();
+                    }
+                }
+            }
+            property <bool> notice-menu-shown: notice-menu.is-open;
+            changed notice-menu-shown => { PopupState.open = max(0, PopupState.open + (self.notice-menu-shown ? 1 : -1)); }
+            notice-menu := PopupWindow {
+                x: (parent.width - self.width) / 2;
+                y: parent.height;
+                width: 120px;
+                height: 12px + 34px;
+                close-policy: close-on-click-outside;
+                Rectangle {
+                    width: parent.width;
+                    height: parent.height;
+                    background: Theme.panel;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: Theme.divider;
+                    VerticalLayout {
+                        padding-top: 6px;
+                        padding-bottom: 6px;
+                        MenuRow {
+                            label: "Copy";
+                            clicked => {
+                                root.copy(root.m.id);
+                                notice-menu.close();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !root.m.is-sep && !root.m.is-notice: Rectangle {
+        height: bubble-row.preferred-height;
+        if root.m.selected: Rectangle {
+            x: -48px;
+            width: parent.width + 96px;
+            background: #00a88426;
+        }
+        bubble-row := HorizontalLayout {
+            alignment: root.m.mine ? end : start;
+            Bubble {
+                m: root.m;
+                highlighted: root.targeted;
+                max-w: root.list-w * 0.65;
+                reply => { root.reply(root.m.id); }
+                download => { root.download(root.m.id); }
+                open => { root.open(root.m.id); }
+                show-in-folder => { root.show-in-folder(root.m.id); }
+                save-as => { root.save-as(root.m.id); }
+                toggle-play => { root.toggle-play(root.m.id); }
+                react(e) => { root.react(root.m.id, e); }
+                more-reactions => { root.more-reactions(root.m.id); }
+                copy => { root.copy(root.m.id); }
+                delete => { root.delete(root.m.id, root.m.can-delete-everyone); }
+                open-link(url) => { root.open-link(url); }
+                contact-message(digits) => { root.contact-message(digits); }
+                contact-copy(phone) => { root.contact-copy(phone); }
+                phone-lookup(digits) => { root.phone-lookup(digits); }
+                view-x: root.view-x;
+                view-y: root.view-y;
+                view-w: root.view-w;
+                view-h: root.view-h;
+            }
+        }
+        // Selection mode: a check circle in the left gutter; a click anywhere
+        // on the row toggles it (and nothing underneath reacts).
+        if MsgOps.selecting: Rectangle {
+            x: -34px;
+            y: (parent.height - self.height) / 2;
+            width: 22px;
+            height: 22px;
+            border-radius: 11px;
+            border-width: 2px;
+            border-color: root.m.selected ? Theme.accent : Theme.secondary;
+            background: root.m.selected ? Theme.accent : transparent;
+            if root.m.selected: Path {
+                x: 4px;
+                y: 5px;
+                width: 10px;
+                height: 8px;
+                viewbox-width: 10;
+                viewbox-height: 8;
+                commands: "M 0 4 L 3.5 7.5 L 10 0.5";
+                stroke: #111b21;
+                stroke-width: 2px;
+                fill: transparent;
+            }
+        }
+        if MsgOps.selecting: TouchArea {
+            x: -48px;
+            width: parent.width + 96px;
+            mouse-cursor: pointer;
+            clicked => { MsgOps.toggle-select(root.m.id); }
+        }
+    }
+}
+
+export component ChatView inherits Rectangle {
+    in property <[MsgItem]> messages;
+    in property <bool> has-chat;
+    in property <string> header-name;
+    in property <string> header-subtitle;
+    // Read receipts are off for this chat / for the whole profile.
+    in property <bool> header-receipts-off;
+    in property <bool> receipts-global-off;
+    callback receipts-toggle();
+    callback read-now();
+    in property <image> header-avatar;
+    in property <bool> header-has-avatar;
+    in property <string> header-initials;
+    in property <color> header-tint;
+    in property <bool> has-reply;
+    in property <string> reply-sender;
+    in property <string> reply-text;
+    in property <bool> recording;
+    in property <bool> rec-stopped;
+    // The open chat is a blocked contact: the composer is replaced by a bar.
+    in property <bool> blocked;
+    // Non-empty: the open group does not let us send; the composer is replaced by this notice.
+    in property <string> composer-blocked-text;
+    property <bool> gated: root.blocked || root.composer-blocked-text != "";
+    callback unblock();
+    // The view shows an old window of the chat while newer messages exist.
+    in property <bool> new-below;
+    callback jump-latest();
+    // Selection bar "Delete for me": how many messages the dialog names (0: closed).
+    in property <int> delete-selected-count;
+    callback delete-selected();
+    callback cancel-delete-selected();
+    in property <string> rec-time;
+    in property <float> rec-level;
+    in property <bool> enter-sends: true;
+    in property <[EmojiRow]> emoji-rows;
+    in property <[EmojiTab]> emoji-tabs;
+    in property <[string]> emoji-recents;
+    // In-chat search.
+    in-out property <bool> search-open;
+    in-out property <string> search-query;
+    in property <int> search-current;
+    in property <int> search-total;
+    in property <bool> search-searching;
+    in property <string> highlight-id;
+    // Staged attachments (paste / drop) take over Ctrl+V when they apply.
+    callback paste() -> bool;
+    callback msg-search(string);
+    callback msg-search-next();
+    callback msg-search-prev();
+    callback msg-search-close();
+    callback react(string, string);
+    callback emoji-search(string);
+    callback emoji-picked(string);
+    callback emoji-insert(string);
+    callback send-message(string);
+    callback composing(string);
+    callback attach();
+    callback reply-to(string);
+    callback cancel-reply();
+    // Up in an empty composer: edit the last own message.
+    callback edit-last();
+    callback download(string);
+    callback open(string);
+    callback show-in-folder(string);
+    callback save-as(string);
+    callback toggle-play(string);
+    callback load-older();
+    callback start-record();
+    callback cancel-record();
+    callback send-record();
+    callback copy-text(string);
+    callback delete-message(string, bool);
+    callback open-link(string);
+    callback contact-message(string);
+    callback contact-copy(string);
+    callback phone-lookup(string);
+    callback header-clicked();
+
+    background: Theme.chat-bg;
+
+    public function scroll-to-bottom() {
+        list.content-y = min(0px, list.visible-height - list.content-height);
+    }
+    public pure function at-bottom() -> bool {
+        return list.content-y <= list.visible-height - list.content-height + 60px;
+    }
+    public pure function content-short() -> bool {
+        return list.content-height <= list.visible-height;
+    }
+    public pure function scroll-y() -> length {
+        return list.content-y;
+    }
+    public pure function content-h() -> length {
+        return list.content-height;
+    }
+    public function restore-scroll(y: length, h: length) {
+        list.content-y = min(0px, y - (list.content-height - h));
+    }
+    public function show-delete(id: string, everyone: bool) {
+        root.delete-id = id;
+        root.delete-everyone-ok = everyone;
+        root.delete-open = true;
+    }
+    public function focus-composer() {
+        input.focus();
+    }
+    public function clear-composer() {
+        input.text = "";
+    }
+    public pure function composer-text() -> string {
+        return input.text;
+    }
+    public pure function composer-cursor() -> int {
+        return input.cursor-position-byte-offset;
+    }
+    public function set-composer(text: string, cursor: int) {
+        input.text = text;
+        input.set-selection-offsets(cursor, cursor);
+    }
+    // Applies WhatsApp formatting to the composer selection (see format.rs).
+    function apply-format(kind: int) {
+        if (root.gated) {
+            return;
+        }
+        input.text = Mentions.format(input.text, input.anchor-position-byte-offset, input.cursor-position-byte-offset, kind);
+        input.set-selection-offsets(Mentions.fmt-start, Mentions.fmt-end);
+        input.focus();
+        root.composing(input.text);
+        Mentions.edited(input.text, input.cursor-position-byte-offset);
+    }
+    public function open-search() {
+        root.search-open = true;
+        search-bar.focus-field();
+    }
+    // Scrolls so the row at `ratio` (0 top .. 1 bottom of the content) is
+    // centred; the row itself then fine-tunes the position (see MsgRow).
+    public function jump-to(ratio: float) {
+        root.jumping = true;
+        root.jump-seq += 1;
+        list.content-y = min(0px, max(list.visible-height - list.content-height, list.visible-height / 2 - ratio * list.content-height));
+    }
+    function align(y: length, h: length) {
+        list.content-y = min(0px, max(list.visible-height - list.content-height, (list.visible-height - h) / 2 - y));
+    }
+    function close-search() {
+        root.search-open = false;
+        root.search-query = "";
+        input.focus();
+        root.msg-search-close();
+    }
+    property <bool> jumping;
+    property <int> jump-seq;
+    // Pinned-message strip and "Editing message" strip take room from the list.
+    property <length> pin-h: MsgOps.pin-visible ? 44px : 0px;
+    property <length> edit-h: MsgOps.editing ? 46px : 0px;
+    Timer {
+        interval: 900ms;
+        running: root.jumping;
+        triggered => { root.jumping = false; }
+    }
+    // 0: emoji for the composer, 1: reaction to `react-target`.
+    property <int> picker-mode;
+    property <string> react-target;
+    property <string> picker-search;
+    // Message waiting for the "Delete message?" answer.
+    property <bool> delete-open;
+    property <string> delete-id;
+    property <bool> delete-everyone-ok;
+    function open-picker(mode: int) {
+        root.picker-mode = mode;
+        root.emoji-search("");
+        root.picker-search = "";
+        picker.show();
+    }
+    function do-send() {
+        if (root.gated) {
+            return;
+        }
+        root.send-message(input.text);
+        input.text = "";
+    }
+
+    if !root.has-chat: Text {
+        text: "Select a chat to start messaging";
+        color: Theme.secondary;
+        font-size: 16px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    Rectangle {
+        visible: root.has-chat;
+        // Header
+        Rectangle {
+            y: 0px;
+            height: 60px;
+            background: Theme.panel;
+            Avatar {
+                x: 16px;
+                y: (parent.height - self.height) / 2;
+                size: 40px;
+                source: root.header-avatar;
+                has-image: root.header-has-avatar;
+                initials: root.header-initials;
+                tint: root.header-tint;
+            }
+            header-title := Text {
+                x: 68px;
+                y: root.header-subtitle == "" ? (parent.height - self.height) / 2 : 10px;
+                width: min(self.preferred-width, parent.width - 84px - 96px - (root.header-receipts-off ? 24px : 0px));
+                text: root.header-name;
+                color: Theme.text;
+                font-size: 16px;
+                overflow: elide;
+            }
+            if root.header-receipts-off: Text {
+                x: header-title.x + header-title.width + 6px;
+                y: header-title.y + 1px;
+                text: "👻";
+                color: Theme.secondary;
+                font-size: 14px;
+            }
+            // disappearing messages: header marker
+            if TimerState.chat-on: IconTimer {
+                x: header-title.x + header-title.width + (root.header-receipts-off ? 30px : 8px);
+                y: header-title.y + 3px;
+                size: 14px;
+                color: Theme.secondary;
+            }
+            if root.header-subtitle != "": Text {
+                x: 68px;
+                y: 33px;
+                width: parent.width - 84px - 96px;
+                text: root.header-subtitle;
+                color: Theme.secondary;
+                font-size: 13px;
+                overflow: elide;
+            }
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.header-clicked(); }
+            }
+            Rectangle {
+                x: parent.width - 88px;
+                y: 12px;
+                width: 36px;
+                height: 36px;
+                border-radius: 18px;
+                background: more-btn.has-hover ? Theme.hover : transparent;
+                // Vertical dots drawn from rectangles: no icon font is bundled.
+                for k in 3: Rectangle {
+                    x: 17px;
+                    y: 10px + k * 7px;
+                    width: 3px;
+                    height: 3px;
+                    border-radius: 1.5px;
+                    background: Theme.secondary;
+                }
+                more-btn := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { header-menu.show(); }
+                }
+                property <bool> header-menu-shown: header-menu.is-open;
+                changed header-menu-shown => { PopupState.open = max(0, PopupState.open + (self.header-menu-shown ? 1 : -1)); }
+                // Drops below the header (the button sits 12px into its 60px) with
+                // its right edge 12px from the window edge, so the menu is not
+                // drawn over the header it shares a colour with.
+                header-menu := PopupWindow {
+                    x: parent.width + 40px - 260px;
+                    y: 52px;
+                    width: 260px;
+                    height: 12px + 34px * (root.receipts-global-off || root.header-receipts-off ? 3 : 2);
+                    close-policy: close-on-click-outside;
+                    Rectangle {
+                        width: parent.width;
+                        height: parent.height;
+                        background: Theme.panel;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: Theme.divider;
+                        VerticalLayout {
+                            padding-top: 6px;
+                            padding-bottom: 6px;
+                            MenuRow {
+                                label: root.header-receipts-off ? "Turn on read receipts for this chat" : "Turn off read receipts for this chat";
+                                clicked => {
+                                    root.receipts-toggle();
+                                    header-menu.close();
+                                }
+                            }
+                            if root.receipts-global-off || root.header-receipts-off: MenuRow {
+                                label: "Mark as read now";
+                                clicked => {
+                                    root.read-now();
+                                    header-menu.close();
+                                }
+                            }
+                            MenuRow {
+                                label: "Starred messages";
+                                clicked => {
+                                    MsgOps.starred-open-chat();
+                                    header-menu.close();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Rectangle {
+                x: parent.width - 48px;
+                y: 12px;
+                width: 36px;
+                height: 36px;
+                border-radius: 18px;
+                background: search-btn.has-hover || root.search-open ? Theme.hover : transparent;
+                IconSearch {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    size: 20px;
+                    color: Theme.secondary;
+                }
+                search-btn := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if (root.search-open) {
+                            root.close-search();
+                        } else {
+                            root.open-search();
+                        }
+                    }
+                }
+            }
+        }
+
+        search-bar := ChatSearchBar {
+            y: 60px;
+            width: parent.width;
+            open: root.search-open;
+            current: root.search-current;
+            total: root.search-total;
+            searching: root.search-searching;
+            query <=> root.search-query;
+            search(q) => { root.msg-search(q); }
+            next => { root.msg-search-next(); }
+            prev => { root.msg-search-prev(); }
+            close => { root.close-search(); }
+        }
+
+        if MsgOps.pin-visible: PinnedBar {
+            y: 60px + search-bar.height;
+            width: parent.width;
+        }
+
+        list := ListView {
+            y: 60px + search-bar.height + root.pin-h;
+            height: parent.height - 60px - search-bar.height - root.pin-h - composer.height - root.edit-h;
+            for m in root.messages: MsgRow {
+                m: m;
+                list-w: list.visible-width - 96px;
+                view-x: root.absolute-position.x;
+                view-y: root.absolute-position.y;
+                view-w: root.width;
+                view-h: root.height;
+                highlight-id: root.highlight-id;
+                jump-seq: root.jump-seq;
+                jumping: root.jumping;
+                jump-here(y, h) => { root.align(y, h); }
+                copy(id) => { root.copy-text(id); }
+                delete(id, everyone) => {
+                    root.delete-id = id;
+                    root.delete-everyone-ok = everyone;
+                    root.delete-open = true;
+                }
+                open-link(url) => { root.open-link(url); }
+                contact-message(digits) => { root.contact-message(digits); }
+                contact-copy(phone) => { root.contact-copy(phone); }
+                phone-lookup(digits) => { root.phone-lookup(digits); }
+                reply(id) => { root.reply-to(id); }
+                download(id) => { root.download(id); }
+                open(id) => { root.open(id); }
+                show-in-folder(id) => { root.show-in-folder(id); }
+                save-as(id) => { root.save-as(id); }
+                toggle-play(id) => { root.toggle-play(id); }
+                react(id, e) => { root.react(id, e); }
+                more-reactions(id) => {
+                    root.react-target = id;
+                    root.open-picker(1);
+                }
+            }
+            changed content-y => {
+                if (self.content-y > -100px) {
+                    root.load-older();
+                }
+                if (root.new-below && root.at-bottom()) {
+                    root.jump-latest();
+                }
+            }
+        }
+
+        composer := Rectangle {
+            y: parent.height - self.height;
+            height: (root.has-reply ? 58px : 0px) + input-h + 20px;
+            background: Theme.panel;
+
+            property <length> input-h: clamp(input.preferred-height + 20px, 42px, 148px);
+
+            if root.has-reply: Rectangle {
+                x: 10px;
+                y: 8px;
+                width: parent.width - 20px;
+                height: 50px;
+                background: #1a262d;
+                border-radius: 8px;
+                Rectangle {
+                    x: 0px;
+                    width: 4px;
+                    background: Theme.accent;
+                }
+                Text {
+                    x: 14px;
+                    y: 6px;
+                    width: parent.width - 54px;
+                    text: root.reply-sender;
+                    color: Theme.accent;
+                    font-size: 12px;
+                    font-weight: 600;
+                    overflow: elide;
+                }
+                Text {
+                    x: 14px;
+                    y: 25px;
+                    width: parent.width - 54px;
+                    text: root.reply-text;
+                    color: Theme.secondary;
+                    font-size: 13px;
+                    overflow: elide;
+                }
+                Rectangle {
+                    x: parent.width - 34px;
+                    width: 24px;
+                    IconClose {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        size: 16px;
+                        color: Theme.secondary;
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.cancel-reply(); }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                x: 10px;
+                y: parent.height - self.height - 10px;
+                width: parent.width - 20px;
+                height: composer.input-h;
+                spacing: 8px;
+
+                Rectangle {
+                    width: 40px;
+                    Text {
+                        text: "📎";
+                        color: Theme.secondary;
+                        font-size: 20px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { attach-menu.show(); }
+                    }
+                    property <bool> attach-menu-shown: attach-menu.is-open;
+                    changed attach-menu-shown => { PopupState.open = max(0, PopupState.open + (self.attach-menu-shown ? 1 : -1)); }
+                    // Opens upwards from the paperclip. Each entry runs its callback
+                    // before the popup closes.
+                    attach-menu := PopupWindow {
+                        x: 0px;
+                        y: -(12px + 34px * 4) - 6px;
+                        width: 200px;
+                        height: 12px + 34px * 4;
+                        close-policy: close-on-click-outside;
+                        Rectangle {
+                            width: parent.width;
+                            height: parent.height;
+                            background: Theme.panel;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: Theme.divider;
+                            VerticalLayout {
+                                padding-top: 6px;
+                                padding-bottom: 6px;
+                                AttachRow {
+                                    label: "Document";
+                                    IconFile { size: 18px; color: Theme.secondary; y: (parent.height - self.height) / 2; }
+                                    clicked => {
+                                        root.attach();
+                                        attach-menu.close();
+                                    }
+                                }
+                                AttachRow {
+                                    label: "Contact";
+                                    IconContact { size: 18px; color: Theme.secondary; y: (parent.height - self.height) / 2; }
+                                    clicked => {
+                                        AttachActions.contact();
+                                        attach-menu.close();
+                                    }
+                                }
+                                AttachRow {
+                                    label: "Location";
+                                    IconPin { size: 18px; color: Theme.secondary; y: (parent.height - self.height) / 2; }
+                                    clicked => {
+                                        AttachActions.location();
+                                        attach-menu.close();
+                                    }
+                                }
+                                AttachRow {
+                                    label: "Poll";
+                                    IconPoll { size: 18px; color: Theme.secondary; y: (parent.height - self.height) / 2; }
+                                    clicked => {
+                                        AttachActions.poll();
+                                        attach-menu.close();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    width: 36px;
+                    Text {
+                        text: "😊";
+                        font-size: 20px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.open-picker(0); }
+                    }
+                }
+                Rectangle {
+                    background: Theme.input-bg;
+                    border-radius: 8px;
+                    clip: true;
+                    if input.text == "": Text {
+                        x: 12px;
+                        text: "Type a message";
+                        color: Theme.secondary;
+                        font-size: 15px * Theme.font-scale;
+                        vertical-alignment: center;
+                    }
+                    FocusScope {
+                        capture-key-pressed(e) => {
+                            if (e.modifiers.control && (e.text == "f" || e.text == "F" || e.text == "\u{6}")) {
+                                root.open-search();
+                                return accept;
+                            }
+                            if (e.modifiers.control && (e.text == "v" || e.text == "V" || e.text == "\u{16}") && !root.gated && root.paste()) {
+                                return accept;
+                            }
+                            // Formatting shortcuts. Ctrl+letter may arrive as the
+                            // control character (Ctrl+B = \u{2}, Ctrl+I = \u{9},
+                            // Ctrl+Shift+X = \u{18}, Ctrl+Shift+M = \u{d}).
+                            if (e.modifiers.control && !e.modifiers.alt && !root.gated) {
+                                if (!e.modifiers.shift && (e.text == "b" || e.text == "B" || e.text == "\u{2}")) {
+                                    root.apply-format(0);
+                                    return accept;
+                                }
+                                if (!e.modifiers.shift && (e.text == "i" || e.text == "I" || e.text == "\u{9}")) {
+                                    root.apply-format(1);
+                                    return accept;
+                                }
+                                if (e.modifiers.shift && (e.text == "x" || e.text == "X" || e.text == "\u{18}")) {
+                                    root.apply-format(2);
+                                    return accept;
+                                }
+                                if (e.modifiers.shift && (e.text == "m" || e.text == "M" || e.text == "\u{d}")) {
+                                    root.apply-format(3);
+                                    return accept;
+                                }
+                                if (e.modifiers.shift && (e.text == "." || e.text == ">")) {
+                                    root.apply-format(4);
+                                    return accept;
+                                }
+                            }
+                            if (Mentions.open) {
+                                if (e.text == Key.UpArrow) {
+                                    Mentions.step(-1);
+                                    return accept;
+                                }
+                                if (e.text == Key.DownArrow) {
+                                    Mentions.step(1);
+                                    return accept;
+                                }
+                                if (e.text == Key.Return || e.text == Key.Tab) {
+                                    Mentions.pick(Mentions.sel);
+                                    return accept;
+                                }
+                            }
+                            if (e.text == Key.UpArrow && !e.modifiers.control && !e.modifiers.alt && !e.modifiers.shift && !e.modifiers.meta
+                                && input.text == "" && !Mentions.open && !MsgOps.editing && !root.gated && !root.recording) {
+                                root.edit-last();
+                                return accept;
+                            }
+                            if (e.text == Key.Return && (root.enter-sends ? !e.modifiers.shift : e.modifiers.control)) {
+                                root.do-send();
+                                return accept;
+                            }
+                            return reject;
+                        }
+                        Flickable {
+                            x: 12px;
+                            y: 10px;
+                            width: parent.width - 24px;
+                            height: parent.height - 20px;
+                            content-height: input.preferred-height;
+                            input := TextInput {
+                                enabled: !root.gated;
+                                width: parent.width;
+                                color: Theme.text;
+                                font-size: 15px * Theme.font-scale;
+                                wrap: word-wrap;
+                                single-line: false;
+                                edited => {
+                                    root.composing(self.text);
+                                    Mentions.edited(self.text, self.cursor-position-byte-offset);
+                                }
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    width: 40px;
+                    Rectangle {
+                        width: 36px;
+                        height: 36px;
+                        border-radius: 18px;
+                        background: Theme.accent;
+                        if input.text != "": Path {
+                            x: (parent.width - self.width) / 2 + 1px;
+                            y: (parent.height - self.height) / 2;
+                            width: 16px;
+                            height: 16px;
+                            viewbox-width: 16;
+                            viewbox-height: 16;
+                            commands: "M 0 0 L 16 8 L 0 16 L 3 8 Z";
+                            fill: #111b21;
+                        }
+                        if input.text == "": Text {
+                            text: "🎤";
+                            font-size: 18px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            if (input.text == "") {
+                                root.start-record();
+                            } else {
+                                root.do-send();
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Formatting bar: shown while the composer has a selection. Slint's
+            // TextInput does not expose the selection's position, so it sits at
+            // the top-left of the input box.
+            if input.has-selection && !root.gated && !root.recording && !Mentions.open: Rectangle {
+                x: 62px;
+                y: -self.height - 4px;
+                width: 5 * 34px + 8px;
+                height: 38px;
+                background: Theme.panel;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Theme.divider;
+                drop-shadow-blur: 12px;
+                drop-shadow-color: #00000088;
+                TouchArea { }
+                HorizontalLayout {
+                    padding: 4px;
+                    for k in [0, 1, 2, 3, 4]: FmtButton {
+                        kind: k;
+                        clicked => { root.apply-format(k); }
+                    }
+                }
+            }
+
+            // @mention suggestions, floating above the composer.
+            if Mentions.open && Mentions.items.length > 0 && !root.recording: Rectangle {
+                x: 62px;
+                y: -self.height - 4px;
+                width: min(parent.width - 124px, 360px);
+                height: Mentions.items.length * 44px + 8px;
+                background: Theme.panel;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Theme.divider;
+                drop-shadow-blur: 12px;
+                drop-shadow-color: #00000088;
+                TouchArea { }
+                for item[i] in Mentions.items: Rectangle {
+                    x: 4px;
+                    y: 4px + i * 44px;
+                    width: parent.width - 8px;
+                    height: 44px;
+                    border-radius: 6px;
+                    background: i == Mentions.sel ? Theme.input-bg : transparent;
+                    Avatar {
+                        x: 6px;
+                        y: 6px;
+                        size: 32px;
+                        initials: item.initials;
+                        tint: item.tint;
+                    }
+                    Text {
+                        x: 48px;
+                        width: parent.width - 56px - phone-text.preferred-width;
+                        text: item.name;
+                        color: Theme.text;
+                        font-size: 14px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    phone-text := Text {
+                        x: parent.width - self.preferred-width - 8px;
+                        text: item.phone == item.name ? "" : item.phone;
+                        color: Theme.secondary;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { Mentions.pick(i); }
+                    }
+                }
+            }
+
+            if root.blocked && !root.recording: Rectangle {
+                x: 10px;
+                y: parent.height - self.height - 10px;
+                width: parent.width - 20px;
+                height: composer.input-h;
+                background: Theme.panel;
+                TouchArea { }
+                Text {
+                    x: 12px;
+                    width: parent.width - 24px - unblock-btn.width;
+                    text: "You blocked this contact.";
+                    color: Theme.secondary;
+                    font-size: 15px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                unblock-btn := Button {
+                    x: parent.width - self.width - 8px;
+                    y: (parent.height - self.height) / 2;
+                    text: "Unblock";
+                    clicked => { root.unblock(); }
+                }
+            }
+
+            if root.composer-blocked-text != "" && !root.blocked && !root.recording: Rectangle {
+                x: 10px;
+                y: parent.height - self.height - 10px;
+                width: parent.width - 20px;
+                height: composer.input-h;
+                background: Theme.panel;
+                TouchArea { }
+                Text {
+                    x: 12px;
+                    width: parent.width - 24px;
+                    text: root.composer-blocked-text;
+                    color: Theme.secondary;
+                    font-size: 15px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+
+            // Voice recording bar; covers the normal composer row while active.
+            if root.recording: bar := Rectangle {
+                property <bool> blink: true;
+                x: 10px;
+                y: parent.height - self.height - 10px;
+                width: parent.width - 20px;
+                height: composer.input-h;
+                background: Theme.panel;
+
+                Timer {
+                    interval: 500ms;
+                    running: root.recording;
+                    triggered => { bar.blink = !bar.blink; }
+                }
+                TouchArea { }
+                Rectangle {
+                    x: 0px;
+                    width: 40px;
+                    IconClose {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        size: 18px;
+                        color: Theme.secondary;
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.cancel-record(); }
+                    }
+                }
+                Rectangle {
+                    x: 52px;
+                    y: (parent.height - self.height) / 2;
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 5px;
+                    background: Theme.danger;
+                    opacity: bar.blink && !root.rec-stopped ? 1.0 : 0.25;
+                    animate opacity { duration: 250ms; }
+                }
+                Text {
+                    x: 72px;
+                    width: 48px;
+                    text: root.rec-time;
+                    color: Theme.text;
+                    font-size: 15px;
+                    vertical-alignment: center;
+                }
+                if root.rec-stopped: Text {
+                    x: 128px;
+                    width: parent.width - 128px - 56px;
+                    text: "Microphone stopped";
+                    color: Theme.warn;
+                    font-size: 14px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Rectangle {
+                    x: 128px;
+                    y: (parent.height - self.height) / 2;
+                    width: parent.width - 128px - 56px;
+                    height: 6px;
+                    visible: !root.rec-stopped;
+                    border-radius: 3px;
+                    background: #ffffff22;
+                    Rectangle {
+                        x: 0px;
+                        width: parent.width * clamp(root.rec-level, 0.0, 1.0);
+                        background: Theme.accent;
+                        border-radius: 3px;
+                        animate width { duration: 100ms; }
+                    }
+                }
+                Rectangle {
+                    x: parent.width - 40px;
+                    width: 40px;
+                    Rectangle {
+                        width: 36px;
+                        height: 36px;
+                        border-radius: 18px;
+                        background: Theme.accent;
+                        Path {
+                            x: (parent.width - self.width) / 2 + 1px;
+                            y: (parent.height - self.height) / 2;
+                            width: 16px;
+                            height: 16px;
+                            viewbox-width: 16;
+                            viewbox-height: 16;
+                            commands: "M 0 0 L 16 8 L 0 16 L 3 8 Z";
+                            fill: #111b21;
+                        }
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.send-record(); }
+                    }
+                }
+            }
+        }
+    }
+
+    if MsgOps.editing && !MsgOps.selecting: EditBar {
+        x: 0px;
+        y: root.height - composer.height - self.height;
+        width: root.width;
+    }
+    if MsgOps.selecting: SelectionBar {
+        x: 0px;
+        y: root.height - composer.height;
+        width: root.width;
+        height: composer.height;
+    }
+
+    property <bool> picker-shown: picker.is-open;
+    changed picker-shown => { PopupState.open = max(0, PopupState.open + (self.picker-shown ? 1 : -1)); }
+    picker := PopupWindow {
+        x: root.picker-mode == 0 ? 12px : (root.width - self.width) / 2;
+        y: root.picker-mode == 0 ? root.height - composer.height - self.height - 8px : (root.height - self.height) / 2;
+        width: 340px;
+        height: 380px;
+        close-policy: close-on-click-outside;
+        picker-body := EmojiPicker {
+            rows: root.emoji-rows;
+            tabs: root.emoji-tabs;
+            recents: root.emoji-recents;
+            search-text <=> root.picker-search;
+            search-changed(q) => { root.emoji-search(q); }
+            closed => { picker.close(); }
+            picked(e) => {
+                root.emoji-picked(e);
+                if (root.picker-mode == 1) {
+                    root.react(root.react-target, e);
+                    picker.close();
+                } else {
+                    root.emoji-insert(e);
+                }
+            }
+        }
+    }
+
+    if root.delete-open: DeleteDialog {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        for-everyone-allowed: root.delete-everyone-ok;
+        cancel => { root.delete-open = false; }
+        delete-for-me => {
+            root.delete-open = false;
+            root.delete-message(root.delete-id, false);
+        }
+        delete-for-everyone => {
+            root.delete-open = false;
+            root.delete-message(root.delete-id, true);
+        }
+    }
+
+    if root.new-below: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: root.height - composer.height - self.height - 12px;
+        width: 150px;
+        height: 34px;
+        border-radius: 17px;
+        background: Theme.accent;
+        HorizontalLayout {
+            alignment: center;
+            spacing: 6px;
+            padding-left: 12px;
+            padding-right: 12px;
+            Text {
+                text: "New messages";
+                color: #111b21;
+                font-size: 13px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                width: 14px;
+                IconArrowDown {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    size: 14px;
+                    color: #111b21;
+                }
+            }
+        }
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.jump-latest(); }
+        }
+    }
+
+    if root.delete-selected-count > 0: DeleteDialog {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        title: root.delete-selected-count == 1 ? "Delete 1 message for me?" : "Delete " + root.delete-selected-count + " messages for me?";
+        cancel => { root.cancel-delete-selected(); }
+        delete-for-me => { root.delete-selected(); }
+    }
+
+    if MsgOps.pin-ask-id != "": PinDialog {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+    }
+
+    if MsgOps.forward-open: ForwardPicker {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+    }
+}

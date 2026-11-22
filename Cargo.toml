@@ -1,0 +1,51 @@
+[workspace]
+resolver = "3"
+members = ["crates/store", "crates/engine", "app"]
+
+[workspace.package]
+edition = "2024"
+version = "0.7.0"
+
+[workspace.dependencies]
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+rusqlite = { version = "0.39", features = ["bundled"] }
+thiserror = "2"
+tempfile = "3"
+sha2 = "0.11"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+whatsapp-rust = { version = "0.7", default-features = false, features = ["sqlite-storage", "tokio-transport", "tokio-runtime", "ureq-client", "tokio-native", "signal"] }
+slint = { version = "1", features = ["raw-window-handle-06", "unstable-winit-030"] }
+raw-window-handle = "0.6"
+slint-build = "1"
+slint-interpreter = { version = "1", default-features = false, features = ["compat-1-2", "std"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+qrcode = { version = "0.14", default-features = false }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+rfd = "0.18"
+opus = "0.4"
+ogg = "0.9"
+cpal = "0.18"
+tray-icon = { version = "0.26", default-features = false }
+tauri-winrt-notification = "0.8"
+winreg = "0.56"
+arboard = { version = "3", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wa_store = { path = "crates/store" }
+wa_engine = { path = "crates/engine" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+strip = true
+
+# Keep debug builds small: dependency debug info is rarely needed and was the
+# bulk of an 80+ GB target/debug. Our own crates keep line tables for backtraces.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

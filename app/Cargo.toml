@@ -1,0 +1,39 @@
+[package]
+name = "waclient"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[dependencies]
+slint.workspace = true
+wa_engine.workspace = true
+wa_store.workspace = true
+chrono.workspace = true
+qrcode.workspace = true
+image.workspace = true
+rfd.workspace = true
+log.workspace = true
+tokio.workspace = true
+env_logger.workspace = true
+opus.workspace = true
+ogg.workspace = true
+cpal.workspace = true
+anyhow.workspace = true
+tray-icon.workspace = true
+tauri-winrt-notification.workspace = true
+winreg.workspace = true
+arboard = { workspace = true, features = ["image-data"] }
+raw-window-handle.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hmac = "0.13"
+rusqlite.workspace = true
+windows = { version = "0.62.2", features = ["Devices_Geolocation", "Foundation"] }
+
+[build-dependencies]
+slint-build.workspace = true
+winresource = "0.1"
+
+[dev-dependencies]
+slint-interpreter.workspace = true

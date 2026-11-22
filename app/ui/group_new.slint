@@ -1,0 +1,381 @@
+import { Button, ListView } from "std-widgets.slint";
+import { Theme, Avatar } from "theme.slint";
+import { IconCamera } from "icons.slint";
+import { ShareRow } from "share_contact.slint";
+
+// State of the "new group" and "join group by link" dialogs (Rust:
+// app/group_new_ui.rs). The member picker of the first step is the share
+// picker; this covers everything after it.
+export global GroupNew {
+    // 0 none, 1 name and photo of a new group, 2 paste an invite link,
+    // 3 what an invite link leads to.
+    in-out property <int> dialog;
+    in-out property <string> subject;
+    in property <image> photo;
+    in property <bool> has-photo;
+    in property <[ShareRow]> members;
+    // A create or join request is waiting for its answer.
+    in property <bool> busy;
+    in-out property <string> link-text;
+    in property <bool> pv-loading;
+    in property <string> pv-subject;
+    in property <string> pv-initials;
+    in property <color> pv-tint;
+    in property <string> pv-count;
+    in property <string> pv-description;
+    in property <bool> pv-approval;
+    in property <bool> pv-member;
+    // Set when the link cannot be used: shown instead of the group.
+    in property <string> pv-error;
+
+    // Menu entries of the chat list.
+    callback open-new();
+    callback open-join();
+    callback choose-photo();
+    callback back();
+    callback create(string);
+    callback preview(string);
+    callback join();
+    callback open-chat();
+    callback cancel();
+}
+
+// A single-line field with a placeholder.
+component GroupInput inherits Rectangle {
+    in property <string> placeholder;
+    in-out property <string> text <=> input.text;
+    in property <length> right-room: 0px;
+    callback edited(string);
+    callback accepted(string);
+
+    height: 38px;
+    background: Theme.input-bg;
+    border-radius: 8px;
+
+    if input.text == "": Text {
+        x: 12px;
+        width: parent.width - 24px - root.right-room;
+        text: root.placeholder;
+        color: Theme.secondary;
+        font-size: 14px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    input := TextInput {
+        x: 12px;
+        y: (parent.height - self.preferred-height) / 2;
+        width: parent.width - 24px - root.right-room;
+        color: Theme.text;
+        font-size: 14px;
+        single-line: true;
+        init => { self.focus(); }
+        edited => { root.edited(self.text); }
+        accepted => { root.accepted(self.text); }
+    }
+}
+
+// Modal dialogs that cover their parent.
+export component GroupNewDialogs inherits Rectangle {
+    background: #000000b0;
+    TouchArea { }
+
+    FocusScope {
+        width: parent.width;
+        height: parent.height;
+        capture-key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                GroupNew.cancel();
+                return accept;
+            }
+            return reject;
+        }
+
+        // ---- 1: name, photo and members of a new group ----
+        if GroupNew.dialog == 1: Rectangle {
+            width: min(420px, parent.width - 32px);
+            height: min(560px, parent.height - 32px);
+            background: Theme.panel;
+            border-radius: 12px;
+            clip: true;
+
+            Text {
+                x: 20px;
+                y: 16px;
+                width: parent.width - 40px;
+                height: 26px;
+                text: "New group";
+                color: Theme.text;
+                font-size: 18px;
+                font-weight: 600;
+            }
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: 56px;
+                width: 96px;
+                height: 96px;
+                border-radius: 48px;
+                background: Theme.input-bg;
+                clip: true;
+                if !GroupNew.has-photo: IconCamera {
+                    x: (parent.width - self.width) / 2;
+                    y: 22px;
+                    size: 32px;
+                    color: Theme.secondary;
+                }
+                if !GroupNew.has-photo: Text {
+                    y: 60px;
+                    width: parent.width;
+                    text: "Add photo";
+                    color: Theme.secondary;
+                    font-size: 12px;
+                    horizontal-alignment: center;
+                }
+                if GroupNew.has-photo: Image {
+                    source: GroupNew.photo;
+                    width: parent.width;
+                    height: parent.height;
+                    image-fit: cover;
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { GroupNew.choose-photo(); }
+                }
+            }
+            Text {
+                x: 20px;
+                y: 164px;
+                text: "Group name";
+                color: Theme.secondary;
+                font-size: 13px;
+            }
+            GroupInput {
+                x: 20px;
+                y: 184px;
+                width: parent.width - 40px;
+                placeholder: "Group name";
+                right-room: 54px;
+                text <=> GroupNew.subject;
+                accepted(t) => {
+                    if (!GroupNew.busy && t != "") {
+                        GroupNew.create(t);
+                    }
+                }
+                Text {
+                    x: parent.width - self.width - 10px;
+                    width: 44px;
+                    text: GroupNew.subject.character-count + "/100";
+                    color: GroupNew.subject.character-count > 100 ? Theme.danger : Theme.secondary;
+                    font-size: 11px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+            }
+            Text {
+                x: 20px;
+                y: 236px;
+                text: "Members: " + GroupNew.members.length;
+                color: Theme.secondary;
+                font-size: 13px;
+            }
+            ListView {
+                x: 0px;
+                y: 258px;
+                width: parent.width;
+                height: parent.height - 258px - 68px;
+                for c in GroupNew.members: Rectangle {
+                    height: 46px;
+                    Avatar {
+                        x: 20px;
+                        y: (parent.height - self.height) / 2;
+                        size: 32px;
+                        source: c.avatar;
+                        has-image: c.has-avatar;
+                        initials: c.initials;
+                        tint: c.tint;
+                    }
+                    Text {
+                        x: 64px;
+                        width: parent.width - 64px - 20px;
+                        text: c.name;
+                        color: Theme.text;
+                        font-size: 14.5px;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+            Rectangle {
+                y: parent.height - 68px;
+                height: 68px;
+                Rectangle {
+                    height: 1px;
+                    background: Theme.divider;
+                }
+                HorizontalLayout {
+                    x: 16px;
+                    width: 120px;
+                    alignment: start;
+                    padding-top: 16px;
+                    padding-bottom: 16px;
+                    Button {
+                        text: "Back";
+                        enabled: !GroupNew.busy;
+                        clicked => { GroupNew.back(); }
+                    }
+                }
+                HorizontalLayout {
+                    x: parent.width - 232px;
+                    width: 220px;
+                    alignment: end;
+                    spacing: 8px;
+                    padding-top: 16px;
+                    padding-bottom: 16px;
+                    Button {
+                        text: "Cancel";
+                        clicked => { GroupNew.cancel(); }
+                    }
+                    Button {
+                        text: GroupNew.busy ? "Creating…" : "Create";
+                        primary: true;
+                        enabled: !GroupNew.busy && GroupNew.subject != "";
+                        clicked => { GroupNew.create(GroupNew.subject); }
+                    }
+                }
+            }
+        }
+
+        // ---- 2: paste an invite link ----
+        if GroupNew.dialog == 2: Rectangle {
+            width: min(400px, parent.width - 32px);
+            height: link-body.preferred-height + 40px;
+            background: Theme.panel;
+            border-radius: 12px;
+
+            link-body := VerticalLayout {
+                padding: 20px;
+                spacing: 14px;
+                Text {
+                    text: "Join group by link";
+                    color: Theme.text;
+                    font-size: 18px;
+                    font-weight: 600;
+                }
+                Text {
+                    text: "Paste a group invite link.";
+                    color: Theme.secondary;
+                    font-size: 14px;
+                    wrap: word-wrap;
+                }
+                GroupInput {
+                    placeholder: "https://chat.whatsapp.com/…";
+                    text <=> GroupNew.link-text;
+                    accepted(t) => {
+                        if (t != "") {
+                            GroupNew.preview(t);
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 10px;
+                    Button {
+                        text: "Cancel";
+                        clicked => { GroupNew.cancel(); }
+                    }
+                    Button {
+                        text: "Next";
+                        primary: true;
+                        enabled: GroupNew.link-text != "";
+                        clicked => { GroupNew.preview(GroupNew.link-text); }
+                    }
+                }
+            }
+        }
+
+        // ---- 3: what an invite link leads to ----
+        if GroupNew.dialog == 3: Rectangle {
+            width: min(400px, parent.width - 32px);
+            height: preview-body.preferred-height + 40px;
+            background: Theme.panel;
+            border-radius: 12px;
+
+            preview-body := VerticalLayout {
+                padding: 20px;
+                spacing: 12px;
+                if GroupNew.pv-loading: Text {
+                    text: "Checking the invite link…";
+                    color: Theme.secondary;
+                    font-size: 14px;
+                    horizontal-alignment: center;
+                    height: 60px;
+                    vertical-alignment: center;
+                }
+                if !GroupNew.pv-loading && GroupNew.pv-error != "": Text {
+                    text: GroupNew.pv-error;
+                    color: Theme.text;
+                    font-size: 15px;
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                }
+                if !GroupNew.pv-loading && GroupNew.pv-error == "": Rectangle {
+                    height: 72px;
+                    Avatar {
+                        x: (parent.width - self.width) / 2;
+                        size: 72px;
+                        has-image: false;
+                        initials: GroupNew.pv-initials;
+                        tint: GroupNew.pv-tint;
+                    }
+                }
+                if !GroupNew.pv-loading && GroupNew.pv-error == "": Text {
+                    text: GroupNew.pv-subject;
+                    color: Theme.text;
+                    font-size: 18px;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+                if !GroupNew.pv-loading && GroupNew.pv-error == "": Text {
+                    text: GroupNew.pv-count;
+                    color: Theme.secondary;
+                    font-size: 13px;
+                    horizontal-alignment: center;
+                }
+                if !GroupNew.pv-loading && GroupNew.pv-error == "" && GroupNew.pv-description != "": Text {
+                    text: GroupNew.pv-description;
+                    color: Theme.text;
+                    font-size: 14px;
+                    wrap: word-wrap;
+                    overflow: elide;
+                    max-height: 4 * 20px;
+                }
+                if !GroupNew.pv-loading && GroupNew.pv-error == "" && GroupNew.pv-approval && !GroupNew.pv-member: Text {
+                    text: "An admin must approve your request";
+                    color: Theme.secondary;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 10px;
+                    Button {
+                        text: GroupNew.pv-error != "" ? "Close" : "Cancel";
+                        clicked => { GroupNew.cancel(); }
+                    }
+                    if !GroupNew.pv-loading && GroupNew.pv-error == "" && GroupNew.pv-member: Button {
+                        text: "Open chat";
+                        primary: true;
+                        clicked => { GroupNew.open-chat(); }
+                    }
+                    if !GroupNew.pv-loading && GroupNew.pv-error == "" && !GroupNew.pv-member: Button {
+                        text: GroupNew.busy ? "Joining…" : "Join group";
+                        primary: true;
+                        enabled: !GroupNew.busy;
+                        clicked => { GroupNew.join(); }
+                    }
+                }
+            }
+        }
+    }
+}

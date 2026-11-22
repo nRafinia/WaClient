@@ -1,0 +1,157 @@
+import { Button, ListView } from "std-widgets.slint";
+import { Theme, Avatar } from "theme.slint";
+import { MsgOps } from "msgops.slint";
+
+// Modal chat picker of "Forward": search box, chats (most recent first) with
+// a check mark, up to five picked. Covers its parent.
+export component ForwardPicker inherits Rectangle {
+    background: #000000b0;
+    TouchArea { }
+
+    FocusScope {
+        width: parent.width;
+        height: parent.height;
+        capture-key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                MsgOps.forward-cancel();
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            width: min(420px, parent.width - 32px);
+            height: min(560px, parent.height - 32px);
+            background: Theme.panel;
+            border-radius: 12px;
+            clip: true;
+
+            Text {
+                x: 20px;
+                y: 16px;
+                width: parent.width - 40px;
+                height: 26px;
+                text: MsgOps.forward-msgs == 1 ? "Forward message to" : "Forward " + MsgOps.forward-msgs + " messages to";
+                color: Theme.text;
+                font-size: 18px;
+                font-weight: 600;
+                overflow: elide;
+            }
+            Rectangle {
+                x: 16px;
+                y: 52px;
+                width: parent.width - 32px;
+                height: 38px;
+                background: Theme.input-bg;
+                border-radius: 8px;
+                if search.text == "": Text {
+                    x: 12px;
+                    text: "Search chats";
+                    color: Theme.secondary;
+                    font-size: 14px;
+                    vertical-alignment: center;
+                }
+                search := TextInput {
+                    x: 12px;
+                    y: (parent.height - self.preferred-height) / 2;
+                    width: parent.width - 24px;
+                    color: Theme.text;
+                    font-size: 14px;
+                    single-line: true;
+                    init => { self.focus(); }
+                    edited => { MsgOps.forward-search(self.text); }
+                }
+            }
+            ListView {
+                x: 0px;
+                y: 100px;
+                width: parent.width;
+                height: parent.height - 100px - 68px;
+                for c in MsgOps.forward-chats: Rectangle {
+                    height: 56px;
+                    background: row-ta.has-hover ? Theme.selected : transparent;
+                    Avatar {
+                        x: 16px;
+                        y: (parent.height - self.height) / 2;
+                        size: 38px;
+                        source: c.avatar;
+                        has-image: c.has-avatar;
+                        initials: c.initials;
+                        tint: c.tint;
+                    }
+                    Text {
+                        x: 66px;
+                        width: parent.width - 66px - 60px;
+                        text: c.name;
+                        color: Theme.text;
+                        font-size: 15px;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        x: parent.width - 40px;
+                        y: (parent.height - self.height) / 2;
+                        width: 22px;
+                        height: 22px;
+                        border-radius: 11px;
+                        border-width: 2px;
+                        border-color: c.selected ? Theme.accent : Theme.secondary;
+                        background: c.selected ? Theme.accent : transparent;
+                        if c.selected: Path {
+                            x: 4px;
+                            y: 5px;
+                            width: 10px;
+                            height: 8px;
+                            viewbox-width: 10;
+                            viewbox-height: 8;
+                            commands: "M 0 4 L 3.5 7.5 L 10 0.5";
+                            stroke: #111b21;
+                            stroke-width: 2px;
+                            fill: transparent;
+                        }
+                    }
+                    row-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { MsgOps.forward-toggle(c.jid); }
+                    }
+                }
+            }
+            Rectangle {
+                y: parent.height - 68px;
+                height: 68px;
+                background: Theme.panel;
+                Rectangle {
+                    height: 1px;
+                    background: Theme.divider;
+                }
+                Text {
+                    x: 20px;
+                    width: parent.width - 220px;
+                    text: MsgOps.forward-note;
+                    color: Theme.secondary;
+                    font-size: 13px;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+                HorizontalLayout {
+                    x: parent.width - 212px;
+                    width: 200px;
+                    alignment: end;
+                    spacing: 8px;
+                    padding-top: 16px;
+                    padding-bottom: 16px;
+                    Button {
+                        text: "Cancel";
+                        clicked => { MsgOps.forward-cancel(); }
+                    }
+                    Button {
+                        text: "Send";
+                        primary: true;
+                        enabled: MsgOps.forward-picked > 0;
+                        clicked => { MsgOps.forward-send(); }
+                    }
+                }
+            }
+        }
+    }
+}

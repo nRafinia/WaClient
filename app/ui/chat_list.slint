@@ -1,0 +1,955 @@
+import { ListView } from "std-widgets.slint";
+import { PopupState, Theme, ChatItem, Avatar, ProfileItem } from "theme.slint";
+import { StatusEntry, StatusListPanel } from "status_view.slint";
+import { MenuRow, Chevron } from "msg_menu.slint";
+import { ChatActions } from "account.slint";
+import { IconSearch, IconPlus, IconCheck, IconLock, IconTimer } from "icons.slint";
+import { FolderState, FolderTab } from "folders.slint";
+import { LockState } from "lock.slint";
+import { GroupNew } from "group_new.slint";
+
+component ChatRowItem inherits Rectangle {
+    in property <ChatItem> chat;
+    in property <bool> selected;
+    // Height of the window, to keep the context menu inside it.
+    in property <length> win-h;
+    // Archived chats are tagged in search results, not inside the archive itself.
+    in property <bool> show-archived-tag;
+    callback clicked();
+    callback mark-read();
+    callback pin(bool);
+    // 0 unmute, 1 eight hours, 2 one week, 3 always.
+    callback mute(int);
+    callback archive(bool);
+    callback receipts(bool);
+    callback read-now();
+    // Read receipts are off for the whole profile.
+    in property <bool> receipts-global-off;
+    property <bool> can-read-now: root.receipts-global-off || root.chat.receipts-off;
+
+    // false: the main menu, true: the mute durations.
+    property <bool> mute-picker;
+    // true: the custom folders the chat can be added to or removed from.
+    property <bool> folder-picker;
+    property <bool> main-menu: !root.mute-picker && !root.folder-picker;
+    property <length> menu-x;
+    property <length> menu-y;
+    property <length> menu-w: 280px;
+    property <length> menu-h: 12px + 34px * (root.mute-picker ? 4 : (root.folder-picker ? 1 + min(FolderState.menu-rows.length, 8) : (root.chat.unread > 0 ? 1 : 0) + (root.chat.unread > 0 ? 0 : 1) + (root.chat.archived ? 0 : 1) + 3 + (root.can-read-now ? 1 : 0) + (root.chat.is-dm ? 1 : 0) + 1 + (FolderState.has-custom ? 1 : 0)));
+
+    function open-menu(px: length, py: length) {
+        root.mute-picker = false;
+        root.folder-picker = false;
+        root.menu-x = min(px, root.width - root.menu-w - 6px);
+        root.menu-y = root.absolute-position.y + py + root.menu-h > root.win-h - 8px ? max(py - root.menu-h, 0px - root.absolute-position.y) : py;
+        menu.show();
+    }
+
+    height: 72px;
+    background: root.selected ? Theme.selected : (ta.has-hover || chev-ta.has-hover ? Theme.hover : transparent);
+
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
+                root.open-menu(self.mouse-x, self.mouse-y);
+            }
+        }
+    }
+
+    Avatar {
+        x: 14px;
+        y: (parent.height - self.height) / 2;
+        size: 49px;
+        source: root.chat.avatar;
+        has-image: root.chat.has-avatar;
+        initials: root.chat.initials;
+        tint: root.chat.tint;
+    }
+
+    if root.chat.disappearing: Rectangle {
+        x: 14px + 49px - 17px;
+        y: (parent.height + 49px) / 2 - 17px;
+        width: 18px;
+        height: 18px;
+        border-radius: 9px;
+        background: Theme.accent;
+        border-width: 2px;
+        border-color: root.selected ? Theme.selected : Theme.bg;
+        IconTimer {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            size: 10px;
+            color: Theme.bg;
+        }
+    }
+
+    Text {
+        x: 77px;
+        y: 14px;
+        width: parent.width - 77px - 78px;
+        text: root.chat.name;
+        color: Theme.text;
+        font-size: 16px;
+        overflow: elide;
+    }
+    if root.chat.blocked: Text {
+        x: parent.width - 14px - time-text.preferred-width - 18px - (root.chat.muted ? 18px : 0px) - (root.chat.receipts-off ? 18px : 0px);
+        y: 15px;
+        text: "🚫";
+        color: Theme.secondary;
+        font-size: 12px;
+    }
+    Text {
+        x: 77px;
+        y: 40px;
+        width: parent.width - 77px - 64px - (root.chat.archived && root.show-archived-tag ? 64px : 0px);
+        text: root.chat.preview;
+        color: root.chat.draft ? Theme.danger : Theme.secondary;
+        font-size: 14px;
+        overflow: elide;
+    }
+    time-text := Text {
+        y: 16px;
+        x: parent.width - self.width - 14px;
+        width: 64px;
+        text: root.chat.time;
+        color: root.chat.unread > 0 && !root.chat.muted ? Theme.accent : Theme.secondary;
+        font-size: 12px;
+        horizontal-alignment: right;
+    }
+    if root.chat.muted: Text {
+        x: parent.width - 14px - time-text.preferred-width - 18px;
+        y: 15px;
+        text: "🔕";
+        color: Theme.secondary;
+        font-size: 12px;
+    }
+    if root.chat.receipts-off: Text {
+        x: parent.width - 14px - time-text.preferred-width - 18px - (root.chat.muted ? 18px : 0px);
+        y: 15px;
+        text: "👻";
+        color: Theme.secondary;
+        font-size: 12px;
+    }
+    // Shown for search hits that live in the archive.
+    if root.chat.archived && root.show-archived-tag: Rectangle {
+        x: parent.width - self.width - 14px - (root.chat.unread > 0 ? 28px : 0px);
+        y: 42px;
+        width: tag-text.preferred-width + 12px;
+        height: 18px;
+        border-radius: 4px;
+        background: Theme.input-bg;
+        tag-text := Text {
+            text: "Archived";
+            color: Theme.secondary;
+            font-size: 11px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    if root.chat.unread > 0: Rectangle {
+        x: parent.width - self.width - 14px;
+        y: 40px;
+        width: max(20px, badge-text.preferred-width + 12px);
+        height: 20px;
+        border-radius: 10px;
+        background: root.chat.muted ? #667781 : Theme.badge;
+        badge-text := Text {
+            text: root.chat.unread > 999 ? "999+" : root.chat.unread;
+            color: #111b21;
+            font-size: 12px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    if root.chat.unread <= 0 && root.chat.pinned: Text {
+        x: parent.width - self.width - 14px;
+        y: 40px;
+        text: "📌";
+        color: Theme.secondary;
+        font-size: 13px;
+    }
+    Rectangle {
+        y: parent.height - 1px;
+        x: 77px;
+        height: 1px;
+        width: parent.width - 77px;
+        background: Theme.divider;
+    }
+    // Menu arrow while hovering; it covers the badge, as in WhatsApp Desktop.
+    Rectangle {
+        visible: ta.has-hover || chev-ta.has-hover;
+        x: parent.width - 14px - 24px;
+        y: 38px;
+        width: 24px;
+        height: 24px;
+        border-radius: 12px;
+        background: root.selected ? Theme.selected : Theme.hover;
+        Chevron {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            tint: chev-ta.has-hover ? Theme.text : Theme.secondary;
+        }
+        chev-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.open-menu(parent.x + parent.width, parent.y + parent.height); }
+        }
+    }
+
+    property <bool> menu-shown: menu.is-open;
+    changed menu-shown => { PopupState.open = max(0, PopupState.open + (self.menu-shown ? 1 : -1)); }
+    menu := PopupWindow {
+        x: root.menu-x;
+        y: root.menu-y;
+        width: root.menu-w;
+        height: root.menu-h;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.panel;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.divider;
+            VerticalLayout {
+                padding-top: 6px;
+                padding-bottom: 6px;
+                if root.main-menu && root.chat.unread > 0: MenuRow {
+                    label: "Mark as read";
+                    clicked => {
+                        root.mark-read();
+                        menu.close();
+                    }
+                }
+                if root.main-menu && root.chat.unread <= 0: MenuRow {
+                    label: "Mark as unread";
+                    clicked => {
+                        ChatActions.mark-unread(root.chat.jid);
+                        menu.close();
+                    }
+                }
+                if root.main-menu && !root.chat.archived: MenuRow {
+                    label: root.chat.pinned ? "Unpin chat" : "Pin chat";
+                    clicked => {
+                        root.pin(!root.chat.pinned);
+                        menu.close();
+                    }
+                }
+                if root.main-menu: MenuRow {
+                    label: root.chat.muted ? "Unmute notifications" : "Mute notifications";
+                    clicked => {
+                        if (root.chat.muted) {
+                            root.mute(0);
+                            menu.close();
+                        } else {
+                            root.mute-picker = true;
+                        }
+                    }
+                }
+                if root.main-menu: MenuRow {
+                    label: root.chat.receipts-off ? "Turn on read receipts for this chat" : "Turn off read receipts for this chat";
+                    clicked => {
+                        root.receipts(root.chat.receipts-off);
+                        menu.close();
+                    }
+                }
+                if root.main-menu && root.can-read-now: MenuRow {
+                    label: "Mark as read now";
+                    clicked => {
+                        root.read-now();
+                        menu.close();
+                    }
+                }
+                if root.main-menu: MenuRow {
+                    label: root.chat.archived ? "Unarchive chat" : "Archive chat";
+                    clicked => {
+                        root.archive(!root.chat.archived);
+                        menu.close();
+                    }
+                }
+                if root.main-menu && root.chat.is-dm: MenuRow {
+                    label: root.chat.blocked ? "Unblock" : "Block";
+                    clicked => {
+                        ChatActions.confirm-jid = root.chat.jid;
+                        ChatActions.confirm-name = root.chat.name;
+                        ChatActions.confirm-kind = root.chat.blocked ? 2 : 1;
+                        menu.close();
+                    }
+                }
+                if root.main-menu && FolderState.has-custom: MenuRow {
+                    label: "Add to folder…";
+                    clicked => {
+                        FolderState.prepare-menu(root.chat.jid);
+                        root.folder-picker = true;
+                    }
+                }
+                if root.main-menu: MenuRow {
+                    label: "Clear chat";
+                    danger: true;
+                    clicked => {
+                        ChatActions.confirm-jid = root.chat.jid;
+                        ChatActions.confirm-name = root.chat.name;
+                        ChatActions.keep-starred = true;
+                        ChatActions.confirm-kind = 3;
+                        menu.close();
+                    }
+                }
+                if root.folder-picker: MenuRow {
+                    label: "Add to folder…";
+                    clicked => { root.folder-picker = false; }
+                }
+                if root.folder-picker: ListView {
+                    height: 34px * min(FolderState.menu-rows.length, 8);
+                    for f in FolderState.menu-rows: MenuRow {
+                        label: f.name;
+                        clicked => {
+                            FolderState.menu-toggle(root.chat.jid, f.id);
+                            menu.close();
+                        }
+                        if f.member: IconCheck {
+                            x: parent.width - self.width - 14px;
+                            y: (parent.height - self.height) / 2;
+                            size: 16px;
+                            color: Theme.accent;
+                        }
+                    }
+                }
+                if root.mute-picker: MenuRow {
+                    label: "Mute for…";
+                    clicked => { root.mute-picker = false; }
+                }
+                if root.mute-picker: MenuRow {
+                    label: "8 hours";
+                    clicked => {
+                        root.mute(1);
+                        menu.close();
+                    }
+                }
+                if root.mute-picker: MenuRow {
+                    label: "1 week";
+                    clicked => {
+                        root.mute(2);
+                        menu.close();
+                    }
+                }
+                if root.mute-picker: MenuRow {
+                    label: "Always";
+                    clicked => {
+                        root.mute(3);
+                        menu.close();
+                    }
+                }
+            }
+        }
+    }
+}
+
+// One tab of the folder strip: name, unread badge and a context menu.
+component FolderTabItem inherits Rectangle {
+    in property <FolderTab> tab;
+    in property <bool> selected;
+    callback clicked();
+    // Asked while this tab is the selected one and its place changes, so the
+    // strip can scroll it into view.
+    callback reveal();
+
+    // Short delay: the strip's content width follows the layout a moment later.
+    reveal-timer := Timer {
+        interval: 60ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.reveal();
+        }
+    }
+    init => { reveal-timer.running = root.selected; }
+    changed selected => { reveal-timer.running = root.selected; }
+    changed x => { if (root.selected) { reveal-timer.running = true; } }
+    changed width => { if (root.selected) { reveal-timer.running = true; } }
+
+    property <length> menu-x;
+    property <length> menu-y;
+    property <length> menu-w: 200px;
+    property <length> menu-h: 12px + 34px * (1 + (root.tab.builtin ? 0 : 2 + (root.tab.can-left ? 1 : 0) + (root.tab.can-right ? 1 : 0)));
+
+    width: label.preferred-width + (root.tab.unread > 0 ? badge.width + 6px : 0px) + 24px;
+    background: ta.has-hover ? Theme.hover : transparent;
+
+    label := Text {
+        x: 12px;
+        text: root.tab.name;
+        color: root.selected ? Theme.accent : Theme.secondary;
+        font-size: 14px;
+        font-weight: 600;
+        vertical-alignment: center;
+    }
+    badge := Rectangle {
+        visible: root.tab.unread > 0;
+        x: 12px + label.preferred-width + 6px;
+        y: (parent.height - self.height) / 2;
+        width: root.tab.unread > 0 ? max(18px, badge-text.preferred-width + 10px) : 0px;
+        height: 18px;
+        border-radius: 9px;
+        background: root.tab.grey ? #667781 : Theme.badge;
+        badge-text := Text {
+            text: root.tab.unread > 999 ? "999+" : root.tab.unread;
+            color: #111b21;
+            font-size: 11px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    Rectangle {
+        y: parent.height - self.height;
+        height: 2px;
+        background: root.selected ? Theme.accent : transparent;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
+                root.menu-x = self.mouse-x;
+                root.menu-y = root.height;
+                menu.show();
+            }
+        }
+    }
+
+    property <bool> menu-shown: menu.is-open;
+    changed menu-shown => { PopupState.open = max(0, PopupState.open + (self.menu-shown ? 1 : -1)); }
+    menu := PopupWindow {
+        x: root.menu-x;
+        y: root.menu-y;
+        width: root.menu-w;
+        height: root.menu-h;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.panel;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.divider;
+            VerticalLayout {
+                padding-top: 6px;
+                padding-bottom: 6px;
+                MenuRow {
+                    label: "New folder…";
+                    clicked => {
+                        FolderState.new-folder();
+                        menu.close();
+                    }
+                }
+                if !root.tab.builtin: MenuRow {
+                    label: "Edit folder…";
+                    clicked => {
+                        FolderState.edit(root.tab.id);
+                        menu.close();
+                    }
+                }
+                if !root.tab.builtin && root.tab.can-left: MenuRow {
+                    label: "Move left";
+                    clicked => {
+                        FolderState.move(root.tab.id, -1);
+                        menu.close();
+                    }
+                }
+                if !root.tab.builtin && root.tab.can-right: MenuRow {
+                    label: "Move right";
+                    clicked => {
+                        FolderState.move(root.tab.id, 1);
+                        menu.close();
+                    }
+                }
+                if !root.tab.builtin: MenuRow {
+                    label: "Delete folder";
+                    danger: true;
+                    clicked => {
+                        FolderState.delete-ask(root.tab.id);
+                        menu.close();
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component ChatList inherits Rectangle {
+    in property <[ChatItem]> chats;
+    in property <string> selected-jid;
+    in property <string> sync-text;
+    in property <[StatusEntry]> status-entries;
+    in property <StatusEntry> status-mine;
+    in property <bool> status-has-mine;
+    // Something unviewed: shows a dot on the Status tab.
+    in property <bool> status-unviewed;
+    in-out property <bool> status-mode;
+    // The left pane shows the archived chats instead of the main list.
+    in-out property <bool> archived-mode;
+    in property <bool> has-archived;
+    // Archived chats with unread messages.
+    in property <int> archived-unread;
+    callback mark-read(string);
+    callback pin(string, bool);
+    callback mute(string, int);
+    callback archive(string, bool);
+    callback receipts(string, bool);
+    callback read-now(string);
+    callback incognito-toggled();
+    in property <bool> incognito;
+    in property <bool> receipts-global-off;
+    callback archived-toggled();
+    callback search(string);
+    callback chat-selected(string);
+    callback open-settings();
+    // Active profile, shown as the title; a click asks to rename it.
+    in property <ProfileItem> profile;
+    callback rename-profile();
+    callback status-tab-changed(bool);
+    callback open-status(int);
+    // Index of the first row in view and how many rows are (partly) in view.
+    callback rows-visible(int, int);
+
+    background: Theme.bg;
+
+    public function clear-search() { search-input.text = ""; }
+
+    VerticalLayout {
+        Rectangle {
+            height: 60px;
+            background: Theme.panel;
+            Rectangle {
+                x: 12px;
+                width: parent.width - 12px - 100px;
+                height: parent.height;
+                background: title-ta.has-hover ? Theme.hover : transparent;
+                border-radius: 8px;
+                Avatar {
+                    x: 6px;
+                    y: (parent.height - self.height) / 2;
+                    size: 32px;
+                    source: root.profile.avatar;
+                    has-image: root.profile.has-avatar;
+                    initials: root.profile.initials;
+                    tint: root.profile.color;
+                }
+                Text {
+                    x: 46px;
+                    y: root.incognito ? 4px : 0px;
+                    width: parent.width - 46px - 8px;
+                    height: root.incognito ? 34px : parent.height;
+                    text: root.profile.name;
+                    color: Theme.text;
+                    font-size: 20px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                if root.incognito: Rectangle {
+                    x: 46px;
+                    y: 38px;
+                    width: pill-text.preferred-width + 14px;
+                    height: 16px;
+                    border-radius: 8px;
+                    background: Theme.input-bg;
+                    pill-text := Text {
+                        text: "👻 Incognito";
+                        color: Theme.accent;
+                        font-size: 11px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                title-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.rename-profile(); }
+                }
+            }
+            if LockState.has-passcode: Rectangle {
+                x: parent.width - self.width - 12px - 80px;
+                y: (parent.height - self.height) / 2;
+                width: 36px;
+                height: 36px;
+                border-radius: 18px;
+                background: lock-ta.has-hover ? Theme.hover : transparent;
+                IconLock {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    size: 20px;
+                    color: Theme.secondary;
+                }
+                lock-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { LockState.lock-now(); }
+                }
+            }
+            Rectangle {
+                x: parent.width - self.width - 12px - 40px;
+                y: (parent.height - self.height) / 2;
+                width: 36px;
+                height: 36px;
+                border-radius: 18px;
+                background: root.incognito ? Theme.selected : (ghost-ta.has-hover ? Theme.hover : transparent);
+                border-width: root.incognito ? 1.5px : 0px;
+                border-color: Theme.accent;
+                Text {
+                    text: "👻";
+                    color: root.incognito ? Theme.accent : Theme.secondary;
+                    font-size: 18px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                ghost-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.incognito-toggled(); }
+                }
+            }
+            Rectangle {
+                x: parent.width - self.width - 12px;
+                y: (parent.height - self.height) / 2;
+                width: 36px;
+                height: 36px;
+                border-radius: 18px;
+                background: gear-ta.has-hover ? Theme.hover : transparent;
+                // Menu icon drawn with bars: no icon font is bundled.
+                for k in 3: Rectangle {
+                    x: 10px;
+                    y: 11px + k * 6px;
+                    width: 16px;
+                    height: 2px;
+                    border-radius: 1px;
+                    background: Theme.secondary;
+                }
+                gear-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { header-menu.show(); }
+                }
+                property <bool> header-menu-shown: header-menu.is-open;
+                changed header-menu-shown => { PopupState.open = max(0, PopupState.open + (self.header-menu-shown ? 1 : -1)); }
+                header-menu := PopupWindow {
+                    x: parent.width - self.width;
+                    y: parent.height + 4px;
+                    width: 200px;
+                    height: 12px + 34px * (ChatActions.starred-enabled ? 6 : 5);
+                    close-policy: close-on-click-outside;
+                    Rectangle {
+                        background: Theme.panel;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: Theme.divider;
+                        VerticalLayout {
+                            padding-top: 6px;
+                            padding-bottom: 6px;
+                            MenuRow {
+                                label: "New group";
+                                clicked => {
+                                    GroupNew.open-new();
+                                    header-menu.close();
+                                }
+                            }
+                            MenuRow {
+                                label: "Join group by link…";
+                                clicked => {
+                                    GroupNew.open-join();
+                                    header-menu.close();
+                                }
+                            }
+                            MenuRow {
+                                label: "Archived chats";
+                                clicked => {
+                                    root.status-mode = false;
+                                    root.archived-mode = true;
+                                    root.archived-toggled();
+                                    header-menu.close();
+                                }
+                            }
+                            MenuRow {
+                                label: FolderState.enabled ? "Hide chat folders" : "Show chat folders";
+                                clicked => {
+                                    FolderState.toggle-enabled();
+                                    header-menu.close();
+                                }
+                            }
+                            if ChatActions.starred-enabled: MenuRow {
+                                label: "Starred messages";
+                                clicked => {
+                                    ChatActions.open-starred();
+                                    header-menu.close();
+                                }
+                            }
+                            MenuRow {
+                                label: "Settings";
+                                clicked => {
+                                    root.open-settings();
+                                    header-menu.close();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Rectangle {
+            height: root.archived-mode ? 0px : 38px;
+            visible: !root.archived-mode;
+            for label[i] in ["Chats", "Status"]: Rectangle {
+                x: i * parent.width / 2;
+                width: parent.width / 2;
+                background: tab-ta.has-hover ? Theme.hover : transparent;
+                Text {
+                    text: label;
+                    color: (i == 1) == root.status-mode ? Theme.accent : Theme.secondary;
+                    font-size: 14px;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                if i == 1 && root.status-unviewed: Rectangle {
+                    x: parent.width / 2 + 28px;
+                    y: 11px;
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: Theme.accent;
+                }
+                Rectangle {
+                    y: parent.height - self.height;
+                    height: 2px;
+                    background: (i == 1) == root.status-mode ? Theme.accent : transparent;
+                }
+                tab-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.status-mode = i == 1;
+                        root.status-tab-changed(i == 1);
+                    }
+                }
+            }
+        }
+        // Folder tabs (Chats only). Dragging scrolls them when there are many.
+        Rectangle {
+            property <bool> shown: !root.status-mode && !root.archived-mode && FolderState.enabled;
+            height: self.shown ? 40px : 0px;
+            visible: self.shown;
+            clip: true;
+            strip-scroll := TouchArea {
+                scroll-event(e) => {
+                    strip.content-x = clamp(strip.content-x + e.delta-y + e.delta-x, min(0px, strip.width - strip.content-width), 0px);
+                    return accept;
+                }
+                strip := Flickable {
+                    content-width: strip-row.preferred-width;
+                    interactive: true;
+                    strip-row := HorizontalLayout {
+                        alignment: start;
+                        height: strip.height;
+                        for t[i] in FolderState.tabs: FolderTabItem {
+                            tab: t;
+                            selected: t.id == FolderState.selected;
+                            clicked => { FolderState.select(t.id); }
+                            reveal => {
+                                if (self.x + self.width + strip.content-x > strip.width) {
+                                    strip.content-x = min(0px, strip.width - self.x - self.width - 8px);
+                                }
+                                if (self.x + strip.content-x < 0px) {
+                                    strip.content-x = 0px - self.x;
+                                }
+                            }
+                        }
+                        Rectangle {
+                            width: 36px;
+                            background: plus-ta.has-hover ? Theme.hover : transparent;
+                            IconPlus {
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                size: 16px;
+                                color: Theme.secondary;
+                            }
+                            plus-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { FolderState.new-folder(); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Rectangle {
+            height: root.status-mode || root.archived-mode ? 0px : 52px;
+            visible: !root.status-mode && !root.archived-mode;
+            Rectangle {
+                x: 12px;
+                width: parent.width - 24px;
+                height: 36px;
+                background: Theme.panel;
+                border-radius: 8px;
+                IconSearch {
+                    x: 12px;
+                    y: (parent.height - self.height) / 2;
+                    size: 15px;
+                    color: Theme.secondary;
+                }
+                if search-input.text == "": Text {
+                    x: 42px;
+                    text: "Search or start a new chat";
+                    color: Theme.secondary;
+                    font-size: 14px;
+                    vertical-alignment: center;
+                }
+                search-input := TextInput {
+                    x: 42px;
+                    width: parent.width - 54px;
+                    height: parent.height;
+                    color: Theme.text;
+                    font-size: 14px;
+                    single-line: true;
+                    vertical-alignment: center;
+                    edited => { root.search(self.text); }
+                }
+            }
+        }
+        if root.sync-text != "" && !root.status-mode: Text {
+            text: root.sync-text;
+            color: Theme.secondary;
+            font-size: 12px;
+            horizontal-alignment: center;
+            height: 20px;
+        }
+        if root.archived-mode && !root.status-mode: Rectangle {
+            height: 56px;
+            background: Theme.panel;
+            Rectangle {
+                x: 8px;
+                y: 8px;
+                width: 40px;
+                height: 40px;
+                border-radius: 20px;
+                background: back-ta.has-hover ? Theme.hover : transparent;
+                Path {
+                    x: 11px;
+                    y: 12px;
+                    width: 18px;
+                    height: 16px;
+                    viewbox-width: 18;
+                    viewbox-height: 16;
+                    commands: "M 8 1 L 1 8 L 8 15 M 1 8 L 17 8";
+                    stroke: Theme.text;
+                    stroke-width: 1.8px;
+                    fill: transparent;
+                }
+                back-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.archived-mode = false;
+                        root.archived-toggled();
+                    }
+                }
+            }
+            Text {
+                x: 60px;
+                text: "Archived";
+                color: Theme.text;
+                font-size: 18px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+        }
+        if !root.archived-mode && !root.status-mode && root.has-archived && search-input.text == "": Rectangle {
+            height: 56px;
+            background: entry-ta.has-hover ? Theme.hover : transparent;
+            // Archive box drawn from rectangles: no icon font is bundled.
+            Rectangle {
+                x: 24px;
+                y: 20px;
+                width: 22px;
+                height: 6px;
+                border-radius: 2px;
+                border-width: 1.5px;
+                border-color: Theme.secondary;
+            }
+            Rectangle {
+                x: 26px;
+                y: 25px;
+                width: 18px;
+                height: 11px;
+                border-radius: 2px;
+                border-width: 1.5px;
+                border-color: Theme.secondary;
+            }
+            Rectangle {
+                x: 32px;
+                y: 29px;
+                width: 6px;
+                height: 1.5px;
+                background: Theme.secondary;
+            }
+            Text {
+                x: 77px;
+                text: "Archived";
+                color: Theme.text;
+                font-size: 15px;
+                vertical-alignment: center;
+            }
+            if root.archived-unread > 0: Rectangle {
+                x: parent.width - self.width - 14px;
+                y: (parent.height - self.height) / 2;
+                width: max(20px, entry-badge.preferred-width + 12px);
+                height: 20px;
+                border-radius: 10px;
+                background: Theme.badge;
+                entry-badge := Text {
+                    text: root.archived-unread > 999 ? "999+" : root.archived-unread;
+                    color: #111b21;
+                    font-size: 12px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+            entry-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.archived-mode = true;
+                    root.archived-toggled();
+                }
+            }
+        }
+        if root.archived-mode && !root.status-mode && root.chats.length == 0: Text {
+            height: 90px;
+            text: "No archived chats";
+            color: Theme.secondary;
+            font-size: 14px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        if !root.status-mode: ListView {
+            changed content-y => { root.rows-visible(max(0, floor(-self.content-y / 72px)), ceil(self.visible-height / 72px) + 1); }
+            changed visible-height => { root.rows-visible(max(0, floor(-self.content-y / 72px)), ceil(self.visible-height / 72px) + 1); }
+            for chat in root.chats: ChatRowItem {
+                chat: chat;
+                selected: chat.jid == root.selected-jid;
+                win-h: root.height;
+                show-archived-tag: !root.archived-mode;
+                clicked => { root.chat-selected(chat.jid); }
+                mark-read => { root.mark-read(chat.jid); }
+                pin(on) => { root.pin(chat.jid, on); }
+                mute(choice) => { root.mute(chat.jid, choice); }
+                archive(on) => { root.archive(chat.jid, on); }
+                receipts-global-off: root.receipts-global-off;
+                receipts(enabled) => { root.receipts(chat.jid, enabled); }
+                read-now => { root.read-now(chat.jid); }
+            }
+        }
+        if root.status-mode: Flickable {
+            content-height: status-panel.preferred-height;
+            status-panel := StatusListPanel {
+                width: parent.width;
+                height: self.preferred-height;
+                entries: root.status-entries;
+                mine: root.status-mine;
+                has-mine: root.status-has-mine;
+                open(i) => { root.open-status(i); }
+            }
+        }
+    }
+}

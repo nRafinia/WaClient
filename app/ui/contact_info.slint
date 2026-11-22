@@ -1,0 +1,1440 @@
+import { PopupState, Theme, Avatar } from "theme.slint";
+import { IconBack, IconClose, IconPlay, IconExternal, IconChevronRight, IconTimer, IconEdit, IconCheck, IconSettings, IconAddPerson, IconLink, IconExit, IconCamera } from "icons.slint";
+import { MenuRow, Chevron } from "msg_menu.slint";
+import { TimerState } from "timer_dialog.slint";
+import { ShareState } from "share_contact.slint";
+import { GroupAdmin } from "group_admin.slint";
+
+export struct ContactInfoModel {
+    jid: string,
+    title: string,
+    name: string,
+    // Already grouped for display ("+98 912 345 6789"); empty for groups.
+    phone: string,
+    // "online" or "last seen ..."; empty when unknown, hidden or a group.
+    presence: string,
+    presence-online: bool,
+    // "Group · N members" for groups, empty otherwise.
+    subtitle: string,
+    about: string,
+    about-date: string,
+    is-group: bool,
+    is-business: bool,
+    // True while the engine has not yet delivered the network-backed fields.
+    loading: bool,
+    photo: image,
+    has-photo: bool,
+    initials: string,
+    tint: color,
+    description: string,
+    // Description exceeds the collapsed height, so "Read more" is offered.
+    description-long: bool,
+    created-label: string,
+    members-total: int,
+    // Group administration: what the viewer may do (all false for people and
+    // until the engine's complete answer has arrived) and the group settings.
+    is-admin: bool,
+    can-edit-info: bool,
+    can-leave: bool,
+    left: bool,
+    announce-only: bool,
+    locked: bool,
+    approval-required: bool,
+    // WhatsApp Business details; empty fields are hidden.
+    has-business: bool,
+    biz-category: string,
+    biz-description: string,
+    biz-address: string,
+    biz-email: string,
+    biz-websites: [string],
+    // Host each website really opens, parallel to biz-websites.
+    biz-website-hosts: [string],
+    biz-hours: [string],
+}
+
+export struct GalleryThumb {
+    id: string,
+    thumb: image,
+    has-thumb: bool,
+    is-video: bool,
+}
+
+export struct GalleryDoc {
+    id: string,
+    name: string,
+    // "2 KB", empty when unknown.
+    size: string,
+    date: string,
+    // "PDF"; empty when the name has no extension.
+    ext: string,
+}
+
+export struct GalleryLink {
+    url: string,
+    domain: string,
+    date: string,
+}
+
+// State of the "Media, links and docs" sub-view; filled and driven by the app.
+export global InfoGallery {
+    in-out property <bool> open;
+    // 0 media, 1 docs, 2 links
+    in-out property <int> tab;
+    in property <int> total;
+    in property <[GalleryThumb]> preview;
+    in property <[GalleryThumb]> media;
+    in property <[GalleryDoc]> docs;
+    in property <[GalleryLink]> links;
+    in property <bool> media-more;
+    in property <bool> docs-more;
+    in property <bool> links-more;
+    in property <bool> loading;
+
+    callback show(int);
+    callback load-more(int);
+    callback open-item(string);
+    callback open-url(string);
+}
+
+export struct GroupMemberItem {
+    jid: string,
+    name: string,
+    phone: string,
+    // "", "Admin" or "Group admin".
+    badge: string,
+    is-me: bool,
+    initials: string,
+    tint: color,
+    avatar: image,
+    has-avatar: bool,
+    // Entries of the row menu for the viewer.
+    can-promote: bool,
+    can-demote: bool,
+    can-remove: bool,
+}
+
+component SectionTitle inherits Text {
+    color: Theme.accent;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+component Placeholder inherits Rectangle {
+    height: 14px;
+    border-radius: 4px;
+    background: Theme.input-bg;
+    opacity: 0.55 + 0.25 * Math.sin(animation-tick() / 400ms * 1rad);
+}
+
+component MemberRow inherits Rectangle {
+    in property <GroupMemberItem> member;
+    // Window height, to open the menu upwards near the bottom edge.
+    in property <length> win-h;
+    callback clicked();
+    callback promote();
+    callback demote();
+    callback remove();
+
+    property <bool> can-manage: root.member.can-promote || root.member.can-demote || root.member.can-remove;
+    property <length> menu-x;
+    property <length> menu-y;
+    property <length> menu-w: 220px;
+    property <length> menu-h: 12px + 34px * ((root.member.can-promote ? 1 : 0) + (root.member.can-demote ? 1 : 0) + (root.member.can-remove ? 1 : 0));
+
+    function open-menu(px: length, py: length) {
+        root.menu-x = max(0px, min(px, root.width - root.menu-w - 6px));
+        root.menu-y = root.absolute-position.y + py + root.menu-h > root.win-h - 8px ? max(py - root.menu-h, 0px - root.absolute-position.y) : py;
+        menu.show();
+    }
+
+    height: 60px;
+    background: area.has-hover ? Theme.hover : transparent;
+
+    area := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+        pointer-event(e) => {
+            if (root.can-manage && e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
+                root.open-menu(self.mouse-x, self.mouse-y);
+            }
+        }
+    }
+    HorizontalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
+        spacing: 14px;
+
+        Rectangle {
+            width: 40px;
+            Avatar {
+                size: 40px;
+                source: root.member.avatar;
+                has-image: root.member.has-avatar;
+                initials: root.member.initials;
+                tint: root.member.tint;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.member.is-me ? "You" : root.member.name;
+                color: Theme.text;
+                font-size: 15px;
+                overflow: elide;
+            }
+            if root.member.phone != "" && !root.member.is-me: Text {
+                text: root.member.phone;
+                color: Theme.secondary;
+                font-size: 12px;
+                font-family: "Consolas";
+                overflow: elide;
+            }
+        }
+        if root.member.badge != "": VerticalLayout {
+            width: badge-text.preferred-width + 16px;
+            alignment: center;
+            Rectangle {
+                height: badge-text.preferred-height + 6px;
+                border-radius: 4px;
+                border-width: 1px;
+                border-color: Theme.accent;
+                badge-text := Text {
+                    text: root.member.badge;
+                    color: Theme.accent;
+                    font-size: 11px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+    // Menu arrow while hovering, for admins acting on another member.
+    Rectangle {
+        visible: root.can-manage && (area.has-hover || chev-ta.has-hover);
+        x: parent.width - 20px - self.width;
+        y: (parent.height - self.height) / 2;
+        width: 28px;
+        height: 28px;
+        border-radius: 14px;
+        background: Theme.selected;
+        Chevron {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            tint: Theme.text;
+        }
+        chev-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.open-menu(parent.x + parent.width, parent.y + parent.height); }
+        }
+    }
+
+    property <bool> menu-shown: menu.is-open;
+    changed menu-shown => { PopupState.open = max(0, PopupState.open + (self.menu-shown ? 1 : -1)); }
+    menu := PopupWindow {
+        x: root.menu-x;
+        y: root.menu-y;
+        width: root.menu-w;
+        height: root.menu-h;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.panel;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.divider;
+            VerticalLayout {
+                padding-top: 6px;
+                padding-bottom: 6px;
+                if root.member.can-promote: MenuRow {
+                    label: "Make group admin";
+                    clicked => {
+                        root.promote();
+                        menu.close();
+                    }
+                }
+                if root.member.can-demote: MenuRow {
+                    label: "Dismiss as admin";
+                    clicked => {
+                        root.demote();
+                        menu.close();
+                    }
+                }
+                if root.member.can-remove: MenuRow {
+                    label: "Remove from group";
+                    danger: true;
+                    clicked => {
+                        root.remove();
+                        menu.close();
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A row with a round accent icon, as at the top of the member list.
+component ActionRow inherits Rectangle {
+    in property <string> label;
+    // 0 add person, 1 link.
+    in property <int> icon;
+    callback clicked();
+
+    height: 56px;
+    background: ta.has-hover ? Theme.hover : transparent;
+    Rectangle {
+        x: 20px;
+        y: (parent.height - self.height) / 2;
+        width: 40px;
+        height: 40px;
+        border-radius: 20px;
+        background: Theme.accent;
+        if root.icon == 0: IconAddPerson {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            size: 22px;
+            color: #111b21;
+        }
+        if root.icon == 1: IconLink {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            size: 22px;
+            color: #111b21;
+        }
+    }
+    Text {
+        x: 74px;
+        width: parent.width - 94px;
+        text: root.label;
+        color: Theme.text;
+        font-size: 15px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// A small round pencil button.
+component PencilButton inherits Rectangle {
+    callback clicked();
+    width: 28px;
+    height: 28px;
+    border-radius: 14px;
+    background: ta.has-hover ? Theme.selected : transparent;
+    IconEdit {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        size: 16px;
+        color: Theme.secondary;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// A full-width row of the panel with a coloured label.
+component PanelRow inherits Rectangle {
+    in property <string> label;
+    in property <color> label-color: Theme.accent;
+    callback clicked();
+    height: 60px;
+    background: ta.has-hover ? Theme.hover : Theme.panel;
+    Text {
+        x: 20px;
+        text: root.label;
+        color: root.label-color;
+        font-size: 15px;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// A group setting with an on/off switch.
+component SettingRow inherits Rectangle {
+    in property <string> title;
+    in property <string> hint;
+    in property <bool> on;
+    callback toggled();
+
+    height: 76px;
+    background: ta.has-hover ? Theme.hover : Theme.panel;
+    VerticalLayout {
+        x: 20px;
+        width: parent.width - 20px - 80px;
+        alignment: center;
+        spacing: 2px;
+        Text {
+            text: root.title;
+            color: Theme.text;
+            font-size: 15px;
+            wrap: word-wrap;
+        }
+        Text {
+            text: root.hint;
+            color: Theme.secondary;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+    }
+    Rectangle {
+        x: parent.width - 20px - self.width;
+        y: (parent.height - self.height) / 2;
+        width: 40px;
+        height: 22px;
+        border-radius: 11px;
+        background: root.on ? Theme.accent : Theme.input-bg;
+        Rectangle {
+            x: root.on ? 20px : 2px;
+            y: 2px;
+            width: 18px;
+            height: 18px;
+            border-radius: 9px;
+            background: white;
+            animate x { duration: 120ms; }
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.toggled(); }
+    }
+}
+
+component Thumb inherits Rectangle {
+    in property <GalleryThumb> item;
+    callback clicked();
+
+    background: Theme.input-bg;
+    clip: true;
+    if root.item.has-thumb: Image {
+        source: root.item.thumb;
+        width: parent.width;
+        height: parent.height;
+        image-fit: cover;
+    }
+    if root.item.is-video: Rectangle {
+        width: 26px;
+        height: 26px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 13px;
+        background: #000000a0;
+        IconPlay {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            size: 14px;
+            color: white;
+        }
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component LinkText inherits TouchArea {
+    in property <string> text;
+    mouse-cursor: pointer;
+    preferred-height: label.preferred-height + 4px;
+    label := Text {
+        width: parent.width;
+        text: root.text;
+        color: Theme.accent;
+        font-size: 15px;
+        wrap: word-wrap;
+    }
+}
+
+component Field inherits VerticalLayout {
+    in property <string> label;
+    in property <string> value;
+    spacing: 2px;
+    Text {
+        text: root.label;
+        color: Theme.secondary;
+        font-size: 12px;
+    }
+    Text {
+        text: root.value;
+        color: Theme.text;
+        font-size: 15px;
+        wrap: word-wrap;
+    }
+}
+
+component GalleryTab inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    callback clicked();
+
+    background: area.has-hover ? Theme.hover : transparent;
+    area := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    Text {
+        text: root.label;
+        color: root.active ? Theme.accent : Theme.secondary;
+        font-size: 14px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    Rectangle {
+        y: parent.height - 2px;
+        height: 2px;
+        background: root.active ? Theme.accent : transparent;
+    }
+}
+
+component LoadMore inherits Rectangle {
+    callback clicked();
+    height: 48px;
+    background: area.has-hover ? Theme.hover : transparent;
+    area := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    Text {
+        text: "Load more";
+        color: Theme.accent;
+        font-size: 14px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component EmptyNote inherits Text {
+    color: Theme.secondary;
+    font-size: 14px;
+    horizontal-alignment: center;
+    height: 80px;
+    vertical-alignment: center;
+}
+
+component GalleryView inherits Rectangle {
+    property <length> cell: (root.width - 4px) / 3;
+    property <length> stride: root.cell + 2px;
+
+    VerticalLayout {
+        Rectangle {
+            height: 44px;
+            background: Theme.panel;
+            HorizontalLayout {
+                GalleryTab { label: "Media"; active: InfoGallery.tab == 0; clicked => { InfoGallery.tab = 0; } }
+                GalleryTab { label: "Docs"; active: InfoGallery.tab == 1; clicked => { InfoGallery.tab = 1; } }
+                GalleryTab { label: "Links"; active: InfoGallery.tab == 2; clicked => { InfoGallery.tab = 2; } }
+            }
+        }
+
+        if InfoGallery.tab == 0: Flickable {
+            VerticalLayout {
+                padding-top: 2px;
+                Rectangle {
+                    height: Math.ceil(InfoGallery.media.length / 3) * root.stride;
+                    for t[i] in InfoGallery.media: Thumb {
+                        x: Math.mod(i, 3) * root.stride;
+                        y: Math.floor(i / 3) * root.stride;
+                        width: root.cell;
+                        height: root.cell;
+                        item: t;
+                        clicked => { InfoGallery.open-item(t.id); }
+                    }
+                }
+                if InfoGallery.media.length == 0: EmptyNote { text: InfoGallery.loading ? "Loading..." : "No media"; }
+                if InfoGallery.media-more: LoadMore { clicked => { InfoGallery.load-more(0); } }
+            }
+        }
+
+        if InfoGallery.tab == 1: Flickable {
+            VerticalLayout {
+                for d in InfoGallery.docs: Rectangle {
+                    height: 64px;
+                    background: doc-area.has-hover ? Theme.hover : transparent;
+                    doc-area := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { InfoGallery.open-item(d.id); }
+                    }
+                    HorizontalLayout {
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        spacing: 14px;
+                        Rectangle {
+                            width: 40px;
+                            Rectangle {
+                                width: 40px;
+                                height: 44px;
+                                border-radius: 6px;
+                                background: Theme.input-bg;
+                                Text {
+                                    text: d.ext == "" ? "FILE" : d.ext;
+                                    color: Theme.accent;
+                                    font-size: 11px;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            Text {
+                                text: d.name;
+                                color: Theme.text;
+                                font-size: 15px;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: d.size == "" ? d.date : d.size + " · " + d.date;
+                                color: Theme.secondary;
+                                font-size: 12px;
+                                overflow: elide;
+                            }
+                        }
+                    }
+                }
+                if InfoGallery.docs.length == 0: EmptyNote { text: InfoGallery.loading ? "Loading..." : "No documents"; }
+                if InfoGallery.docs-more: LoadMore { clicked => { InfoGallery.load-more(1); } }
+            }
+        }
+
+        if InfoGallery.tab == 2: Flickable {
+            VerticalLayout {
+                for l in InfoGallery.links: Rectangle {
+                    height: 68px;
+                    background: link-area.has-hover ? Theme.hover : transparent;
+                    link-area := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { InfoGallery.open-url(l.url); }
+                    }
+                    HorizontalLayout {
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        spacing: 14px;
+                        Rectangle {
+                            width: 40px;
+                            Rectangle {
+                                width: 40px;
+                                height: 40px;
+                                border-radius: 8px;
+                                background: Theme.input-bg;
+                                IconExternal {
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    size: 20px;
+                                    color: Theme.accent;
+                                }
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            Text {
+                                text: l.domain;
+                                color: Theme.text;
+                                font-size: 15px;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: l.url;
+                                color: Theme.accent;
+                                font-size: 12px;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: l.date;
+                                color: Theme.secondary;
+                                font-size: 12px;
+                            }
+                        }
+                    }
+                }
+                if InfoGallery.links.length == 0: EmptyNote { text: InfoGallery.loading ? "Loading..." : "No links"; }
+                if InfoGallery.links-more: LoadMore { clicked => { InfoGallery.load-more(2); } }
+            }
+        }
+    }
+}
+
+export component ContactInfoPanel inherits Rectangle {
+    in property <ContactInfoModel> model;
+    in property <[GroupMemberItem]> members;
+
+    callback close();
+    callback open-photo();
+    callback open-member(string);
+    callback copy-phone();
+    callback member-search(string);
+
+    property <bool> description-expanded: false;
+    property <bool> description-long: root.model.description-long;
+    property <bool> name-editable: root.model.is-group && root.model.can-edit-info;
+    property <bool> photo-editable: root.model.is-group && root.model.can-edit-info;
+
+    function open-description-editor() {
+        GroupAdmin.description-draft = root.model.description;
+        GroupAdmin.dialog = 1;
+    }
+
+    width: 360px;
+    background: Theme.bg;
+    // Swallow clicks so they do not reach the chat underneath.
+    TouchArea { }
+
+    VerticalLayout {
+        Rectangle {
+            height: 59px;
+            background: Theme.panel;
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 24px;
+                spacing: 12px;
+                Rectangle {
+                    width: 36px;
+                    close-area := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            if InfoGallery.open {
+                                InfoGallery.open = false;
+                            } else if GroupAdmin.view != 0 {
+                                GroupAdmin.close-view();
+                            } else {
+                                root.close();
+                            }
+                        }
+                    }
+                    Rectangle {
+                        width: 36px;
+                        height: 36px;
+                        border-radius: 18px;
+                        background: close-area.has-hover ? Theme.hover : transparent;
+                        if InfoGallery.open || GroupAdmin.view != 0: IconBack {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            size: 20px;
+                        }
+                        if !InfoGallery.open && GroupAdmin.view == 0: IconClose {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            size: 20px;
+                        }
+                    }
+                }
+                Text {
+                    text: InfoGallery.open ? "Media, links and docs"
+                        : GroupAdmin.view == 1 ? "Invite via link"
+                        : GroupAdmin.view == 2 ? "Group settings"
+                        : root.model.is-group ? "Group info" : "Contact info";
+                    color: Theme.text;
+                    font-size: 18px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        if InfoGallery.open: GalleryView { }
+
+        // Invite via link
+        if !InfoGallery.open && GroupAdmin.view == 1: Flickable {
+            VerticalLayout {
+                alignment: start;
+                spacing: 8px;
+                Rectangle {
+                    background: Theme.panel;
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 10px;
+                        SectionTitle { text: "Group invite link"; }
+                        if GroupAdmin.invite-link != "": Text {
+                            text: GroupAdmin.invite-link;
+                            color: Theme.text;
+                            font-size: 14px;
+                            font-family: "Consolas";
+                            wrap: word-wrap;
+                        }
+                        if GroupAdmin.invite-link == "" && GroupAdmin.invite-loading: Placeholder { }
+                        if GroupAdmin.invite-link == "" && !GroupAdmin.invite-loading: Text {
+                            text: "The link could not be loaded.";
+                            color: Theme.secondary;
+                            font-size: 14px;
+                        }
+                        Text {
+                            text: "Anyone with this link can join the group. Only share it with people you trust.";
+                            color: Theme.secondary;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+                if GroupAdmin.invite-link != "": PanelRow {
+                    label: "Copy link";
+                    clicked => { GroupAdmin.copy-invite(); }
+                }
+                PanelRow {
+                    label: "Reset link";
+                    label-color: Theme.danger;
+                    clicked => { GroupAdmin.dialog = 4; }
+                }
+            }
+        }
+
+        // Group settings
+        if !InfoGallery.open && GroupAdmin.view == 2: Flickable {
+            VerticalLayout {
+                spacing: 8px;
+                SettingRow {
+                    title: "Send messages: only admins";
+                    hint: "Members can read messages but not send them";
+                    on: root.model.announce-only;
+                    toggled => { GroupAdmin.set-setting(0, !root.model.announce-only); }
+                }
+                SettingRow {
+                    title: "Edit group info: only admins";
+                    hint: "Members can't change the name, photo or description";
+                    on: root.model.locked;
+                    toggled => { GroupAdmin.set-setting(1, !root.model.locked); }
+                }
+                SettingRow {
+                    title: "Approve new members";
+                    hint: "An admin must approve people who join with the invite link";
+                    on: root.model.approval-required;
+                    toggled => { GroupAdmin.set-setting(2, !root.model.approval-required); }
+                }
+            }
+        }
+
+        if !InfoGallery.open && GroupAdmin.view == 0: Flickable {
+            VerticalLayout {
+                padding-bottom: 24px;
+                spacing: 8px;
+
+                // Identity block
+                Rectangle {
+                    background: Theme.panel;
+                    VerticalLayout {
+                        padding-top: 24px;
+                        padding-bottom: 20px;
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        spacing: 10px;
+
+                        Rectangle {
+                            height: 200px;
+                            Avatar {
+                                size: 200px;
+                                x: (parent.width - self.width) / 2;
+                                source: root.model.photo;
+                                has-image: root.model.has-photo;
+                                initials: root.model.initials;
+                                tint: root.model.tint;
+                            }
+                            // Hover hint that the photo can be changed.
+                            if root.photo-editable && photo-area.has-hover: Rectangle {
+                                width: 200px;
+                                height: 200px;
+                                x: (parent.width - self.width) / 2;
+                                border-radius: 100px;
+                                background: #00000090;
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 6px;
+                                    Rectangle {
+                                        height: 28px;
+                                        IconCamera {
+                                            x: (parent.width - self.width) / 2;
+                                            size: 28px;
+                                            color: white;
+                                        }
+                                    }
+                                    Text {
+                                        text: "Change photo";
+                                        color: white;
+                                        font-size: 13px;
+                                        horizontal-alignment: center;
+                                    }
+                                }
+                            }
+                            photo-area := TouchArea {
+                                width: 200px;
+                                height: 200px;
+                                x: (parent.width - self.width) / 2;
+                                mouse-cursor: root.model.has-photo || root.photo-editable ? pointer : default;
+                                clicked => {
+                                    if root.photo-editable {
+                                        photo-menu.show();
+                                    } else if root.model.has-photo {
+                                        root.open-photo();
+                                    }
+                                }
+                            }
+                            property <bool> photo-menu-shown: photo-menu.is-open;
+                            changed photo-menu-shown => { PopupState.open = max(0, PopupState.open + (self.photo-menu-shown ? 1 : -1)); }
+                            photo-menu := PopupWindow {
+                                x: (parent.width - 200px) / 2 + 40px;
+                                y: 130px;
+                                width: 200px;
+                                height: 12px + 34px * (root.model.has-photo ? 3 : 1);
+                                close-policy: close-on-click-outside;
+                                Rectangle {
+                                    background: Theme.panel;
+                                    border-radius: 8px;
+                                    border-width: 1px;
+                                    border-color: Theme.divider;
+                                    VerticalLayout {
+                                        padding-top: 6px;
+                                        padding-bottom: 6px;
+                                        if root.model.has-photo: MenuRow {
+                                            label: "View photo";
+                                            clicked => {
+                                                root.open-photo();
+                                                photo-menu.close();
+                                            }
+                                        }
+                                        MenuRow {
+                                            label: "Change photo…";
+                                            clicked => {
+                                                GroupAdmin.change-photo();
+                                                photo-menu.close();
+                                            }
+                                        }
+                                        if root.model.has-photo: MenuRow {
+                                            label: "Remove photo";
+                                            danger: true;
+                                            clicked => {
+                                                GroupAdmin.remove-photo();
+                                                photo-menu.close();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if !(root.name-editable && GroupAdmin.editing-name): HorizontalLayout {
+                            alignment: center;
+                            spacing: 6px;
+                            Text {
+                                text: root.model.title;
+                                color: Theme.text;
+                                font-size: 22px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                            }
+                            if root.name-editable: Rectangle {
+                                width: 28px;
+                                PencilButton {
+                                    y: (parent.height - self.height) / 2;
+                                    clicked => {
+                                        GroupAdmin.name-draft = root.model.name;
+                                        GroupAdmin.editing-name = true;
+                                    }
+                                }
+                            }
+                        }
+                        if root.name-editable && GroupAdmin.editing-name: HorizontalLayout {
+                            height: 40px;
+                            spacing: 8px;
+                            Rectangle {
+                                border-radius: 8px;
+                                background: Theme.input-bg;
+                                name-input := TextInput {
+                                    x: 12px;
+                                    y: (parent.height - self.preferred-height) / 2;
+                                    width: parent.width - 24px;
+                                    color: Theme.text;
+                                    font-size: 18px;
+                                    single-line: true;
+                                    text <=> GroupAdmin.name-draft;
+                                    init => { self.focus(); }
+                                    accepted => { GroupAdmin.save-name(self.text); }
+                                }
+                            }
+                            Rectangle {
+                                width: 36px;
+                                border-radius: 18px;
+                                background: Theme.accent;
+                                IconCheck {
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    size: 20px;
+                                    color: #111b21;
+                                }
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { GroupAdmin.save-name(name-input.text); }
+                                }
+                            }
+                            Rectangle {
+                                width: 36px;
+                                border-radius: 18px;
+                                background: cancel-name-area.has-hover ? Theme.selected : transparent;
+                                IconClose {
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    size: 20px;
+                                }
+                                cancel-name-area := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { GroupAdmin.editing-name = false; }
+                                }
+                            }
+                        }
+                        if root.model.is-group: Text {
+                            text: root.model.subtitle;
+                            color: Theme.secondary;
+                            font-size: 14px;
+                            horizontal-alignment: center;
+                        }
+                        if !root.model.is-group && root.model.phone != "": Text {
+                            text: root.model.phone;
+                            color: Theme.secondary;
+                            font-size: 15px;
+                            font-family: "Consolas";
+                            horizontal-alignment: center;
+                        }
+                        if !root.model.is-group && root.model.presence != "": Text {
+                            text: root.model.presence;
+                            color: root.model.presence-online ? Theme.accent : Theme.secondary;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                        }
+                        if !root.model.is-group && root.model.phone == "" && root.model.loading: Rectangle {
+                            height: 14px;
+                            Placeholder {
+                                width: 140px;
+                                x: (parent.width - self.width) / 2;
+                            }
+                        }
+                        if root.model.is-business: Rectangle {
+                            height: 22px;
+                            Rectangle {
+                                width: biz-text.preferred-width + 20px;
+                                x: (parent.width - self.width) / 2;
+                                border-radius: 11px;
+                                background: Theme.input-bg;
+                                biz-text := Text {
+                                    text: "Business account";
+                                    color: Theme.text;
+                                    font-size: 12px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // About (people)
+                if !root.model.is-group: Rectangle {
+                    background: Theme.panel;
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 6px;
+                        SectionTitle { text: "About"; }
+                        if root.model.about != "": Text {
+                            text: root.model.about;
+                            color: Theme.text;
+                            font-size: 15px;
+                            wrap: word-wrap;
+                        }
+                        if root.model.about == "" && root.model.loading: VerticalLayout {
+                            spacing: 6px;
+                            Placeholder { }
+                            Placeholder { }
+                        }
+                        if root.model.about == "" && !root.model.loading: Text {
+                            text: "No about info";
+                            color: Theme.secondary;
+                            font-size: 14px;
+                        }
+                        if root.model.about-date != "": Text {
+                            text: root.model.about-date;
+                            color: Theme.secondary;
+                            font-size: 12px;
+                        }
+                    }
+                }
+
+                // Business details (people)
+                if !root.model.is-group && root.model.is-business && root.model.has-business: Rectangle {
+                    background: Theme.panel;
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 12px;
+                        SectionTitle { text: "Business details"; }
+                        if root.model.biz-category != "": Field { label: "Category"; value: root.model.biz-category; }
+                        if root.model.biz-description != "": Field { label: "Description"; value: root.model.biz-description; }
+                        if root.model.biz-address != "": Field { label: "Address"; value: root.model.biz-address; }
+                        if root.model.biz-email != "": VerticalLayout {
+                            spacing: 2px;
+                            Text { text: "Email"; color: Theme.secondary; font-size: 12px; }
+                            LinkText {
+                                text: root.model.biz-email;
+                                clicked => { InfoGallery.open-url("mailto:" + root.model.biz-email); }
+                            }
+                        }
+                        if root.model.biz-websites.length > 0: VerticalLayout {
+                            spacing: 2px;
+                            Text { text: root.model.biz-websites.length == 1 ? "Website" : "Websites"; color: Theme.secondary; font-size: 12px; }
+                            for w[i] in root.model.biz-websites: VerticalLayout {
+                                spacing: 0px;
+                                LinkText {
+                                    text: w;
+                                    clicked => { InfoGallery.open-url(w); }
+                                }
+                                Text {
+                                    text: "Opens " + root.model.biz-website-hosts[i];
+                                    color: Theme.secondary;
+                                    font-size: 12px;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+                        if root.model.biz-hours.length > 0: VerticalLayout {
+                            spacing: 2px;
+                            Text { text: "Hours"; color: Theme.secondary; font-size: 12px; }
+                            for h in root.model.biz-hours: Text {
+                                text: h;
+                                color: Theme.text;
+                                font-size: 15px;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+
+                // Description and creation info (groups)
+                if root.model.is-group && (root.model.description != "" || root.model.created-label != "" || root.model.can-edit-info): Rectangle {
+                    background: Theme.panel;
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 6px;
+                        if root.model.description != "": Rectangle {
+                            height: 28px;
+                            SectionTitle {
+                                x: 0px;
+                                y: (parent.height - self.height) / 2;
+                                text: "Description";
+                            }
+                            if root.model.can-edit-info: PencilButton {
+                                x: parent.width - self.width;
+                                clicked => { root.open-description-editor(); }
+                            }
+                        }
+                        if root.model.description == "" && root.model.can-edit-info: Rectangle {
+                            height: 28px;
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.open-description-editor(); }
+                            }
+                            Text {
+                                x: 0px;
+                                text: "Add group description";
+                                color: Theme.accent;
+                                font-size: 15px;
+                                horizontal-alignment: left;
+                                vertical-alignment: center;
+                            }
+                        }
+                        if root.model.description != "": Text {
+                            text: root.model.description;
+                            color: Theme.text;
+                            font-size: 15px;
+                            wrap: word-wrap;
+                            overflow: elide;
+                            max-height: root.description-expanded ? 100000px : 88px;
+                        }
+                        if root.model.description != "" && root.description-long: Rectangle {
+                            height: 24px;
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.description-expanded = !root.description-expanded; }
+                            }
+                            Text {
+                                x: 0px;
+                                width: parent.width;
+                                text: root.description-expanded ? "Show less" : "Read more";
+                                color: Theme.accent;
+                                font-size: 13px;
+                                horizontal-alignment: left;
+                                vertical-alignment: center;
+                            }
+                        }
+                        if root.model.created-label != "": Text {
+                            text: root.model.created-label;
+                            color: Theme.secondary;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                // Disappearing messages
+                Rectangle {
+                    height: 60px;
+                    background: timer-area.has-hover ? Theme.hover : Theme.panel;
+                    timer-area := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { TimerState.open-dialog(); }
+                    }
+                    IconTimer {
+                        x: 20px;
+                        y: (parent.height - self.height) / 2;
+                        size: 20px;
+                        color: Theme.secondary;
+                    }
+                    Text {
+                        x: 56px;
+                        y: parent.height / 2 - self.height - 1px;
+                        text: "Disappearing messages";
+                        color: Theme.text;
+                        font-size: 15px;
+                    }
+                    Text {
+                        x: 56px;
+                        y: parent.height / 2 + 2px;
+                        text: TimerState.chat-label;
+                        color: TimerState.chat-on ? Theme.accent : Theme.secondary;
+                        font-size: 13px;
+                    }
+                    IconChevronRight {
+                        x: parent.width - self.width - 20px;
+                        y: (parent.height - self.height) / 2;
+                        size: 16px;
+                        color: Theme.secondary;
+                    }
+                }
+
+                // Group settings (admins)
+                if root.model.is-group && root.model.is-admin: Rectangle {
+                    height: 60px;
+                    background: settings-area.has-hover ? Theme.hover : Theme.panel;
+                    settings-area := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { GroupAdmin.view = 2; }
+                    }
+                    IconSettings {
+                        x: 20px;
+                        y: (parent.height - self.height) / 2;
+                        size: 20px;
+                        color: Theme.secondary;
+                    }
+                    Text {
+                        x: 56px;
+                        text: "Group settings";
+                        color: Theme.text;
+                        font-size: 15px;
+                        vertical-alignment: center;
+                    }
+                    IconChevronRight {
+                        x: parent.width - self.width - 20px;
+                        y: (parent.height - self.height) / 2;
+                        size: 16px;
+                        color: Theme.secondary;
+                    }
+                }
+
+                // Media, links and docs
+                if InfoGallery.total > 0: Rectangle {
+                    background: Theme.panel;
+                    VerticalLayout {
+                        padding-top: 4px;
+                        padding-bottom: 12px;
+                        Rectangle {
+                            height: 48px;
+                            background: gallery-area.has-hover ? Theme.hover : transparent;
+                            gallery-area := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { InfoGallery.show(0); }
+                            }
+                            Text {
+                                x: 20px;
+                                text: "Media, links and docs";
+                                color: Theme.accent;
+                                font-size: 13px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                            chevron := IconChevronRight {
+                                x: parent.width - self.width - 20px;
+                                y: (parent.height - self.height) / 2;
+                                size: 16px;
+                                color: Theme.secondary;
+                            }
+                            Text {
+                                x: chevron.x - self.width - 6px;
+                                text: InfoGallery.total;
+                                color: Theme.secondary;
+                                font-size: 14px;
+                                vertical-alignment: center;
+                            }
+                        }
+                        if InfoGallery.preview.length > 0: HorizontalLayout {
+                            padding-left: 20px;
+                            padding-right: 20px;
+                            spacing: 4px;
+                            for t in InfoGallery.preview: Thumb {
+                                height: 50px;
+                                width: (root.width - 40px - 20px) / 6;
+                                item: t;
+                                clicked => { InfoGallery.show(0); }
+                            }
+                            Rectangle { }
+                        }
+                    }
+                }
+
+                // Members (groups)
+                if root.model.is-group: Rectangle {
+                    background: Theme.panel;
+                    VerticalLayout {
+                        padding-top: 20px;
+                        padding-bottom: 8px;
+                        spacing: 8px;
+                        Rectangle {
+                            height: 18px;
+                            SectionTitle {
+                                x: 20px;
+                                text: root.model.members-total == 1 ? "1 member" : root.model.members-total + " members";
+                            }
+                        }
+                        Rectangle {
+                            height: 36px;
+                            Rectangle {
+                                x: 20px;
+                                width: parent.width - 40px;
+                                border-radius: 18px;
+                                background: Theme.input-bg;
+                                Text {
+                                    x: 14px;
+                                    text: "Search members";
+                                    visible: member-input.text == "";
+                                    color: Theme.secondary;
+                                    font-size: 14px;
+                                    vertical-alignment: center;
+                                }
+                                member-input := TextInput {
+                                    x: 14px;
+                                    width: parent.width - 28px;
+                                    height: parent.height;
+                                    color: Theme.text;
+                                    font-size: 14px;
+                                    single-line: true;
+                                    vertical-alignment: center;
+                                    edited => { root.member-search(self.text); }
+                                }
+                            }
+                        }
+                        if root.model.is-admin: ActionRow {
+                            label: "Add members";
+                            icon: 0;
+                            clicked => { GroupAdmin.add-members(); }
+                        }
+                        if root.model.is-admin: ActionRow {
+                            label: "Invite via link";
+                            icon: 1;
+                            clicked => { GroupAdmin.open-invite(); }
+                        }
+                        if root.model.loading && root.members.length == 0: VerticalLayout {
+                            padding: 20px;
+                            spacing: 14px;
+                            Placeholder { }
+                            Placeholder { }
+                            Placeholder { }
+                        }
+                        for member in root.members: MemberRow {
+                            member: member;
+                            win-h: root.height;
+                            clicked => { root.open-member(member.jid); }
+                            promote => { GroupAdmin.member-role(member.jid, 0); }
+                            demote => { GroupAdmin.member-role(member.jid, 1); }
+                            remove => {
+                                GroupAdmin.target-jid = member.jid;
+                                GroupAdmin.target-name = member.name;
+                                GroupAdmin.dialog = 2;
+                            }
+                        }
+                    }
+                }
+
+                // Danger zone (groups)
+                if root.model.is-group && root.model.can-leave: Rectangle {
+                    height: 60px;
+                    background: exit-area.has-hover ? Theme.hover : Theme.panel;
+                    exit-area := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            GroupAdmin.group-name = root.model.name;
+                            GroupAdmin.dialog = 3;
+                        }
+                    }
+                    IconExit {
+                        x: 20px;
+                        y: (parent.height - self.height) / 2;
+                        size: 20px;
+                        color: Theme.danger;
+                    }
+                    Text {
+                        x: 56px;
+                        text: "Exit group";
+                        color: Theme.danger;
+                        font-size: 15px;
+                        vertical-alignment: center;
+                    }
+                }
+                if root.model.is-group && root.model.left: Rectangle {
+                    background: Theme.panel;
+                    VerticalLayout {
+                        padding: 20px;
+                        Text {
+                            text: "You're no longer a participant in this group.";
+                            color: Theme.secondary;
+                            font-size: 14px;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                // Actions (people)
+                if !root.model.is-group && root.model.phone != "": Rectangle {
+                    height: 60px;
+                    background: copy-area.has-hover ? Theme.hover : Theme.panel;
+                    copy-area := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.copy-phone(); }
+                    }
+                    Text {
+                        x: 20px;
+                        text: "Copy phone number";
+                        color: Theme.accent;
+                        font-size: 15px;
+                        vertical-alignment: center;
+                    }
+                }
+                if !root.model.is-group && root.model.phone != "": Rectangle {
+                    height: 60px;
+                    background: share-area.has-hover ? Theme.hover : Theme.panel;
+                    share-area := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { ShareState.share-info(); }
+                    }
+                    Text {
+                        x: 20px;
+                        text: "Share contact";
+                        color: Theme.accent;
+                        font-size: 15px;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}

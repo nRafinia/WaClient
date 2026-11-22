@@ -1,0 +1,101 @@
+import { PollOptionItem } from "poll_bubble.slint";
+import { ReactionChipItem } from "reactions.slint";
+
+// media-kind: 0 none, 1 image, 2 sticker, 3 video, 4 document, 5 voice/audio.
+// play-state: 0 idle, 1 playing, 2 paused.
+// status: 0 none (incoming), 1 pending, 2 sent, 3 delivered, 4 read/played, 5 failed.
+export struct ContactEntry {
+    name: string,
+    phone: string,
+    digits: string,
+    initials: string,
+    tint: color,
+}
+
+export struct MsgItem {
+    id: string,
+    is-sep: bool,
+    sep-text: string,
+    mine: bool,
+    show-sender: bool,
+    sender: string,
+    sender-color: color,
+    text: string,
+    quoted: string,
+    time: string,
+    status: int,
+    media-label: string,
+    media-detail: string,
+    thumb: image,
+    has-thumb: bool,
+    full: image,
+    has-full: bool,
+    can-download: bool,
+    downloading: bool,
+    media-kind: int,
+    has-local: bool,
+    failed: bool,
+    unsafe-file: bool,
+    file-ext: string,
+    file-name: string,
+    play-state: int,
+    play-progress: float,
+    play-text: string,
+    revoked: bool,
+    edited: bool,
+    poll: bool,
+    poll-question: string,
+    poll-options: [PollOptionItem],
+    poll-total: int,
+    poll-multi: bool,
+    reactions: [ReactionChipItem],
+    // Text with clickable links (only when the text has links).
+    styled: styled-text,
+    has-links: bool,
+    can-copy: bool,
+    can-delete-everyone: bool,
+    // Shared contact card (first contact; `contacts` lists all of them).
+    contact: bool,
+    contact-name: string,
+    contact-phone: string,
+    contact-digits: string,
+    contact-initials: string,
+    contact-tint: color,
+    contact-count: int,
+    contacts: [ContactEntry],
+    // Link preview card (only when the message carries one).
+    has-link-card: bool,
+    link-url: string,
+    link-title: string,
+    link-desc: string,
+    link-host: string,
+    link-thumb: image,
+    link-has-thumb: bool,
+    // Message operations (see msgops.slint).
+    starred: bool,
+    mentions-me: bool,
+    selected: bool,
+    pinned: bool,
+    can-edit: bool,
+    // Not deleted and not a system row: can be forwarded, pinned and starred.
+    can-share: bool,
+    // "lat, lon" of a shared location (empty otherwise): drawn as a location card.
+    geo: string,
+    // The message disappears (it has an expiry): shows the timer marker.
+    expires: bool,
+    // A system notice row (disappearing messages turned on/off): drawn like a date separator.
+    is-notice: bool,
+}
+
+// Quick reactions offered by the bubble popup (set from emoji::QUICK_REACTIONS).
+export global ReactionConfig {
+    in-out property <[string]> quick;
+}
+
+// Phone numbers in message text are links; the controller says which link
+// targets are phone numbers.
+export global PhoneLinks {
+    // The number (ASCII digits, country code applied when known) behind a
+    // phone link target; empty for every other link.
+    pure callback phone-of(string) -> string;
+}

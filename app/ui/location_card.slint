@@ -1,0 +1,121 @@
+import { Theme } from "theme.slint";
+
+// Clicks of the location card (Rust: app/location_ui.rs). `geo` is the
+// "lat, lon" text of the message.
+export global LocationActions {
+    callback open(string);
+}
+
+// Map pin drawn as a path (no icon font is bundled).
+export component LocationPin inherits Rectangle {
+    in property <length> size: 28px;
+    in property <color> tint: #ea4335;
+    width: root.size * 0.75;
+    height: root.size;
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 18;
+        viewbox-height: 24;
+        commands: "M 9 1 C 4.6 1 1 4.5 1 8.8 C 1 14.6 9 23 9 23 C 9 23 17 14.6 17 8.8 C 17 4.5 13.4 1 9 1 Z";
+        fill: root.tint;
+        stroke: #00000040;
+        stroke-width: 1px;
+    }
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: parent.height * 0.22;
+        width: parent.width * 0.3;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: white;
+    }
+}
+
+// A stylised map tile with a pin; the real map opens in the browser.
+export component MapTile inherits Rectangle {
+    background: #2b3b44;
+    border-radius: 6px;
+    clip: true;
+    // Streets and a river, in the 260x96 grid of the tile.
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 260;
+        viewbox-height: 96;
+        commands: "M 0 30 L 260 38 M 0 74 L 260 66 M 70 0 L 82 96 M 176 0 L 168 96 M 120 0 L 128 96";
+        stroke: #3e525d;
+        stroke-width: 5px;
+        fill: transparent;
+    }
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 260;
+        viewbox-height: 96;
+        commands: "M 0 88 C 60 70 100 96 150 80 C 200 64 230 80 260 60";
+        stroke: #35657a;
+        stroke-width: 9px;
+        fill: transparent;
+    }
+    LocationPin {
+        x: (parent.width - self.width) / 2;
+        y: parent.height / 2 - self.height + 4px;
+        size: 34px;
+    }
+}
+
+// The card under the text of a location message: map tile, coordinates and
+// "Open in Maps". A click anywhere opens the map; a right click is handed to
+// the bubble so its menu (Copy, Reply, Forward...) works over the card too.
+export component LocationCard inherits Rectangle {
+    in property <string> geo;
+    in property <length> content-w: 260px;
+    callback context-menu(length, length);
+
+    preferred-width: root.content-w;
+    width: root.content-w;
+    height: 96px + 34px;
+    background: #0000004d;
+    border-radius: 6px;
+    clip: true;
+
+    MapTile {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: 96px;
+        border-radius: 0px;
+    }
+    Text {
+        x: 10px;
+        y: 96px;
+        width: parent.width - 20px;
+        height: 18px;
+        text: root.geo;
+        color: Theme.secondary;
+        font-size: 11px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Text {
+        x: 10px;
+        y: 96px + 16px;
+        width: parent.width - 20px;
+        height: 16px;
+        text: "Open in Maps";
+        color: Theme.tick-read;
+        font-size: 12.5px;
+        font-weight: 600;
+        vertical-alignment: center;
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
+                root.context-menu(self.mouse-x, self.mouse-y);
+            }
+        }
+        clicked => { LocationActions.open(root.geo); }
+    }
+}

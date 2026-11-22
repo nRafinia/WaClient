@@ -1,0 +1,5 @@
+# libopus (voice notes) is built from source by audiopus_sys and needs CMake.
+# Visual Studio ships one; point the `cmake` crate at it so no global install
+# or PATH change is required. Adjust if Visual Studio lives elsewhere.
+[env]
+CMAKE = "C:\\Program Files\\Microsoft Visual Studio\\18\\Enterprise\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe"

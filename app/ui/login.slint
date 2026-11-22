@@ -1,0 +1,76 @@
+import { Button } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+export component LoginView inherits Rectangle {
+    in property <image> qr;
+    in property <bool> has-qr;
+    in property <string> status;
+    in property <bool> show-retry;
+    // Shown only when several profiles exist.
+    in property <string> profile-name;
+    callback retry();
+
+    background: Theme.bg;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 18px;
+
+        if root.profile-name != "": Text {
+            text: root.profile-name;
+            color: Theme.accent;
+            font-size: 16px;
+            font-weight: 600;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "Use WaClient on your computer";
+            color: Theme.text;
+            font-size: 26px;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "Open WhatsApp on your phone > Linked devices > Link a device";
+            color: Theme.secondary;
+            font-size: 15px;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 288px;
+                height: 288px;
+                background: white;
+                border-radius: 12px;
+                if root.has-qr: Image {
+                    source: root.qr;
+                    width: 264px;
+                    height: 264px;
+                    image-rendering: pixelated;
+                }
+                if !root.has-qr: Text {
+                    text: "Waiting for QR code…";
+                    color: #54656f;
+                    font-size: 15px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+        Text {
+            text: root.status;
+            color: Theme.accent;
+            font-size: 14px;
+            horizontal-alignment: center;
+        }
+        if root.show-retry: HorizontalLayout {
+            alignment: center;
+            Button {
+                text: "Reload QR code";
+                primary: true;
+                clicked => { root.retry(); }
+            }
+        }
+    }
+}

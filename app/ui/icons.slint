@@ -1,0 +1,506 @@
+import { Theme } from "theme.slint";
+
+// Icons drawn with Path commands on a 24x24 grid, so they never depend on the
+// UI font having the glyph (it renders boxes for symbols such as the cross).
+// Strokes are in logical pixels, independent of `size`.
+
+export component IconClose inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    commands: "M 6 6 L 18 18 M 18 6 L 6 18";
+}
+
+export component IconBack inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 20 12 L 4 12 M 11 5 L 4 12 L 11 19";
+}
+
+export component IconCheck inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 5 12.5 L 10 17.5 L 19 7";
+}
+
+export component IconSearch inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    commands: "M 4 10 A 6 6 0 1 0 16 10 A 6 6 0 1 0 4 10 Z M 14.5 14.5 L 20 20";
+}
+
+export component IconMore inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    fill: root.color;
+    commands: "M 12 3.5 A 1.8 1.8 0 1 0 12 7.1 A 1.8 1.8 0 1 0 12 3.5 Z M 12 10.2 A 1.8 1.8 0 1 0 12 13.8 A 1.8 1.8 0 1 0 12 10.2 Z M 12 16.9 A 1.8 1.8 0 1 0 12 20.5 A 1.8 1.8 0 1 0 12 16.9 Z";
+}
+
+export component IconSettings inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    commands: "M 5.5 12 A 6.5 6.5 0 1 0 18.5 12 A 6.5 6.5 0 1 0 5.5 12 Z M 9.5 12 A 2.5 2.5 0 1 0 14.5 12 A 2.5 2.5 0 1 0 9.5 12 Z M 18.5 12 L 21.5 12 M 16.6 16.6 L 18.7 18.7 M 12 18.5 L 12 21.5 M 7.4 16.6 L 5.3 18.7 M 5.5 12 L 2.5 12 M 7.4 7.4 L 5.3 5.3 M 12 5.5 L 12 2.5 M 16.6 7.4 L 18.7 5.3";
+}
+
+export component IconArrowUp inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 12 20 L 12 5 M 5.5 11 L 12 4.5 L 18.5 11";
+}
+
+export component IconArrowDown inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 12 4 L 12 19 M 5.5 13 L 12 19.5 L 18.5 13";
+}
+
+export component IconPlay inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    fill: root.color;
+    commands: "M 7 4.5 L 20 12 L 7 19.5 Z";
+}
+
+export component IconExternal inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 7 17 L 17 7 M 9 7 L 17 7 L 17 15";
+}
+
+export component IconChevronRight inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 9 5 L 16 12 L 9 19";
+}
+
+export component IconCheckDouble inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 1.5 12.5 L 6.5 17.5 L 15.5 7 M 10.5 15.5 L 12.5 17.5 L 22 7";
+}
+
+export component IconClock inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 3 12 A 9 9 0 1 0 21 12 A 9 9 0 1 0 3 12 Z M 12 7 L 12 12 L 15.5 14";
+}
+
+export component IconEdit inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 4 20 L 5 15.5 L 15.5 5 L 19 8.5 L 8.5 19 Z M 13.5 7 L 17 10.5";
+}
+
+// Clock with an open arc: disappearing messages.
+export component IconTimer inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 19.8 7.5 A 9 9 0 1 1 12 3 M 12 7.5 L 12 12 L 15 13.5";
+}
+
+// The digit 1 in a circle: view once.
+export component IconViewOnce inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 3 12 A 9 9 0 1 0 21 12 A 9 9 0 1 0 3 12 Z M 10 9.5 L 12.5 8 L 12.5 16";
+}
+
+// A person: shared contact.
+export component IconContact inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 16 8 A 4 4 0 1 1 8 8 A 4 4 0 1 1 16 8 M 4 21 C 4 16.5 7.5 14 12 14 C 16.5 14 20 16.5 20 21";
+}
+
+// A map pin: shared location.
+export component IconPin inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 12 22 C 12 22 4.5 15 4.5 9.5 A 7.5 7.5 0 1 1 19.5 9.5 C 19.5 15 12 22 12 22 M 15 9.5 A 3 3 0 1 1 9 9.5 A 3 3 0 1 1 15 9.5";
+}
+
+// A sheet of paper: a file.
+export component IconFile inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 6 3 L 14 3 L 19 8 L 19 21 L 6 21 Z M 14 3 L 14 8 L 19 8";
+}
+
+// Three bars of a bar chart: a poll.
+export component IconPoll inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 5 20 L 5 12 M 12 20 L 12 4 M 19 20 L 19 9";
+}
+
+// A person with a plus: add members.
+export component IconAddPerson inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 14 8 A 4 4 0 1 1 6 8 A 4 4 0 1 1 14 8 M 2 21 C 2 16.5 5 14 10 14 C 12 14 13.5 14.5 14.5 15.2 M 19 9 L 19 15 M 16 12 L 22 12";
+}
+
+// Two chain links: invite link.
+export component IconLink inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 10 14 L 14 10 M 8.5 11.5 L 6 14 A 3.5 3.5 0 0 0 11 19 L 13.5 16.5 M 15.5 12.5 L 18 10 A 3.5 3.5 0 0 0 13 5 L 10.5 7.5";
+}
+
+// An arrow leaving a door: exit group.
+export component IconExit inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 10 4 L 4 4 L 4 20 L 10 20 M 9 12 L 20 12 M 16 8 L 20 12 L 16 16";
+}
+
+// A camera: change the group photo.
+export component IconCamera inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 3 8 L 8 8 L 10 5 L 14 5 L 16 8 L 21 8 L 21 19 L 3 19 Z M 16 13.5 A 4 4 0 1 1 8 13.5 A 4 4 0 1 1 16 13.5";
+}
+
+// A telephone handset: voice call.
+export component IconPhone inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 5 4 L 9 4 L 11 9 L 8.5 10.5 C 9.6 12.8 11.2 14.4 13.5 15.5 L 15 13 L 20 15 L 20 19 C 20 19.6 19.6 20 19 20 C 11 20 4 13 4 5 C 4 4.4 4.4 4 5 4 Z";
+}
+
+// A video camera: video call.
+export component IconVideo inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 3 7 L 15 7 L 15 17 L 3 17 Z M 15 11 L 21 7.5 L 21 16.5 L 15 13 Z";
+}
+
+// A plus: add (chat folders).
+export component IconPlus inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    commands: "M 12 5 L 12 19 M 5 12 L 19 12";
+}
+
+// A padlock: the app lock.
+export component IconLock inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 5 11 L 19 11 L 19 21 L 5 21 Z M 8 11 L 8 7.5 A 4 4 0 0 1 16 7.5 L 16 11 M 12 15 L 12 17";
+}
+
+// A key: settings account.
+export component IconKey inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 14 10 A 4.5 4.5 0 1 1 5 10 A 4.5 4.5 0 1 1 14 10 M 13 13 L 20 20 M 17 17 L 20 14 M 15.5 18.5 L 18 16";
+}
+
+// A speech bubble: settings chats.
+export component IconChat inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 4 5 L 20 5 L 20 16 L 11 16 L 7 20 L 7 16 L 4 16 Z";
+}
+
+// A bell: settings notifications.
+export component IconBell inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 6 17 L 6 11 A 6 6 0 0 1 18 11 L 18 17 L 20 17 M 4 17 L 6 17 M 10 20 L 14 20";
+}
+
+// A database: settings storage.
+export component IconStorage inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 5 6 A 7 3 0 1 0 19 6 A 7 3 0 1 0 5 6 M 5 6 L 5 18 A 7 3 0 0 0 19 18 L 19 6 M 5 12 A 7 3 0 0 0 19 12";
+}
+
+// A monitor: settings app.
+export component IconApp inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 3 5 L 21 5 L 21 16 L 3 16 Z M 9 20 L 15 20 M 12 16 L 12 20";
+}
+
+// A globe: settings network.
+export component IconGlobe inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 3 12 A 9 9 0 1 0 21 12 A 9 9 0 1 0 3 12 M 3 12 L 21 12 M 12 3 C 7 8 7 16 12 21 M 12 3 C 17 8 17 16 12 21";
+}
+
+// A question mark in a circle: settings help.
+export component IconHelp inherits Path {
+    in property <color> color: Theme.text;
+    in property <length> size: 16px;
+    width: root.size;
+    height: root.size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.color;
+    stroke-width: 1.8px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M 3 12 A 9 9 0 1 0 21 12 A 9 9 0 1 0 3 12 M 9.5 9.5 A 2.5 2.5 0 1 1 12.8 11.9 C 12.2 12.3 12 12.8 12 13.5 M 12 16.5 L 12 17";
+}

@@ -1,0 +1,256 @@
+import { Button, Spinner } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { LocationActions, LocationPin } from "location_card.slint";
+
+// State of the "Send location" dialog (Rust: app/location_ui.rs).
+export global LocationState {
+    in-out property <bool> open;
+    in-out property <string> paste-text;
+    in-out property <string> name-text;
+    // A position is being requested from Windows.
+    in property <bool> locating;
+    // Why the current position could not be read.
+    in property <string> error;
+    // The position that would be sent, as "lat, lon"; empty when there is none.
+    in property <string> coords-text;
+    // "Accurate to about 25 m" or "From the pasted text".
+    in property <string> info-text;
+    // The pasted text is not a position.
+    in property <string> paste-error;
+    callback use-current();
+    callback paste-edited(string);
+    callback send();
+    callback cancel();
+}
+
+component Field inherits Rectangle {
+    in property <string> placeholder;
+    in-out property <string> text <=> input.text;
+    callback edited(string);
+    height: 38px;
+    background: Theme.input-bg;
+    border-radius: 8px;
+    if input.text == "": Text {
+        x: 12px;
+        width: parent.width - 24px;
+        text: root.placeholder;
+        color: Theme.secondary;
+        font-size: 14px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    input := TextInput {
+        x: 12px;
+        y: (parent.height - self.preferred-height) / 2;
+        width: parent.width - 24px;
+        color: Theme.text;
+        font-size: 14px;
+        single-line: true;
+        edited => { root.edited(self.text); }
+    }
+}
+
+// Modal dialog that covers its parent: current position or pasted coordinates,
+// an optional place name, a preview and Send.
+export component SendLocationDialog inherits Rectangle {
+    background: #000000b0;
+    TouchArea { }
+
+    FocusScope {
+        width: parent.width;
+        height: parent.height;
+        capture-key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                LocationState.cancel();
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            width: min(440px, parent.width - 32px);
+            height: min(500px, parent.height - 32px);
+            background: Theme.panel;
+            border-radius: 12px;
+            clip: true;
+
+            Text {
+                x: 20px;
+                y: 16px;
+                width: parent.width - 40px;
+                height: 26px;
+                text: "Send location";
+                color: Theme.text;
+                font-size: 18px;
+                font-weight: 600;
+            }
+
+            // Current position.
+            Rectangle {
+                x: 20px;
+                y: 56px;
+                width: parent.width - 40px;
+                height: 44px;
+                border-radius: 8px;
+                background: LocationState.locating ? Theme.input-bg : (cur-ta.has-hover ? #00967a : Theme.accent);
+                Text {
+                    text: LocationState.locating ? "Finding your location..." : "Send my current location";
+                    color: LocationState.locating ? Theme.text : #111b21;
+                    font-size: 14.5px;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                if LocationState.locating: Spinner {
+                    x: 14px;
+                    y: (parent.height - self.height) / 2;
+                    width: 22px;
+                    height: 22px;
+                    indeterminate: true;
+                }
+                cur-ta := TouchArea {
+                    enabled: !LocationState.locating;
+                    mouse-cursor: pointer;
+                    clicked => { LocationState.use-current(); }
+                }
+            }
+            Text {
+                x: 20px;
+                y: 106px;
+                width: parent.width - 40px;
+                height: 34px;
+                visible: LocationState.error != "";
+                text: LocationState.error;
+                color: Theme.danger;
+                font-size: 12.5px;
+                wrap: word-wrap;
+                overflow: elide;
+            }
+
+            Text {
+                x: 20px;
+                y: 146px;
+                text: "or paste coordinates or a map link";
+                color: Theme.secondary;
+                font-size: 13px;
+            }
+            Field {
+                x: 20px;
+                y: 168px;
+                width: parent.width - 40px;
+                placeholder: "Paste coordinates or a map link";
+                text <=> LocationState.paste-text;
+                edited(t) => { LocationState.paste-edited(t); }
+            }
+            Text {
+                x: 20px;
+                y: 210px;
+                width: parent.width - 40px;
+                height: 18px;
+                text: LocationState.paste-error;
+                color: Theme.danger;
+                font-size: 12.5px;
+                overflow: elide;
+            }
+            Field {
+                x: 20px;
+                y: 232px;
+                width: parent.width - 40px;
+                placeholder: "Place name (optional)";
+                text <=> LocationState.name-text;
+            }
+
+            // Preview.
+            Rectangle {
+                x: 20px;
+                y: 284px;
+                width: parent.width - 40px;
+                height: 84px;
+                border-radius: 8px;
+                background: #0000004d;
+                if LocationState.coords-text == "": Text {
+                    text: "No location chosen yet";
+                    color: Theme.secondary;
+                    font-size: 13px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                if LocationState.coords-text != "": Rectangle {
+                    LocationPin {
+                        x: 18px;
+                        y: (parent.height - self.height) / 2;
+                        size: 38px;
+                    }
+                    Text {
+                        x: 64px;
+                        y: 14px;
+                        width: parent.width - 80px;
+                        height: 20px;
+                        text: LocationState.name-text != "" ? LocationState.name-text : LocationState.coords-text;
+                        color: Theme.text;
+                        font-size: 15px;
+                        font-weight: 600;
+                        overflow: elide;
+                    }
+                    Text {
+                        x: 64px;
+                        y: 34px;
+                        width: parent.width - 80px;
+                        height: 16px;
+                        text: LocationState.name-text != "" ? LocationState.coords-text + "  ·  " + LocationState.info-text : LocationState.info-text;
+                        color: Theme.secondary;
+                        font-size: 12px;
+                        overflow: elide;
+                    }
+                    Rectangle {
+                        x: 64px;
+                        y: 54px;
+                        width: 120px;
+                        height: 18px;
+                        Text {
+                            x: 0px;
+                            y: 0px;
+                            height: parent.height;
+                            text: "Open in Maps";
+                            color: Theme.tick-read;
+                            font-size: 12.5px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { LocationActions.open(LocationState.coords-text); }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                y: parent.height - 68px;
+                height: 68px;
+                Rectangle {
+                    height: 1px;
+                    background: Theme.divider;
+                }
+                HorizontalLayout {
+                    x: parent.width - 232px;
+                    width: 220px;
+                    alignment: end;
+                    spacing: 8px;
+                    padding-top: 16px;
+                    padding-bottom: 16px;
+                    Button {
+                        text: "Cancel";
+                        clicked => { LocationState.cancel(); }
+                    }
+                    Button {
+                        text: "Send";
+                        primary: true;
+                        enabled: LocationState.coords-text != "" && !LocationState.locating;
+                        clicked => { LocationState.send(); }
+                    }
+                }
+            }
+        }
+    }
+}
