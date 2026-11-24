@@ -17,12 +17,14 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use slint::ComponentHandle;
-use wa_engine::{ProxyConfig, ProxyKind};
+use wa_engine::{ConnState, ProxyConfig, ProxyKind};
 
 use super::{App, with_app};
 use crate::{MainWindow, ProxyState};
 
 const FILE: &str = "proxy.json";
+/// Index of "Network" in the settings page's category list.
+const NETWORK_CATEGORY: i32 = 6;
 const DEFAULT_SOCKS_PORT: u16 = 1080;
 const DEFAULT_HTTP_PORT: u16 = 8080;
 /// SOCKS5 username/password fields are length-prefixed with one byte.
@@ -68,6 +70,66 @@ pub fn apply_path(on_login_screen: bool, can_relaunch: bool, changed: bool) -> A
         (true, true) => ApplyPath::Relaunch,
         (true, false) => ApplyPath::Prompt,
     }
+}
+
+// ---- pure functions: status badge -------------------------------------------
+
+/// The proxy shield at the bottom of the chat list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyBadge {
+    /// No proxy in use: nothing is shown.
+    Hidden,
+    Connected,
+    Connecting,
+    Failed,
+    /// Saved and switched on, but the engines only pick it up after a restart.
+    Pending,
+}
+
+/// `in_use`: a complete, switched-on proxy is saved. `pending_restart`: what is
+/// saved differs from what the engines run with, so their state says nothing
+/// about it. `conn` is the active profile's connection.
+pub fn proxy_badge(in_use: bool, pending_restart: bool, conn: &ConnState) -> ProxyBadge {
+    if !in_use {
+        return ProxyBadge::Hidden;
+    }
+    if pending_restart {
+        return ProxyBadge::Pending;
+    }
+    match conn {
+        ConnState::Connected => ProxyBadge::Connected,
+        ConnState::Connecting => ProxyBadge::Connecting,
+        ConnState::Disconnected { .. } => ProxyBadge::Failed,
+    }
+}
+
+impl ProxyBadge {
+    /// The value of `MainWindow.proxy-badge`.
+    fn slint_value(self) -> i32 {
+        match self {
+            ProxyBadge::Hidden => 0,
+            ProxyBadge::Connected => 1,
+            ProxyBadge::Connecting => 2,
+            ProxyBadge::Failed => 3,
+            ProxyBadge::Pending => 4,
+        }
+    }
+}
+
+/// The tooltip: state and proxy type, never the host, port or login.
+fn badge_tip(badge: ProxyBadge, kind: ProxyKind) -> String {
+    let state = match badge {
+        ProxyBadge::Hidden => return String::new(),
+        ProxyBadge::Connected => "connected",
+        ProxyBadge::Connecting => "connecting\u{2026}",
+        ProxyBadge::Failed => "not connected",
+        ProxyBadge::Pending => "restart to apply",
+    };
+    let kind = match kind {
+        ProxyKind::Socks5 => "SOCKS5",
+        ProxyKind::Http => "HTTP",
+    };
+    format!("Proxy: {state} ({kind})")
 }
 
 // ---- pure functions: links --------------------------------------------------
@@ -608,17 +670,19 @@ impl ProxyCtl {
             Some(p) => read_state(p, &dpapi_unprotect),
             None => FileState::Missing,
         };
+        let demo = demo_settings(path.is_none());
         let decision = startup_proxy_decision(&state);
-        let (applied, blocked) = match decision {
-            StartupProxy::NoProxy => (None, None),
-            StartupProxy::Proxy(c) => (Some(c), None),
-            StartupProxy::Blocked(reason) => (None, Some(reason)),
+        let (applied, blocked) = match (&demo, decision) {
+            (Some(d), _) => (d.to_engine(), None),
+            (None, StartupProxy::NoProxy) => (None, None),
+            (None, StartupProxy::Proxy(c)) => (Some(c), None),
+            (None, StartupProxy::Blocked(reason)) => (None, Some(reason)),
         };
         IN_USE.store(applied.is_some(), Ordering::Relaxed);
         let loaded = loaded_from(state);
         Self {
             path,
-            saved: RefCell::new(loaded.settings),
+            saved: RefCell::new(demo.unwrap_or(loaded.settings)),
             applied,
             warning: RefCell::new(loaded.warning),
             testing: Cell::new(false),
@@ -632,6 +696,21 @@ impl ProxyCtl {
     }
 }
 
+/// Demo only (`WACLIENT_DEMO_PROXY=connected|connecting|failed`): a made-up
+/// proxy that is saved, switched on and applied. Never in a real run.
+#[cfg(debug_assertions)]
+fn demo_settings(is_demo: bool) -> Option<ProxySettings> {
+    (is_demo && std::env::var("WACLIENT_DEMO_PROXY").is_ok()).then(|| ProxySettings {
+        enabled: true,
+        config: ProxyConfig { kind: ProxyKind::Socks5, host: "127.0.0.1".into(), port: 10808, username: None, password: None },
+    })
+}
+
+#[cfg(not(debug_assertions))]
+fn demo_settings(_is_demo: bool) -> Option<ProxySettings> {
+    None
+}
+
 pub(super) fn wire(win: &MainWindow) {
     let g = win.global::<ProxyState>();
     g.on_save(|| with_app(App::proxy_save));
@@ -640,6 +719,7 @@ pub(super) fn wire(win: &MainWindow) {
     g.on_fill_link(|text| with_app(|a| a.proxy_fill_link(text.as_str())));
     g.on_restart(|| with_app(App::proxy_restart));
     g.on_connect_direct(|| with_app(App::proxy_connect_direct));
+    win.on_proxy_settings_requested(|| with_app(App::proxy_open_settings));
 }
 
 fn kind_index(kind: ProxyKind) -> i32 {
@@ -716,6 +796,35 @@ impl App {
         g.set_status("".into());
         g.set_notice(self.proxy.warning.borrow().unwrap_or_default().into());
         g.set_needs_restart(saved.to_engine() != self.proxy.applied);
+        drop(saved);
+        self.proxy_badge_push();
+    }
+
+    /// Shows the shield for the active profile's connection (call on every
+    /// connection change, profile switch and proxy change).
+    pub(super) fn proxy_badge_push(&self) {
+        let Some(win) = self.win() else { return };
+        let active = self.p();
+        // Called from many places: if one of them holds a mutable borrow, try
+        // again once it has returned instead of panicking.
+        let (Ok(saved), Ok(st)) = (self.proxy.saved.try_borrow(), active.st.try_borrow()) else {
+            slint::Timer::single_shot(Duration::ZERO, || with_app(App::proxy_badge_push));
+            return;
+        };
+        let engine = saved.to_engine();
+        let conn = st.conn.clone();
+        drop(st);
+        let badge = proxy_badge(engine.is_some(), engine != self.proxy.applied, &conn);
+        win.set_proxy_badge(badge.slint_value());
+        win.set_proxy_tip(badge_tip(badge, saved.config.kind).into());
+    }
+
+    /// The shield was clicked: Settings, on the Network page where the proxy form is.
+    fn proxy_open_settings(&self) {
+        let Some(win) = self.win() else { return };
+        self.open_settings();
+        win.set_settings_start_category(NETWORK_CATEGORY);
+        win.set_show_settings(true);
     }
 
     /// The form as a validated proxy config.
@@ -882,6 +991,21 @@ impl App {
                 win.global::<ProxyState>().set_login_open(true);
             }
         }
+    }
+
+    /// Demo (`WACLIENT_DEMO_UI=proxy-badge` with `WACLIENT_DEMO_PROXY=connected|connecting|failed`,
+    /// optionally `WACLIENT_DEMO_THEME=light`): puts the active profile into that connection state.
+    pub(super) fn demo_proxy_badge(&self) {
+        let conn = match std::env::var("WACLIENT_DEMO_PROXY").as_deref() {
+            Ok("connecting") => ConnState::Connecting,
+            Ok("failed") => ConnState::Disconnected { reason: String::new() },
+            _ => ConnState::Connected,
+        };
+        self.p().st.borrow_mut().conn = conn;
+        if let (Some(win), Ok("light")) = (self.win(), std::env::var("WACLIENT_DEMO_THEME").as_deref()) {
+            win.global::<crate::Theme>().set_dark(false);
+        }
+        self.refresh_rail();
     }
 
     /// Demo (`WACLIENT_DEMO_UI=proxy-blocked`): the "nothing connected" screen.
@@ -1163,6 +1287,53 @@ mod tests {
         assert_eq!(apply_path(true, false, true), ApplyPath::Prompt, "the demo never relaunches");
         assert_eq!(apply_path(true, true, false), ApplyPath::Nothing);
         assert_eq!(apply_path(false, false, false), ApplyPath::Nothing);
+    }
+
+    fn badge(in_use: bool, pending: bool, conn: ConnState) -> ProxyBadge {
+        proxy_badge(in_use, pending, &conn)
+    }
+
+    fn down() -> ConnState {
+        ConnState::Disconnected { reason: "network".into() }
+    }
+
+    #[test]
+    fn no_proxy_means_no_badge_in_any_state() {
+        for conn in [ConnState::Connected, ConnState::Connecting, down()] {
+            assert_eq!(badge(false, false, conn.clone()), ProxyBadge::Hidden);
+            assert_eq!(badge(false, true, conn), ProxyBadge::Hidden, "switched off, restart still due");
+        }
+    }
+
+    #[test]
+    fn the_badge_follows_the_connection_of_the_applied_proxy() {
+        assert_eq!(badge(true, false, ConnState::Connected), ProxyBadge::Connected);
+        assert_eq!(badge(true, false, ConnState::Connecting), ProxyBadge::Connecting);
+        assert_eq!(badge(true, false, down()), ProxyBadge::Failed);
+        assert_eq!(badge(true, false, ConnState::Disconnected { reason: String::new() }), ProxyBadge::Failed);
+    }
+
+    #[test]
+    fn a_proxy_the_engines_do_not_use_yet_is_pending_whatever_the_connection() {
+        for conn in [ConnState::Connected, ConnState::Connecting, down()] {
+            assert_eq!(badge(true, true, conn), ProxyBadge::Pending);
+        }
+    }
+
+    #[test]
+    fn badge_values_for_the_ui_are_distinct() {
+        let all = [ProxyBadge::Hidden, ProxyBadge::Connected, ProxyBadge::Connecting, ProxyBadge::Failed, ProxyBadge::Pending];
+        let values: Vec<i32> = all.iter().map(|b| b.slint_value()).collect();
+        assert_eq!(values, [0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn the_tooltip_names_state_and_type_but_never_the_address() {
+        assert_eq!(badge_tip(ProxyBadge::Connected, ProxyKind::Socks5), "Proxy: connected (SOCKS5)");
+        assert_eq!(badge_tip(ProxyBadge::Connecting, ProxyKind::Http), "Proxy: connecting\u{2026} (HTTP)");
+        assert_eq!(badge_tip(ProxyBadge::Failed, ProxyKind::Socks5), "Proxy: not connected (SOCKS5)");
+        assert_eq!(badge_tip(ProxyBadge::Pending, ProxyKind::Http), "Proxy: restart to apply (HTTP)");
+        assert_eq!(badge_tip(ProxyBadge::Hidden, ProxyKind::Http), "");
     }
 
     #[test]

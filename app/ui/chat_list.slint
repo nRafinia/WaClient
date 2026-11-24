@@ -3,7 +3,7 @@ import { PopupState, Theme, ChatItem, Avatar, ProfileItem } from "theme.slint";
 import { StatusEntry, StatusListPanel } from "status_view.slint";
 import { MenuRow, Chevron } from "msg_menu.slint";
 import { ChatActions } from "account.slint";
-import { IconSearch, IconPlus, IconCheck, IconLock, IconTimer, IconClose } from "icons.slint";
+import { IconSearch, IconPlus, IconCheck, IconLock, IconTimer, IconClose, IconShield } from "icons.slint";
 import { FolderState, FolderTab } from "folders.slint";
 import { LockState } from "lock.slint";
 import { GroupNew } from "group_new.slint";
@@ -505,6 +505,93 @@ component FolderTabItem inherits Rectangle {
     }
 }
 
+// Proxy status at the bottom of the chat list. badge: 1 connected, 2 connecting,
+// 3 not connected, 4 saved but not applied yet. The tip never carries the address.
+component ProxyBadgeButton inherits Rectangle {
+    in property <int> badge;
+    in property <string> tip;
+    callback clicked();
+    property <color> tint: root.badge == 1 ? Theme.accent : (root.badge == 3 ? Theme.danger : (root.badge == 4 ? Theme.warn : Theme.secondary));
+
+    forward-focus: key-scope;
+    height: 46px;
+
+    key-scope := FocusScope {
+        accessible-role: AccessibleRole.button;
+        accessible-label: root.tip;
+        accessible-action-default => { root.clicked(); }
+        key-pressed(e) => {
+            if (e.text == Key.Return || e.text == " ") {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    button := Rectangle {
+        x: 12px;
+        y: (parent.height - self.height) / 2;
+        width: 32px;
+        height: 32px;
+        border-radius: 16px;
+        background: ta.has-hover ? Theme.selected : Theme.panel;
+        border-width: key-scope.has-focus ? 2px : 0px;
+        border-color: Theme.accent;
+        IconShield {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            size: 20px;
+            color: root.tint;
+            mark: root.badge == 1 ? 1 : (root.badge == 3 || root.badge == 4 ? 2 : 0);
+        }
+        // Three dots orbiting the button: Path and Rectangle cannot be rotated.
+        if root.badge == 2: Rectangle {
+            property <angle> phase;
+            Timer {
+                interval: 60ms;
+                running: true;
+                triggered => { parent.phase = parent.phase + 30deg; }
+            }
+            for k in 3: Rectangle {
+                x: 16px + 14px * sin(parent.phase - k * 35deg) - 2px;
+                y: 16px - 14px * cos(parent.phase - k * 35deg) - 2px;
+                width: 4px;
+                height: 4px;
+                border-radius: 2px;
+                background: Theme.accent;
+                opacity: 1.0 - k * 0.3;
+            }
+        }
+        ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                key-scope.focus();
+                root.clicked();
+            }
+        }
+    }
+    if ta.has-hover: Rectangle {
+        x: 12px;
+        y: 0px - self.height - 2px;
+        width: min(tip-text.preferred-width + 24px, root.width - 24px);
+        height: 30px;
+        background: Theme.input-bg;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: Theme.divider;
+        tip-text := Text {
+            x: 12px;
+            width: parent.width - 24px;
+            height: parent.height;
+            text: root.tip;
+            color: Theme.text;
+            font-size: 13px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
 export component ChatList inherits Rectangle {
     in property <[ChatItem]> chats;
     in property <string> selected-jid;
@@ -534,6 +621,10 @@ export component ChatList inherits Rectangle {
     callback search(string);
     callback chat-selected(string);
     callback open-settings();
+    // 0 hidden, 1 connected, 2 connecting, 3 not connected, 4 saved but needs a restart.
+    in property <int> proxy-badge;
+    in property <string> proxy-tip;
+    callback open-proxy-settings();
     // Active profile, shown as the title; a click asks to rename it.
     in property <ProfileItem> profile;
     callback rename-profile();
@@ -1042,6 +1133,11 @@ export component ChatList inherits Rectangle {
                 has-mine: root.status-has-mine;
                 open(i) => { root.open-status(i); }
             }
+        }
+        if root.proxy-badge != 0 && !LockState.locked: ProxyBadgeButton {
+            badge: root.proxy-badge;
+            tip: root.proxy-tip;
+            clicked => { root.open-proxy-settings(); }
         }
     }
 }

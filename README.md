@@ -165,6 +165,9 @@ A native Windows desktop client for WhatsApp, written in Rust. It links to your 
   effect after a restart ("Restart now"); the connection status then shows "(via proxy)". The
   password is stored encrypted with Windows DPAPI for the current Windows user only; under another
   Windows account it reads as empty and has to be entered again.
+  While a proxy is on, a small shield at the bottom of the chat list shows its state (connected,
+  connecting, not connected) with the proxy type on hover, never the address; click it to open the
+  proxy settings.
   Fails closed: if proxy.json exists but cannot be read, is invalid, or its password cannot be
   decrypted (for example under another Windows account), WaClient does not connect at all and shows
   "Proxy settings couldn't be read. WaClient didn't connect, so your IP isn't exposed." with

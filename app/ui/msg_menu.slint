@@ -51,6 +51,7 @@ export component MsgMenu inherits Rectangle {
     in property <bool> can-reply;
     in property <bool> can-react;
     in property <bool> can-copy;
+    in property <string> copy-label: "Copy";
     // "Translate", "Show original" or "Show translation"; empty hides the row.
     in property <string> translate-label;
     in property <bool> can-download;
@@ -105,7 +106,7 @@ export component MsgMenu inherits Rectangle {
             clicked => { root.react(); }
         }
         if root.can-copy: MenuRow {
-            label: "Copy";
+            label: root.copy-label;
             clicked => { root.copy(); }
         }
         if root.translate-label != "": MenuRow {

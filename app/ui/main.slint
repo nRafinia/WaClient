@@ -86,6 +86,10 @@ export component MainWindow inherits Window {
     in property <bool> incognito;
     // Chat read receipts are off for the whole profile.
     in property <bool> receipts-global-off;
+    // Proxy status shield under the chat list (see ChatList).
+    in property <int> proxy-badge;
+    in property <string> proxy-tip;
+    callback proxy-settings-requested();
 
     // Chat view
     in property <[MsgItem]> messages;
@@ -348,6 +352,11 @@ export component MainWindow inherits Window {
                 PopupState.open = 0;
                 return reject;
             }
+            // A selected / focused message text: Esc drops it first (see ChatView).
+            if (root.logged-in && !root.status-mode && !root.viewer-open && !MediaViewerState.open && !root.attach-open
+                && !LockState.locked && view.text-esc()) {
+                return accept;
+            }
             if (root.escape()) {
                 return accept;
             }
@@ -407,6 +416,9 @@ export component MainWindow inherits Window {
                     archived-unread: root.archived-unread;
                     incognito: root.incognito;
                     receipts-global-off: root.receipts-global-off;
+                    proxy-badge: root.proxy-badge;
+                    proxy-tip: root.proxy-tip;
+                    open-proxy-settings => { root.proxy-settings-requested(); }
                     incognito-toggled => { root.incognito-toggled(); }
                     receipts(jid, enabled) => { root.chat-receipts(jid, enabled); }
                     read-now(jid) => { root.chat-read-now(jid); }

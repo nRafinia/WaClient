@@ -175,6 +175,91 @@ component AttachRow inherits Rectangle {
     }
 }
 
+// How many message texts hold keyboard focus or a selection right now (kept by the
+// bubbles). While it is above 0, typing, Backspace and Esc go to the composer (ChatView).
+// `reset` also tells every text to drop its selection.
+global TextSel {
+    in-out property <int> n;
+    in-out property <int> clear-tick;
+    // The message whose text started a selection last; the other bubbles drop theirs.
+    in-out property <string> owner;
+    // Bumped when `n` is recounted: texts that really hold focus / a selection report again,
+    // so rows the list unloaded (which can never report) stop counting.
+    in-out property <int> recount;
+    public function bump(on: bool) {
+        n = max(0, n + (on ? 1 : -1));
+    }
+    public function recount-all() {
+        n = 0;
+        recount += 1;
+    }
+    public function reset() {
+        n = 0;
+        clear-tick += 1;
+    }
+}
+
+// Message text the mouse can select. Slint's Text is not selectable but a read-only
+// TextInput is. The TouchArea around it keeps the bubble's hover bar working (the
+// TextInput accepts every mouse move) and receives the right button, which the TextInput
+// ignores, so the message menu still opens over the text. A double-click on the text
+// selects a word instead of replying (the TextInput takes it); the padding still replies.
+component SelText inherits TouchArea {
+    in property <string> text;
+    in property <TextHorizontalAlignment> align;
+    in property <length> font-size: 14.5px * Theme.font-scale;
+    in property <color> sel-bg;
+    // Bumped by the bubble: copy the selection / drop it.
+    in property <int> copy-tick;
+    in property <int> clear-tick;
+    callback context-menu(length, length);
+    callback selection-changed(bool);
+    callback hover-changed(bool);
+    callback focus-changed(bool);
+    property <bool> selected: ti.has-selection;
+    property <bool> focused: ti.has-focus;
+    changed focused => { root.focus-changed(self.focused); }
+    property <int> recount: TextSel.recount;
+    changed recount => {
+        if (ti.has-focus) {
+            root.focus-changed(true);
+        }
+    }
+
+    preferred-width: ti.preferred-width;
+    preferred-height: ti.preferred-height;
+    min-height: ti.preferred-height;
+    changed has-hover => { root.hover-changed(self.has-hover); }
+    changed selected => { root.selection-changed(self.selected); }
+    changed copy-tick => {
+        if (ti.has-selection) {
+            ti.copy();
+        }
+    }
+    changed clear-tick => { ti.clear-selection(); }
+    pointer-event(e) => {
+        if (e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
+            root.context-menu(self.mouse-x, self.mouse-y);
+        }
+    }
+    ti := TextInput {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        read-only: true;
+        single-line: false;
+        wrap: word-wrap;
+        text: root.text;
+        horizontal-alignment: root.align;
+        color: Theme.text;
+        font-size: root.font-size;
+        text-cursor-width: 0px;
+        selection-background-color: root.sel-bg;
+        selection-foreground-color: Theme.text;
+    }
+}
+
 component Bubble inherits Rectangle {
     in property <MsgItem> m;
     in property <length> max-w;
@@ -214,6 +299,41 @@ component Bubble inherits Rectangle {
     // A sticker we have the file of can be added to / removed from the favourites.
     property <bool> can-sticker-fav: root.m.media-kind == 2 && root.m.has-local && !root.m.revoked;
     property <bool> sticker-fav;
+    // Text selection. `sel-owner` is the text element holding one (-1 none); the menu's
+    // Copy then copies the selection, else the whole message. The ticks tell the
+    // elements to copy / clear, which they cannot be reached for otherwise.
+    property <int> sel-owner: -1;
+    property <int> copy-tick;
+    property <int> clear-tick;
+    property <int> text-hover;
+    property <int> clear-all: TextSel.clear-tick;
+    changed clear-all => { root.clear-tick += 1; }
+    property <string> sel-owner-id: TextSel.owner;
+    changed sel-owner-id => {
+        if (self.sel-owner-id != root.m.id) {
+            root.clear-tick += 1;
+        }
+    }
+    property <color> sel-bg: Theme.tick-read.with-alpha(0.4);
+    function note-selection(key: int, on: bool) {
+        if (on) {
+            TextSel.owner = root.m.id;
+            root.sel-owner = key;
+        } else if (root.sel-owner == key) {
+            root.sel-owner = -1;
+        }
+    }
+    function note-hover(on: bool) {
+        root.text-hover = max(0, root.text-hover + (on ? 1 : -1));
+    }
+    function copy-or-selection() {
+        if (root.sel-owner >= 0) {
+            root.copy-tick += 1;
+        } else {
+            root.copy();
+        }
+    }
+    property <string> copy-label: root.sel-owner >= 0 ? "Copy selection" : "Copy";
     property <length> menu-h: root.compact ? 12px + 34px * ((root.m.revoked ? 0 : 1) + (root.m.can-copy ? 1 : 0)) : 12px + 34px * ((root.m.revoked ? 0 : 4) + (root.m.can-copy ? 1 : 0) + (root.translate-label != "" ? 1 : 0) + (root.can-download ? 1 : 0) + (root.can-open ? 1 : 0) + (root.can-save ? 1 : 0) + (root.can-reveal ? 1 : 0) + (root.m.can-share ? 1 : 0) + (root.can-save-saved ? 1 : 0) + (root.m.can-edit ? 1 : 0) + (root.can-info ? 1 : 0) + (root.can-sticker-fav ? 1 : 0) + 2);
 
     // Opens the context menu with its corner at (px, py) of this bubble.
@@ -250,6 +370,9 @@ component Bubble inherits Rectangle {
 
     bubble-ta := TouchArea {
         pointer-event(e) => {
+            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                TextSel.clear-tick += 1;
+            }
             if (e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
                 root.open-menu(self.mouse-x, self.mouse-y);
             }
@@ -678,12 +801,23 @@ component Bubble inherits Rectangle {
                 clicked => { root.open-link(root.m.link-url); }
             }
         }
-        if root.m.text != "" && root.m.paras.length == 0 && !root.m.revoked && !root.m.poll && !root.m.has-links && !root.m.contact: Text {
+        if root.m.text != "" && root.m.paras.length == 0 && !root.m.revoked && !root.m.poll && !root.m.has-links && !root.m.contact && root.big: Text {
             text: root.m.text;
             horizontal-alignment: TextDir.is-rtl(root.m.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
             color: Theme.text;
-            font-size: root.big ? (root.m.big-emoji == 1 ? 48px : (root.m.big-emoji == 2 ? 40px : 32px)) : 14.5px * Theme.font-scale;
+            font-size: root.m.big-emoji == 1 ? 48px : (root.m.big-emoji == 2 ? 40px : 32px);
             wrap: word-wrap;
+        }
+        if root.m.text != "" && root.m.paras.length == 0 && !root.m.revoked && !root.m.poll && !root.m.has-links && !root.m.contact && !root.big: SelText {
+            text: root.m.text;
+            align: TextDir.is-rtl(root.m.text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+            sel-bg: root.sel-bg;
+            copy-tick: root.copy-tick;
+            clear-tick: root.clear-tick;
+            context-menu(px, py) => { root.open-menu(self.absolute-position.x - root.absolute-position.x + px, self.absolute-position.y - root.absolute-position.y + py); }
+            selection-changed(on) => { root.note-selection(0, on); }
+            hover-changed(on) => { root.note-hover(on); }
+            focus-changed(on) => { TextSel.bump(on); }
         }
         // Messages with links: StyledText renders them as clickable links. It
         // takes every mouse event over the text, so the right-click menu is
@@ -696,6 +830,27 @@ component Bubble inherits Rectangle {
             default-font-size: 14.5px * Theme.font-scale;
             link-color: Theme.tick-read;
             selectable: true;
+            selection-background-color: root.sel-bg;
+            selection-foreground-color: Theme.text;
+            property <bool> selected: self.has-selection;
+            changed selected => {
+                root.note-selection(0, self.selected);
+                TextSel.bump(self.selected);
+            }
+            property <int> recount: TextSel.recount;
+            changed recount => {
+                if (self.has-selection) {
+                    TextSel.bump(true);
+                }
+            }
+            property <int> copy-tick: root.copy-tick;
+            changed copy-tick => {
+                if (self.has-selection) {
+                    self.copy();
+                }
+            }
+            property <int> clear-tick: root.clear-tick;
+            changed clear-tick => { self.clear-selection(); }
             link-clicked(url) => {
                 root.phone = PhoneLinks.phone-of(url);
                 if (root.phone != "") {
@@ -709,16 +864,20 @@ component Bubble inherits Rectangle {
         // strong character (Slint cannot align per line inside one Text).
         if root.m.paras.length > 0 && !root.m.revoked && !root.m.poll && !root.m.contact: VerticalLayout {
             spacing: 0px;
-            for para in root.m.paras: VerticalLayout {
+            for para[idx] in root.m.paras: VerticalLayout {
                 if para.blank: Rectangle {
                     height: 14.5px * Theme.font-scale * 1.2;
                 }
-                if !para.blank && !para.formatted: Text {
+                if !para.blank && !para.formatted: SelText {
                     text: para.text;
-                    horizontal-alignment: para.rtl ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
-                    color: Theme.text;
-                    font-size: 14.5px * Theme.font-scale;
-                    wrap: word-wrap;
+                    align: para.rtl ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+                    sel-bg: root.sel-bg;
+                    copy-tick: root.copy-tick;
+                    clear-tick: root.clear-tick;
+                    context-menu(px, py) => { root.open-menu(self.absolute-position.x - root.absolute-position.x + px, self.absolute-position.y - root.absolute-position.y + py); }
+                    selection-changed(on) => { root.note-selection(idx, on); }
+                    hover-changed(on) => { root.note-hover(on); }
+                    focus-changed(on) => { TextSel.bump(on); }
                 }
                 if !para.blank && para.formatted: StyledText {
                     text: para.styled;
@@ -727,6 +886,27 @@ component Bubble inherits Rectangle {
                     default-font-size: 14.5px * Theme.font-scale;
                     link-color: Theme.tick-read;
                     selectable: true;
+                    selection-background-color: root.sel-bg;
+                    selection-foreground-color: Theme.text;
+                    property <bool> selected: self.has-selection;
+                    changed selected => {
+                        root.note-selection(idx, self.selected);
+                        TextSel.bump(self.selected);
+                    }
+                    property <int> recount: TextSel.recount;
+                    changed recount => {
+                        if (self.has-selection) {
+                            TextSel.bump(true);
+                        }
+                    }
+                    property <int> copy-tick: root.copy-tick;
+                    changed copy-tick => {
+                        if (self.has-selection) {
+                            self.copy();
+                        }
+                    }
+                    property <int> clear-tick: root.clear-tick;
+                    changed clear-tick => { self.clear-selection(); }
                     link-clicked(url) => {
                         root.phone = PhoneLinks.phone-of(url);
                         if (root.phone != "") {
@@ -749,12 +929,16 @@ component Bubble inherits Rectangle {
             font-size: 12.5px;
             font-italic: true;
         }
-        if root.m.tr-state == 2 && !root.m.revoked: Text {
+        if root.m.tr-state == 2 && !root.m.revoked: SelText {
             text: root.m.tr-text;
-            horizontal-alignment: TextDir.is-rtl(root.m.tr-text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
-            color: Theme.text;
-            font-size: 14.5px * Theme.font-scale;
-            wrap: word-wrap;
+            align: TextDir.is-rtl(root.m.tr-text) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+            sel-bg: root.sel-bg;
+            copy-tick: root.copy-tick;
+            clear-tick: root.clear-tick;
+            context-menu(px, py) => { root.open-menu(self.absolute-position.x - root.absolute-position.x + px, self.absolute-position.y - root.absolute-position.y + py); }
+            selection-changed(on) => { root.note-selection(100, on); }
+            hover-changed(on) => { root.note-hover(on); }
+            focus-changed(on) => { TextSel.bump(on); }
         }
         if (root.m.tr-state == 2 || root.m.tr-state == 4) && !root.m.revoked: HorizontalLayout {
             spacing: 0px;
@@ -910,7 +1094,7 @@ component Bubble inherits Rectangle {
 
     // Hover actions: react, reply and the menu arrow. Right-click opens the same menu.
     Rectangle {
-        visible: bubble-ta.has-hover || reply-ta.has-hover || react-ta.has-hover || arrow-ta.has-hover;
+        visible: bubble-ta.has-hover || root.text-hover > 0 || reply-ta.has-hover || react-ta.has-hover || arrow-ta.has-hover;
         x: parent.width - self.width - 4px;
         y: 3px;
         width: root.m.revoked ? 24px : 104px;
@@ -987,9 +1171,9 @@ component Bubble inherits Rectangle {
                     }
                 }
                 if root.m.can-copy: MenuRow {
-                    label: "Copy";
+                    label: root.copy-label;
                     clicked => {
-                        root.copy();
+                        root.copy-or-selection();
                         menu.close();
                     }
                 }
@@ -999,6 +1183,7 @@ component Bubble inherits Rectangle {
             can-reply: !root.m.revoked;
             can-react: !root.m.revoked;
             can-copy: root.m.can-copy;
+            copy-label: root.copy-label;
             translate-label: root.translate-label;
             can-download: root.can-download;
             can-open: root.can-open;
@@ -1059,7 +1244,7 @@ component Bubble inherits Rectangle {
                 menu.close();
             }
             copy => {
-                root.copy();
+                root.copy-or-selection();
                 menu.close();
             }
             translate => {
@@ -1512,7 +1697,38 @@ export component ChatView inherits Rectangle {
     public function focus-composer() {
         input.focus();
     }
+    // Esc with a message text focused or selected: drop the selection, back to the composer.
+    public function text-esc() -> bool {
+        if (TextSel.n <= 0) {
+            return false;
+        }
+        TextSel.reset();
+        input.focus();
+        return true;
+    }
+    // Keys that are not typing (Slint sends them as private-use characters, plus the
+    // control characters).
+    pure function is-typing(t: string) -> bool {
+        return t != "" && t != Key.Backspace && t != Key.Tab && t != Key.Backtab && t != Key.Return && t != Key.Escape
+            && t != Key.Delete && t != Key.Insert && t != Key.Home && t != Key.End && t != Key.PageUp && t != Key.PageDown
+            && t != Key.UpArrow && t != Key.DownArrow && t != Key.LeftArrow && t != Key.RightArrow
+            && t != Key.Shift && t != Key.ShiftR && t != Key.Control && t != Key.ControlR && t != Key.Alt && t != Key.AltGr
+            && t != Key.Meta && t != Key.MetaR && t != Key.CapsLock && t != Key.ScrollLock && t != Key.Pause && t != Key.SysReq
+            && t != Key.Menu && t != Key.Stop
+            && t != Key.F1 && t != Key.F2 && t != Key.F3 && t != Key.F4 && t != Key.F5 && t != Key.F6
+            && t != Key.F7 && t != Key.F8 && t != Key.F9 && t != Key.F10 && t != Key.F11 && t != Key.F12
+            && t != Key.F13 && t != Key.F14 && t != Key.F15 && t != Key.F16 && t != Key.F17 && t != Key.F18
+            && t != Key.F19 && t != Key.F20 && t != Key.F21 && t != Key.F22 && t != Key.F23 && t != Key.F24;
+    }
+    // A chat switch rebuilds the rows: no text may keep the focus or a selection.
+    function drop-text-focus() {
+        if (TextSel.n > 0) {
+            TextSel.reset();
+            input.focus();
+        }
+    }
     public function clear-composer() {
+        root.drop-text-focus();
         input.text = "";
         Mentions.reset-undo("", 0);
     }
@@ -1523,6 +1739,7 @@ export component ChatView inherits Rectangle {
         return input.cursor-position-byte-offset;
     }
     public function set-composer(text: string, cursor: int) {
+        root.drop-text-focus();
         input.text = text;
         input.set-selection-offsets(cursor, cursor);
         Mentions.note(input.text, input.cursor-position-byte-offset, true);
@@ -1849,9 +2066,40 @@ export component ChatView inherits Rectangle {
             width: parent.width;
         }
 
-        list := ListView {
+        // Typing while a message text has the focus goes to the composer (Telegram-like);
+        // Ctrl+C / Ctrl+A / Shift+arrows stay with the text.
+        FocusScope {
             y: 60px + search-bar.height + root.pin-h;
+            width: parent.width;
             height: parent.height - 60px - search-bar.height - root.pin-h - composer.height - root.edit-h;
+            focus-on-click: false;
+            capture-key-pressed(e) => {
+                // Only reached while the focus is inside the list, i.e. in a message text.
+                if (root.gated) {
+                    return reject;
+                }
+                if (e.text == Key.Escape) {
+                    return root.text-esc() ? accept : reject;
+                }
+                if (e.modifiers.meta || (e.modifiers.control != e.modifiers.alt)) {
+                    return reject;
+                }
+                if (e.text == Key.Backspace) {
+                    TextSel.reset();
+                    input.focus();
+                    return accept;
+                }
+                if (root.is-typing(e.text)) {
+                    TextSel.reset();
+                    input.focus();
+                    root.emoji-insert(e.text);
+                    return accept;
+                }
+                return reject;
+            }
+        list := ListView {
+            width: parent.width;
+            height: parent.height;
             for m[row-i] in root.messages: MsgRow {
                 m: m;
                 row-index: row-i;
@@ -1901,6 +2149,7 @@ export component ChatView inherits Rectangle {
                 }
             }
             changed content-y => {
+                TextSel.recount-all();
                 if (self.content-y > -100px) {
                     root.load-older();
                 }
@@ -1908,6 +2157,7 @@ export component ChatView inherits Rectangle {
                     root.jump-latest();
                 }
             }
+        }
         }
 
         composer := Rectangle {

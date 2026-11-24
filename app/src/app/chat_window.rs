@@ -1469,6 +1469,9 @@ impl App {
 
     /// Inserts at the composer's cursor; the picker stays open.
     fn popout_emoji_insert(&self, p: &Rc<Popout>, e: &str) {
+        if !crate::format::insertable_text(e) {
+            return;
+        }
         let text = p.win.invoke_composer_text().to_string();
         let mut at = usize::try_from(p.win.invoke_composer_cursor()).unwrap_or(text.len()).min(text.len());
         while !text.is_char_boundary(at) {

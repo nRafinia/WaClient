@@ -46,6 +46,12 @@ effort, and whether items can run as parallel agents with disjoint files.
 - Polls: quizzes, per-voter "View votes"; groups: approve membership requests.
 - Installer (Setup.exe) — as soon as Inno Setup is installed (`winget install JRSoftware.InnoSetup`).
 
+## Backlog — waiting for the owner's "start" (added 2026-11-24)
+- ~~**Select part of a message's text and copy it**~~ — DONE (Unreleased): plain text is a read-only
+  `TextInput` (`SelText` in chat_view.slint), formatted/link text uses `StyledText` `selectable`;
+  Ctrl+C and the menu's "Copy selection" copy only the selection. Selection stays inside one line of a
+  mixed-direction message; double-click on the text selects a word (reply stays on the padding).
+
 ## Not doing (protocol limits or decided against)
 - Edit/delete without time limits, silent messages, bots, usernames, huge groups, server-side
   scheduling — not possible on WhatsApp.
