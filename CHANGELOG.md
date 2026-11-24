@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.12.0
+
+### Added
+
+- The total unread count now shows as a red badge on the Windows taskbar button ("99+" above 99). It
+  is cleared at zero and while the app lock is on.
+
+### Fixed
+
+- A dropped connection, with or without a proxy ("peer closed connection without sending TLS close_notify"),
+  no longer leaves the app "Disconnected" until you press Reconnect. It now shows "Connecting…" and
+  retries by itself, through the proxy, at 1, 2, 5, 10, 30, 60 s intervals; a lost proxy tunnel is
+  treated as an ordinary disconnect, and the proxy connection sends TCP keepalive probes so idle
+  tunnels survive and dead ones are noticed. Messages sent during the outage stay pending and go
+  out by themselves once the connection is back (up to 24 hours old), instead of turning "failed".
+
+- In right-to-left text (Persian, Arabic, Hebrew) the Left and Right arrow keys of the message
+  composer, also in pop-out windows, now move the cursor the way they point on screen, with Shift to
+  select and Ctrl to jump by word. A paragraph's first strong letter decides the direction, also
+  for mixed text; emoji and accented letters are stepped over as a whole.
+
+- The profile right-click menu (Rename, Log out & remove) no longer closes by itself: background
+  refreshes (unread counts, connection state, avatars) now update the rail in place instead of
+  rebuilding it.
+
 ## 0.11.0
 
 ### Added

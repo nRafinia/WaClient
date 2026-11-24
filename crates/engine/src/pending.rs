@@ -6,7 +6,15 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use std::sync::Arc;
+
+use whatsapp_rust::buffa::Message as _;
+use whatsapp_rust::prelude::{Client, wa};
+use wa_store::{MessageStatus, PendingRow, STATUS_JID};
+
+use crate::commands::{deliver, finish, parse_jid};
 use crate::convert::{PollVoteInfo, ProtocolAction};
+use crate::events::{Shared, now_secs};
 use crate::media::lock;
 
 const MAX_ENTRIES: usize = 2_000;
@@ -165,9 +173,82 @@ impl PendingActions {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Outgoing messages that were pending when the connection was rebuilt
+// ---------------------------------------------------------------------------
+
+/// A message pending for longer than this is failed instead of re-sent after an
+/// outage: it is stale for the user, and a late delivery would surprise them.
+const REQUEUE_MAX_AGE_SECS: i64 = 24 * 60 * 60;
+
+/// What happens to one outgoing message left pending by an outage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Requeue {
+    /// Deliver it again under the same id (the server drops a duplicate).
+    Send,
+    Fail,
+}
+
+/// Only rows that have an encoded message, are not statuses and are young
+/// enough are re-sent. Others (a media upload cut off before it finished,
+/// view-once media that deliberately keeps no copy, polls) cannot be rebuilt.
+fn plan_requeue(row: &PendingRow, now: i64) -> Requeue {
+    let has_raw = row.raw.as_ref().is_some_and(|r| !r.is_empty());
+    if has_raw && row.chat_jid != STATUS_JID && now.saturating_sub(row.ts) <= REQUEUE_MAX_AGE_SECS {
+        Requeue::Send
+    } else {
+        Requeue::Fail
+    }
+}
+
+/// Re-delivers the outgoing messages that stayed `Pending` across a rebuild
+/// after an outage, oldest first, through the normal `deliver` path with their
+/// original ids. Runs once, right after the new generation logged in; `rows`
+/// is the snapshot taken when that generation started.
+pub(crate) async fn requeue_outgoing(sh: Shared, client: Arc<Client>, rows: Vec<PendingRow>) {    let now = now_secs();
+    let mut sent = 0usize;
+    for row in rows {
+        let message = match plan_requeue(&row, now) {
+            Requeue::Send => row.raw.as_deref().and_then(|raw| {
+                wa::Message::decode_from_slice(raw)
+                    .map_err(|e| log::warn!("pending message {} does not decode: {e}", row.id))
+                    .ok()
+            }),
+            Requeue::Fail => None,
+        };
+        let chat = message.as_ref().and_then(|_| parse_jid(&sh, &row.chat_jid));
+        match (message, chat) {
+            (Some(message), Some(chat)) => {
+                sent += 1;
+                deliver(&sh, &client, chat, &row.chat_jid, row.id, message).await;
+            }
+            _ => finish(&sh, &row.chat_jid, row.id, MessageStatus::Failed),
+        }
+    }
+    if sent > 0 {
+        log::info!("re-delivered {sent} message(s) that were pending during the outage");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn row(chat: &str, ts: i64, raw: Option<&[u8]>) -> PendingRow {
+        PendingRow { chat_jid: chat.into(), id: "id".into(), ts, raw: raw.map(<[u8]>::to_vec) }
+    }
+
+    #[test]
+    fn requeue_resends_only_young_rows_with_an_encoded_message() {
+        let now = 1_000_000;
+        let chat = "1@s.whatsapp.net";
+        assert_eq!(plan_requeue(&row(chat, now - 60, Some(b"x")), now), Requeue::Send);
+        assert_eq!(plan_requeue(&row(chat, now - REQUEUE_MAX_AGE_SECS, Some(b"x")), now), Requeue::Send);
+        assert_eq!(plan_requeue(&row(chat, now - REQUEUE_MAX_AGE_SECS - 1, Some(b"x")), now), Requeue::Fail);
+        assert_eq!(plan_requeue(&row(chat, now, None), now), Requeue::Fail, "upload never finished");
+        assert_eq!(plan_requeue(&row(chat, now, Some(b"")), now), Requeue::Fail);
+        assert_eq!(plan_requeue(&row(STATUS_JID, now, Some(b"x")), now), Requeue::Fail);
+    }
 
     fn revoke(id: &str) -> Pending {
         Pending {

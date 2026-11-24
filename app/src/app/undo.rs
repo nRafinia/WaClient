@@ -161,6 +161,12 @@ fn floor_boundary(text: &str, mut at: usize) -> usize {
     at
 }
 
+/// Left / Right arrows (Ctrl: by word) in a right-to-left paragraph, visually
+/// (`textdir::arrow_nav`); `None` when Slint's own movement is right.
+pub fn rtl_arrow(text: &str, anchor: usize, cursor: usize, left: bool, word: bool, shift: bool) -> Option<(usize, usize)> {
+    crate::textdir::arrow_nav(text, anchor, cursor, left, word, shift)
+}
+
 /// Home / End inside a right-to-left paragraph. Slint moves to the visual left
 /// or right edge, which in RTL text is the logical end or start. Returns the new
 /// `(anchor, cursor)` going to the paragraph's logical start (`home`) or end, or

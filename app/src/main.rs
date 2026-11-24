@@ -24,6 +24,7 @@ mod settings;
 mod shell;
 mod single_instance;
 mod status_view;
+mod taskbar;
 mod textdir;
 mod thumbs;
 #[cfg(test)]

@@ -3,18 +3,23 @@
 //! One "generation" is one `Bot` instance. A generation ends on shutdown, on
 //! logout (we then wipe the session and start a fresh generation, which shows a
 //! new QR), or when the QR codes are exhausted (fresh generation, session kept,
-//! at most a few times in a row). Connection drops are left to the library's own
-//! reconnect logic, except when WhatsApp bans, outdates or displaces the client:
-//! then we stop the bot and go idle. We never rebuild against a session we
+//! at most a few times in a row). Connection drops are first left to the
+//! library's own reconnect logic (keepalive pings, dead-socket detection,
+//! Fibonacci backoff), except when WhatsApp bans, outdates or displaces the
+//! client: then we stop the bot and go idle. The library's backoff grows up to
+//! 15 minutes and cannot be bounded from outside, so a [`Recovery`] watchdog
+//! rebuilds the generation (fresh transport, fresh backoff) when a paired
+//! session stays offline too long. We never rebuild against a session we
 //! failed to wipe.
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 use whatsapp_rust::prelude::{Bot, BotHandle, Client, EventDelivery, SqliteStore};
+use whatsapp_rust::wacore::net::DisconnectReason;
 
 use crate::api::{Command, ConnState, EngineConfig, EngineSettings, UiEvent};
 use crate::events::{self, Shared, Signal};
@@ -131,6 +136,9 @@ const EVENT_MAILBOX: usize = 4096;
 enum Outcome {
     Exit,
     Rebuild,
+    /// Rebuild after an outage: messages still `Pending` are kept and the next
+    /// generation re-delivers them once it is logged in.
+    Resume,
 }
 
 /// Automatic pairing restarts (QR codes expired unscanned) allowed in a row
@@ -146,6 +154,116 @@ const WIPE_RETRY_INTERVAL: Duration = Duration::from_millis(300);
 /// How long a bot that ended by itself waits for the event handler's final
 /// signal (logout, ban...) before the end is treated as a plain disconnect.
 const SIGNAL_GRACE: Duration = Duration::from_millis(500);
+
+/// How often the offline watchdog looks at the connection.
+const WATCHDOG_TICK: Duration = Duration::from_secs(2);
+/// A paired session offline for this long gets a fresh generation. The library
+/// retries at 1, 1, 2, 3, 5, 8 s meanwhile, so short outages (a proxy app
+/// restarting, a network change) heal inside this window without a rebuild.
+const OFFLINE_LIMIT: Duration = Duration::from_secs(20);
+/// Online this long counts as recovered: the retry schedule starts over.
+const STABLE_ONLINE: Duration = Duration::from_secs(30);
+/// Waits before successive watchdog rebuilds, in seconds (the last repeats).
+const RETRY_SCHEDULE_SECS: [u64; 6] = [1, 2, 5, 10, 30, 60];
+
+/// Wait before the `attempt`-th (0-based) rebuild: [`RETRY_SCHEDULE_SECS`]
+/// with +-20 % jitter; `jitter` is in `0.0..=1.0`.
+fn backoff_delay(attempt: u32, jitter: f64) -> Duration {
+    let idx = (attempt as usize).min(RETRY_SCHEDULE_SECS.len() - 1);
+    let base = RETRY_SCHEDULE_SECS[idx] as f64;
+    Duration::from_secs_f64(base * (0.8 + 0.4 * jitter.clamp(0.0, 1.0)))
+}
+
+/// Cheap jitter source (sub-second clock noise); not for anything secret.
+fn jitter_unit() -> f64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    f64::from(nanos % 1_000_000) / 1_000_000.0
+}
+
+/// Tracks how long the connection has been down; lives across generations.
+#[derive(Debug, Default)]
+struct Recovery {
+    /// Rebuilds since the connection was last stable.
+    attempts: u32,
+    offline_since: Option<Instant>,
+    online_since: Option<Instant>,
+}
+
+impl Recovery {
+    /// A new generation starts: its own retries get a fresh [`OFFLINE_LIMIT`].
+    fn new_generation(&mut self) {
+        self.offline_since = None;
+        self.online_since = None;
+    }
+
+    /// Feeds one observation; `true` when the session has been offline for
+    /// longer than [`OFFLINE_LIMIT`] and the generation should be rebuilt.
+    fn observe(&mut self, now: Instant, online: bool) -> bool {
+        if online {
+            self.offline_since = None;
+            let since = *self.online_since.get_or_insert(now);
+            if now.saturating_duration_since(since) >= STABLE_ONLINE {
+                self.attempts = 0;
+            }
+            return false;
+        }
+        self.online_since = None;
+        let since = *self.offline_since.get_or_insert(now);
+        now.saturating_duration_since(since) >= OFFLINE_LIMIT
+    }
+
+    /// Takes the next rebuild slot and returns how long to wait before it.
+    fn next_delay(&mut self, jitter: f64) -> Duration {
+        let delay = backoff_delay(self.attempts, jitter);
+        self.attempts = self.attempts.saturating_add(1);
+        self.new_generation();
+        delay
+    }
+}
+
+/// What kind of connection loss the library reported. Every kind is retried;
+/// the class only decides how the log describes it (no host, no proxy details).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DisconnectClass {
+    /// The peer cut the TLS stream without `close_notify` (rustls
+    /// `UnexpectedEof`): what proxies and NAT boxes do to idle tunnels.
+    MissingCloseNotify,
+    StreamEnded,
+    ServerClose,
+    ReadError,
+    Unknown,
+}
+
+impl DisconnectClass {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::MissingCloseNotify => "closed without TLS close_notify",
+            Self::StreamEnded => "stream ended",
+            Self::ServerClose => "closed by server",
+            Self::ReadError => "read error",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+pub(crate) fn classify_disconnect(reason: &DisconnectReason) -> DisconnectClass {
+    match reason {
+        DisconnectReason::ReadError(e) => {
+            let e = e.to_ascii_lowercase();
+            if e.contains("close_notify") || e.contains("unexpected-eof") || e.contains("unexpectedeof") {
+                DisconnectClass::MissingCloseNotify
+            } else {
+                DisconnectClass::ReadError
+            }
+        }
+        DisconnectReason::StreamEnded => DisconnectClass::StreamEnded,
+        DisconnectReason::ServerClose { .. } => DisconnectClass::ServerClose,
+        DisconnectReason::Unknown => DisconnectClass::Unknown,
+    }
+}
 
 /// Counts consecutive automatic pairing restarts.
 #[derive(Debug, Default)]
@@ -180,6 +298,18 @@ enum End {
     BotEnded,
     /// WhatsApp banned, outdated or displaced this client: stop connecting.
     Halt { recoverable: bool },
+    /// The paired session stayed offline past [`OFFLINE_LIMIT`].
+    Offline,
+    /// The user asked to reconnect while offline.
+    Reconnect,
+}
+
+impl End {
+    /// Whether the messages still `Pending` are marked failed when this end
+    /// is handled. After an outage they are kept and re-delivered instead.
+    fn fails_pending(&self) -> bool {
+        !matches!(self, End::Offline | End::Reconnect)
+    }
 }
 
 async fn supervise(params: Params) {
@@ -193,6 +323,7 @@ async fn supervise(params: Params) {
     let history_lock = Arc::new(tokio::sync::Mutex::new(()));
     let media = Arc::new(MediaState::new(config.media_dir()));
     let mut budget = RestartBudget::default();
+    let mut recovery = Recovery::default();
     // Settings outlive bot generations; seeded before the first bot exists so
     // no event is ever handled under settings the UI did not choose.
     let settings = seed_settings(settings);
@@ -202,6 +333,11 @@ async fn supervise(params: Params) {
         ui.clone(),
     ));
 
+    // The first generation of an engine announces a restored session; a
+    // rebuild after an outage must not make the UI re-enter its main screen.
+    let mut restored_announced = false;
+    // The previous generation ended in an outage with messages still pending.
+    let mut resume = false;
     loop {
         let (sig_tx, sig_rx) = unbounded_channel();
         let mut sh = Shared::new(
@@ -213,11 +349,21 @@ async fn supervise(params: Params) {
             settings.clone(),
         );
         sh.proxied = config.proxy.is_some();
+        if resume {
+            // Taken before the new bot exists, so a message the user queues
+            // in this generation can never be in it (it is being sent live).
+            match sh.store.pending_outgoing() {
+                Ok(rows) if !rows.is_empty() => *crate::media::lock(&sh.requeue_pending) = Some(rows),
+                Ok(_) => {}
+                Err(e) => log::error!("listing pending messages failed: {e}"),
+            }
+        }
         sh.emit(UiEvent::Connection(ConnState::Connecting));
 
         let outcome = match start_bot(&config, &sh).await {
             Ok((handle, client, restored)) => {
-                if restored {
+                if restored && !restored_announced {
+                    restored_announced = true;
                     sh.emit(UiEvent::SessionRestored);
                 }
                 run_generation(
@@ -228,6 +374,7 @@ async fn supervise(params: Params) {
                     handle,
                     client,
                     &mut budget,
+                    &mut recovery,
                 )
                 .await
             }
@@ -236,9 +383,10 @@ async fn supervise(params: Params) {
                 sh.emit(UiEvent::Fatal {
                     message: format!("Could not start the WhatsApp client: {e:#}"),
                 });
-                idle(&config, &sh, &mut cmd_rx, &mut budget, true).await
+                idle(&config, &sh, &mut cmd_rx, &mut budget, true, None).await
             }
         };
+        resume = matches!(outcome, Outcome::Resume);
         if matches!(outcome, Outcome::Exit) {
             purge_task.abort();
             // Awaiting an aborted task drops its future (and its store/UI
@@ -381,6 +529,7 @@ async fn run_generation(
     mut handle: BotHandle,
     client: Arc<Client>,
     budget: &mut RestartBudget,
+    recovery: &mut Recovery,
 ) -> Outcome {
     // Sends run strictly in submission order (an upload can take minutes);
     // typing indicators and read receipts have their own ordered worker so a
@@ -393,6 +542,9 @@ async fn run_generation(
     let mut explicit_logout = false;
     let mut logout_wait: Option<oneshot::Receiver<bool>> = None;
     let mut handle_finished = false;
+    recovery.new_generation();
+    let mut watchdog = tokio::time::interval(WATCHDOG_TICK);
+    watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let end = loop {
         tokio::select! {
             _ = &mut handle => {
@@ -405,6 +557,13 @@ async fn run_generation(
                 Some(Signal::Halt { recoverable }) => break End::Halt { recoverable },
                 None => break End::BotEnded,
             },
+            _ = watchdog.tick() => {
+                // Pairing (no phone number yet) is not a connection to keep alive.
+                let online = client.pn().is_none() || client.is_logged_in();
+                if recovery.observe(Instant::now(), online) {
+                    break End::Offline;
+                }
+            }
             completed = logout_finished(&mut logout_wait) => {
                 if !completed {
                     log::warn!("logout did not finish within {LOGOUT_TIMEOUT:?}, unlinking locally");
@@ -437,7 +596,12 @@ async fn run_generation(
                     }
                 }
                 Some(Command::Reconnect) => {
-                    log::debug!("Reconnect ignored: a bot is running");
+                    if client.pn().is_some() && !client.is_logged_in() {
+                        // Offline: skip the library's backoff and start over now.
+                        recovery.attempts = 0;
+                        break End::Reconnect;
+                    }
+                    log::debug!("Reconnect ignored: already connected");
                 }
                 Some(Command::RetryPairing) => {
                     if client.pn().is_none() {
@@ -502,6 +666,16 @@ async fn run_generation(
             }
         }
     };
+    // A queued signal (logout, ban, ...) wins over an outage end.
+    let end = match end {
+        End::Offline | End::Reconnect => match sig_rx.try_recv() {
+            Ok(Signal::LoggedOut { reason }) => End::LoggedOut { reason },
+            Ok(Signal::RestartPairing) => End::Restart,
+            Ok(Signal::Halt { recoverable }) => End::Halt { recoverable },
+            Err(_) => end,
+        },
+        other => other,
+    };
     drop(send_tx);
     drop(ctl_tx);
     drop(flags_tx);
@@ -513,7 +687,9 @@ async fn run_generation(
     let _ = sender_task.await;
     let _ = ctl_task.await;
     let _ = flags_task.await;
-    fail_pending(sh).await;
+    if end.fails_pending() {
+        fail_pending(sh).await;
+    }
 
     // When the bot ended by itself the logout/restart signal may still be queued.
     let end = match end {
@@ -553,6 +729,10 @@ async fn run_generation(
             drop(client);
             Outcome::Rebuild
         }
+        End::Reconnect => {
+            drop(client);
+            Outcome::Resume
+        }
         End::Restart => {
             drop(client);
             if budget.try_restart() {
@@ -562,20 +742,27 @@ async fn run_generation(
             sh.emit(UiEvent::Error {
                 message: "QR code expired".to_string(),
             });
-            idle(config, sh, cmd_rx, budget, true).await
+            idle(config, sh, cmd_rx, budget, true, None).await
         }
         End::LoggedOut { reason } => {
             drop(client);
             if logged_out(config, sh, explicit_logout, reason).await {
                 Outcome::Rebuild
             } else {
-                idle(config, sh, cmd_rx, budget, false).await
+                idle(config, sh, cmd_rx, budget, false, None).await
             }
         }
         End::Halt { recoverable } => {
             log::warn!("bot stopped on purpose (recoverable: {recoverable}), not reconnecting");
             drop(client);
-            idle(config, sh, cmd_rx, budget, recoverable).await
+            idle(config, sh, cmd_rx, budget, recoverable, None).await
+        }
+        End::Offline => {
+            drop(client);
+            let delay = recovery.next_delay(jitter_unit());
+            log::warn!("offline for over {OFFLINE_LIMIT:?}, reconnecting in {delay:?}");
+            // The UI keeps showing "Connecting..."; no manual button is needed.
+            idle(config, sh, cmd_rx, budget, true, Some(delay)).await
         }
         End::BotEnded => {
             log::warn!("bot task ended unexpectedly");
@@ -583,7 +770,7 @@ async fn run_generation(
             sh.emit(UiEvent::Connection(ConnState::Disconnected {
                 reason: "The connection to WhatsApp ended".to_string(),
             }));
-            idle(config, sh, cmd_rx, budget, true).await
+            idle(config, sh, cmd_rx, budget, true, None).await
         }
     }
 }
@@ -592,22 +779,36 @@ async fn run_generation(
 /// `false` when the session could not be wiped (rebuilding would reconnect
 /// with a revoked session) or when WhatsApp banned / outdated the client
 /// (reconnecting would endanger the account); no automatic retry ever happens
-/// from here.
+/// from here, except `auto_retry_in`: the watchdog's scheduled rebuild after
+/// that delay (commands, notably shutdown, are still served while waiting).
 async fn idle(
     config: &EngineConfig,
     sh: &Shared,
     cmd_rx: &mut UnboundedReceiver<Command>,
     budget: &mut RestartBudget,
     allow_retry: bool,
+    auto_retry_in: Option<Duration>,
 ) -> Outcome {
+    let deadline = auto_retry_in.map(|d| tokio::time::Instant::now() + d);
+    // After an outage the pending messages survive the rebuild (see `Outcome::Resume`).
+    let rebuild = if deadline.is_some() { Outcome::Resume } else { Outcome::Rebuild };
     loop {
-        let received = cmd_rx.recv().await;
+        let received = match deadline {
+            Some(at) => tokio::select! {
+                _ = tokio::time::sleep_until(at) => return rebuild,
+                r = cmd_rx.recv() => r,
+            },
+            None => cmd_rx.recv().await,
+        };
         if let Some(c) = &received {
             log::info!("command (not connected): {}", c.log_line());
         }
         match received {
             None | Some(Command::Shutdown) => return Outcome::Exit,
             Some(Command::Logout) => {
+                if deadline.is_some() {
+                    fail_pending(sh).await;
+                }
                 if logged_out(config, sh, true, "Logged out".to_string()).await {
                     return Outcome::Rebuild;
                 }
@@ -623,7 +824,7 @@ async fn idle(
             }
             Some(Command::RetryPairing | Command::Reconnect) if allow_retry => {
                 budget.reset();
-                return Outcome::Rebuild;
+                return rebuild;
             }
             Some(_) => sh.emit(UiEvent::Error {
                 message: "Not connected to WhatsApp".to_string(),
@@ -740,6 +941,95 @@ fn remove_session_files(session: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_outage_ends_keep_pending_messages() {
+        let kept = [End::Offline, End::Reconnect];
+        let failed = [
+            End::Shutdown,
+            End::LoggedOut { reason: String::new() },
+            End::Restart,
+            End::Retry,
+            End::BotEnded,
+            End::Halt { recoverable: true },
+            End::Halt { recoverable: false },
+        ];
+        assert!(kept.iter().all(|e| !e.fails_pending()));
+        assert!(failed.iter().all(End::fails_pending));
+    }
+
+    #[test]
+    fn backoff_follows_the_schedule_and_caps_at_a_minute() {
+        let mid = |n| backoff_delay(n, 0.5).as_secs_f64();
+        assert_eq!([mid(0), mid(1), mid(2), mid(3), mid(4), mid(5)], [1.0, 2.0, 5.0, 10.0, 30.0, 60.0]);
+        assert_eq!(mid(6), 60.0);
+        assert_eq!(mid(u32::MAX), 60.0);
+        assert_eq!(backoff_delay(4, 0.0), Duration::from_secs(24));
+        assert_eq!(backoff_delay(4, 1.0), Duration::from_secs(36));
+        assert!(backoff_delay(5, 99.0) <= Duration::from_secs(72));
+        assert!((0.0..=1.0).contains(&jitter_unit()));
+    }
+
+    #[test]
+    fn watchdog_rebuilds_only_after_the_offline_limit() {
+        let t0 = Instant::now();
+        let mut r = Recovery::default();
+        assert!(!r.observe(t0, false));
+        assert!(!r.observe(t0 + OFFLINE_LIMIT - Duration::from_secs(1), false));
+        assert!(r.observe(t0 + OFFLINE_LIMIT, false));
+    }
+
+    #[test]
+    fn coming_back_online_restarts_the_offline_clock() {
+        let t0 = Instant::now();
+        let mut r = Recovery::default();
+        assert!(!r.observe(t0, false));
+        assert!(!r.observe(t0 + Duration::from_secs(15), true));
+        assert!(!r.observe(t0 + Duration::from_secs(16), false));
+        assert!(!r.observe(t0 + Duration::from_secs(30), false));
+        assert!(r.observe(t0 + Duration::from_secs(16) + OFFLINE_LIMIT, false));
+    }
+
+    #[test]
+    fn schedule_resets_only_after_a_stable_connection() {
+        let t0 = Instant::now();
+        let mut r = Recovery::default();
+        r.next_delay(0.5);
+        r.next_delay(0.5);
+        assert_eq!(r.attempts, 2);
+        assert!(!r.observe(t0, true));
+        assert!(!r.observe(t0 + STABLE_ONLINE - Duration::from_secs(1), true));
+        assert_eq!(r.attempts, 2, "a short-lived connection must not reset the backoff");
+        assert!(!r.observe(t0 + STABLE_ONLINE, true));
+        assert_eq!(r.attempts, 0);
+    }
+
+    #[test]
+    fn next_delay_advances_through_the_schedule() {
+        let mut r = Recovery::default();
+        let secs: Vec<u64> = (0..7).map(|_| r.next_delay(0.5).as_secs()).collect();
+        assert_eq!(secs, [1, 2, 5, 10, 30, 60, 60]);
+    }
+
+    #[test]
+    fn missing_close_notify_is_recognised_and_every_disconnect_is_retried_not_fatal() {
+        let eof = DisconnectReason::ReadError(
+            "peer closed connection without sending TLS close_notify: https://docs.rs/rustls/latest/rustls/manual/_03_howto/index.html#unexpected-eof".into(),
+        );
+        assert_eq!(classify_disconnect(&eof), DisconnectClass::MissingCloseNotify);
+        assert_eq!(
+            classify_disconnect(&DisconnectReason::ReadError("connection reset".into())),
+            DisconnectClass::ReadError
+        );
+        assert_eq!(classify_disconnect(&DisconnectReason::StreamEnded), DisconnectClass::StreamEnded);
+        assert_eq!(
+            classify_disconnect(&DisconnectReason::ServerClose { code: Some(1006), reason: String::new() }),
+            DisconnectClass::ServerClose
+        );
+        assert_eq!(classify_disconnect(&DisconnectReason::Unknown), DisconnectClass::Unknown);
+        // The label is what reaches the log: no error text, so no host or address.
+        assert!(!DisconnectClass::MissingCloseNotify.label().contains("docs.rs"));
+    }
 
     #[test]
     fn clear_dir_contents_keeps_the_directory() {

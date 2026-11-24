@@ -730,6 +730,23 @@ impl App {
             }
         });
 
+        m.on_arrow_nav({
+            let weak = w.as_weak();
+            move |text, anchor, cursor, left, word, shift| {
+                let off = |v: i32| usize::try_from(v).unwrap_or(0);
+                let Some((a, c)) =
+                    super::composer::undo::rtl_arrow(text.as_str(), off(anchor), off(cursor), left, word, shift)
+                else {
+                    return false;
+                };
+                let Some(win) = weak.upgrade() else { return false };
+                let m = win.global::<Mentions>();
+                m.set_nav_anchor(i32::try_from(a).unwrap_or(i32::MAX));
+                m.set_nav_cursor(i32::try_from(c).unwrap_or(i32::MAX));
+                true
+            }
+        });
+
         // Ctrl shortcuts on non-Latin layouts; nothing is dropped into pop-outs.
         drop_paste::enable_file_drop(w.window(), |_| {});
 

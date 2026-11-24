@@ -1,4 +1,4 @@
-# WaClient — handoff notes (state as of 2026-11-22, v0.11.0)
+# WaClient — handoff notes (state as of 2026-11-24, v0.12.0)
 
 Read this first in a new session. It records what exists, what was decided and why,
 what is untested, and how to work on the project safely. README.md is the user-facing
@@ -23,7 +23,7 @@ client to look as much like the official one as possible.
 | What | Command |
 |---|---|
 | Build (debug) | `cargo build -p waclient` |
-| Test all | `cargo test --workspace` (1205 passing at v0.11.0, 3 ignored) |
+| Test all | `cargo test --workspace` (1231+ passing at v0.12.0, 4 ignored) |
 | Test one area | `cargo test -p wa_engine <filter>` / `cargo test -p waclient <filter>` |
 | Engine+store only | `cargo build -p wa_engine -p wa_store` |
 | Store perf smoke | `cargo test -p wa_store --test perf -- --ignored` |
@@ -171,9 +171,25 @@ client to look as much like the official one as possible.
   composer gate ("Only admins can send messages") refreshes.
 - Modal flows (pickers, New group, Create poll) close on profile switch and re-check the
   profile before sending.
+- Connection recovery (0.12.0): a library `Disconnected` shows "Connecting…" for paired sessions
+  (the library reconnects itself); the runtime `Recovery` watchdog rebuilds the generation after
+  20 s offline with a 1/2/5/10/30/60 s (±20 %) schedule, reset after 30 s online. `End::Offline` /
+  `End::Reconnect` keep pending rows (`fails_pending`), and the next generation re-delivers them
+  once (`pending::requeue_outgoing`, same ids, ≤24 h, from a snapshot taken before the new generation starts).
+  `SessionRestored` is emitted once per engine (it reloads the UI). Proxy tunnel: TCP keepalive
+  (socket2) and `LenientEof` (missing TLS close_notify = plain EOF; WhatsApp's Noise layer protects
+  the content).
+- Rails/lists whose rows own a PopupWindow must not be rebuilt with `set_vec` while the popup may be
+  open: use `sync_rows` (in-place `set_row_data` when ids/order are unchanged).
+- RTL arrows: `textdir::arrow_nav` — the paragraph direction (first strong) decides; Left = logical
+  forward in RTL. Search boxes still use Slint's logical movement.
+- Taskbar badge: `app/src/taskbar.rs` (ITaskbarList3 overlay, 32 px, built-in 5×7 font), driven only by
+  `refresh_title` (0 while locked). Not re-applied after an Explorer restart until the count changes.
 
 ## 6. Untested on a real account / real hardware (ask the user to verify)
 
+- 0.12.0: automatic recovery after a real proxy drop / proxy restart and re-delivery of pending
+  messages; the taskbar badge's look; RTL arrow keys by hand; the profile menu staying open.
 - 0.6.0: incoming calls — the action sequence on caller hang-up (Terminate
   reasons), whether the server accepts our reject, offline MissedCall rows (no voice/video info),
   taskbar flash.
