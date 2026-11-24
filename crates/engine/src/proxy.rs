@@ -9,11 +9,14 @@
 //! above, and the target host name is always sent to the proxy (SOCKS5
 //! `DOMAINNAME`), never resolved locally.
 
+use std::io;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
@@ -34,6 +37,12 @@ const WA_PORT: u16 = 443;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Longest HTTP CONNECT reply head we accept.
 const MAX_CONNECT_REPLY: usize = 8 * 1024;
+/// Idle time before the OS starts probing the proxied socket, and the gap
+/// between probes. Proxies and NAT boxes drop silent flows; probes keep the
+/// flow alive and let the OS notice a dead peer (a failed probe ends the
+/// connection, which the engine then recovers from).
+const TCP_KEEPALIVE_IDLE: Duration = Duration::from_secs(30);
+const TCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 
 const ERR_UNREACHABLE: &str = "Can't reach the proxy";
 const ERR_REFUSED: &str = "Proxy refused the connection";
@@ -67,6 +76,7 @@ async fn connect_tunnel(cfg: &ProxyConfig, host: &str, port: u16) -> Result<TcpS
             log::debug!("proxy connect failed: {e}");
             anyhow!(ERR_UNREACHABLE)
         })?;
+        enable_keepalive(&stream);
         match cfg.kind {
             ProxyKind::Socks5 => socks5_handshake(&mut stream, cfg, host, port).await?,
             ProxyKind::Http => http_connect_handshake(&mut stream, cfg, host, port).await?,
@@ -75,6 +85,15 @@ async fn connect_tunnel(cfg: &ProxyConfig, host: &str, port: u16) -> Result<TcpS
     })
     .await
     .map_err(|_| anyhow!("Proxy timed out"))?
+}
+
+/// Turns on TCP keepalive probes. Failing to do so only loses the early
+/// detection of half-open tunnels (the WhatsApp-level ping still catches them).
+fn enable_keepalive(stream: &TcpStream) {
+    let ka = socket2::TcpKeepalive::new().with_time(TCP_KEEPALIVE_IDLE).with_interval(TCP_KEEPALIVE_INTERVAL);
+    if let Err(e) = socket2::SockRef::from(stream).set_tcp_keepalive(&ka) {
+        log::debug!("could not enable TCP keepalive: {e}");
+    }
 }
 
 /// The proxy host without IPv6 brackets: `[::1]` and `::1` both become `::1`,
@@ -243,6 +262,37 @@ fn tls_connector() -> Result<TlsConnector> {
     }
 }
 
+/// A TLS stream whose "peer closed the connection without `close_notify`"
+/// error (rustls `UnexpectedEof`) reads as a plain end of stream. Proxies and
+/// NAT boxes cut tunnels without the TLS goodbye; that is an ordinary
+/// connection loss, not a protocol error worth showing. The WebSocket layer
+/// then reports "stream ended" and the engine reconnects as for any drop.
+pub(crate) struct LenientEof<S>(pub(crate) S);
+
+impl<S: AsyncRead + Unpin> AsyncRead for LenientEof<S> {
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+        match Pin::new(&mut self.0).poll_read(cx, buf) {
+            Poll::Ready(Err(e)) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                log::debug!("tunnel closed without TLS close_notify");
+                Poll::Ready(Ok(()))
+            }
+            other => other,
+        }
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for LenientEof<S> {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_shutdown(cx)
+    }
+}
+
 /// Tunnels to WhatsApp Web through the proxy and completes the TLS handshake.
 async fn dial_tls(cfg: &ProxyConfig, tls: &TlsConnector) -> Result<TlsStream<TcpStream>> {
     let tcp = connect_tunnel(cfg, WA_HOST, WA_PORT).await?;
@@ -275,7 +325,7 @@ impl ProxyTransportFactory {
         let builder = tokio_websockets::ClientBuilder::from_uri(uri)
             .add_header(http::header::ORIGIN, origin)
             .map_err(|e| anyhow!("Failed to set Origin header: {e}"))?;
-        let (ws, _) = tokio::time::timeout(CONNECT_TIMEOUT, builder.connect_on(tls))
+        let (ws, _) = tokio::time::timeout(CONNECT_TIMEOUT, builder.connect_on(LenientEof(tls)))
             .await
             .map_err(|_| anyhow!("WebSocket upgrade through the proxy timed out"))?
             .map_err(|e| anyhow!("WebSocket connect failed: {e}"))?;
@@ -552,6 +602,66 @@ mod tests {
             .await
             .expect_err("must fail");
         assert_eq!(e.to_string(), format!("{ERR_REFUSED} (HTTP 403)"));
+    }
+
+    /// Reads fail with the error rustls reports for a missing close_notify.
+    struct CutStream;
+    impl AsyncRead for CutStream {
+        fn poll_read(self: Pin<&mut Self>, _: &mut Context<'_>, _: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Err(io::Error::new(io::ErrorKind::UnexpectedEof, "peer closed connection without sending TLS close_notify")))
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_close_notify_reads_as_end_of_stream() {
+        let mut s = LenientEof(CutStream);
+        let mut buf = [0u8; 8];
+        assert_eq!(s.read(&mut buf).await.expect("eof, not an error"), 0);
+    }
+
+    struct BrokenStream;
+    impl AsyncRead for BrokenStream {
+        fn poll_read(self: Pin<&mut Self>, _: &mut Context<'_>, _: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Err(io::Error::new(io::ErrorKind::ConnectionReset, "reset")))
+        }
+    }
+
+    #[tokio::test]
+    async fn other_read_errors_are_kept() {
+        let mut s = LenientEof(BrokenStream);
+        let mut buf = [0u8; 8];
+        let e = s.read(&mut buf).await.expect_err("must stay an error");
+        assert_eq!(e.kind(), io::ErrorKind::ConnectionReset);
+    }
+
+    #[tokio::test]
+    async fn tunnel_socket_has_keepalive_and_a_dropped_tunnel_can_be_redialled() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let proxy = tokio::spawn(async move {
+            // First tunnel is cut right after the handshake, the second stays up.
+            for i in 0..2 {
+                let (mut s, _) = listener.accept().await.expect("accept");
+                read_n(&mut s, 3).await;
+                s.write_all(&[5, 0]).await.expect("w");
+                let req = connect_request("web.whatsapp.com", 443);
+                read_n(&mut s, req.len()).await;
+                s.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).await.expect("w");
+                if i == 0 {
+                    drop(s);
+                } else {
+                    s.write_all(b"ok").await.expect("w");
+                }
+            }
+        });
+        let c = cfg(ProxyKind::Socks5, port, None);
+        let mut first = connect_tunnel(&c, "web.whatsapp.com", 443).await.expect("first tunnel");
+        assert!(socket2::SockRef::from(&first).keepalive().expect("query"), "keepalive must be on");
+        let mut buf = [0u8; 2];
+        assert!(first.read_exact(&mut buf).await.is_err(), "tunnel was cut");
+        let mut second = connect_tunnel(&c, "web.whatsapp.com", 443).await.expect("fresh tunnel after the drop");
+        assert_eq!(read_n(&mut second, 2).await, b"ok");
+        proxy.await.expect("proxy task");
     }
 
     #[test]

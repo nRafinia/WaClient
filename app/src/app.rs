@@ -971,7 +971,7 @@ impl App {
         if let Some(active) = items.iter().find(|i| i.active) {
             win.set_active_profile(active.clone());
         }
-        self.rail_model.set_vec(items);
+        sync_rows(&self.rail_model, items, |a, b| a.id == b.id);
         self.refresh_title();
         win.set_can_add_profile(can_add);
         let tip = if can_add {
@@ -1477,6 +1477,10 @@ impl App {
             d.set_unread_badge(if self.is_locked() { 0 } else { self.total_unread.get().unwrap_or(0) });
         }
         let Some(win) = self.win() else { return };
+        crate::taskbar::set_unread(
+            crate::shell::hwnd(&win),
+            if self.is_locked() { 0 } else { self.total_unread.get().unwrap_or(0) },
+        );
         // The title is visible in the taskbar and Alt+Tab: nothing private while locked.
         if self.is_locked() {
             win.set_window_title("WaClient".into());
@@ -3793,8 +3797,51 @@ fn images_for(
     MsgImages { thumb, full, link_thumb }
 }
 
+/// Updates `model` to `new`. When the rows keep the same identity and order they are changed in
+/// place: replacing the whole model destroys the row components and with them any open
+/// `PopupWindow` (the rail's right-click menu closed on every background refresh).
+fn same_shape<T>(old: &[T], new: &[T], same_row: impl Fn(&T, &T) -> bool) -> bool {
+    old.len() == new.len() && old.iter().zip(new).all(|(o, n)| same_row(o, n))
+}
+
+fn sync_rows<T: Clone + PartialEq + 'static>(
+    model: &VecModel<T>,
+    new: Vec<T>,
+    same_row: impl Fn(&T, &T) -> bool,
+) {
+    let old: Vec<T> = (0..model.row_count()).filter_map(|i| model.row_data(i)).collect();
+    if !same_shape(&old, &new, same_row) {
+        model.set_vec(new);
+        return;
+    }
+    for (i, n) in new.into_iter().enumerate() {
+        if model.row_data(i).as_ref() != Some(&n) {
+            model.set_row_data(i, n);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn same_shape_requires_same_ids_in_same_order() {
+        let key = |a: &(i32, i32), b: &(i32, i32)| a.0 == b.0;
+        assert!(super::same_shape(&[(1, 0), (2, 0)], &[(1, 9), (2, 0)], key));
+        assert!(!super::same_shape(&[(1, 0), (2, 0)], &[(2, 0), (1, 0)], key));
+        assert!(!super::same_shape(&[(1, 0)], &[(1, 0), (2, 0)], key));
+    }
+
+    #[test]
+    fn sync_rows_keeps_model_in_step_with_new_rows() {
+        let m = VecModel::from(vec![(1, 0), (2, 0)]);
+        let key = |a: &(i32, i32), b: &(i32, i32)| a.0 == b.0;
+        super::sync_rows(&m, vec![(1, 5), (2, 0)], key);
+        assert_eq!(m.row_data(0), Some((1, 5)));
+        super::sync_rows(&m, vec![(2, 0)], key);
+        assert_eq!(m.row_count(), 1);
+        assert_eq!(m.row_data(0), Some((2, 0)));
+    }
+
     #[test]
     fn recording_blocks_profile_switch() {
         assert!(super::switch_blocked_by_recording(true));

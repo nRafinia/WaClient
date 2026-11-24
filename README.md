@@ -144,7 +144,8 @@ A native Windows desktop client for WhatsApp, written in Rust. It links to your 
 - Link previews: incoming previews are shown; outgoing previews are optional (Settings > Account).
 - Paste images or files with Ctrl+V, or drag and drop them, with a preview before sending.
 - Windows toast notifications and a system-tray icon (with "close to tray" on, closing the window
-  keeps the app running in the tray).
+  keeps the app running in the tray). The total unread count also shows as a badge on the taskbar
+  button.
 - App lock: an optional passcode (4 to 32 characters) in Settings > Account > Privacy > App lock.
   WaClient starts locked and shows an opaque lock screen over the whole window; lock it by hand
   with Ctrl+L or the padlock in the chat-list header, or automatically after 1 min / 5 min /

@@ -3,6 +3,17 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use crate::model::*;
 use crate::{Result, Store};
 
+/// An outgoing message that was stored but not yet confirmed as sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingRow {
+    pub chat_jid: String,
+    pub id: String,
+    pub ts: i64,
+    /// The encoded protocol message, once there is one (text at once, media
+    /// after the upload).
+    pub raw: Option<Vec<u8>>,
+}
+
 pub(crate) const MESSAGE_COLS: &str = "m.chat_jid, m.id, m.sender_jid, \
     COALESCE(NULLIF(ct.full_name,''), NULLIF(ct.push_name,''), NULLIF(ct.phone,'')), \
     m.from_me, m.ts, m.kind, m.text, m.quoted_id, m.quoted_preview, m.media_mime, \
@@ -431,6 +442,21 @@ impl Store {
         }
         tx.commit()?;
         Ok(inserted)
+    }
+
+    /// Outgoing messages still `Pending`, oldest first.
+    pub fn pending_outgoing(&self) -> Result<Vec<PendingRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT chat_jid, id, ts, raw FROM messages WHERE from_me = 1 AND status = 0 \
+             ORDER BY ts, rowid",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(PendingRow { chat_jid: r.get(0)?, id: r.get(1)?, ts: r.get(2)?, raw: r.get(3)? })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
     }
 
     /// Marks every outgoing message still `Pending` as `Failed` (the app died

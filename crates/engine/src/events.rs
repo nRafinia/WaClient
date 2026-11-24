@@ -75,6 +75,10 @@ pub struct Shared {
     pub(crate) tasks: Arc<GenTasks>,
     /// All traffic goes through a proxy, so hosts must not be resolved locally.
     pub(crate) proxied: bool,
+    /// For a generation that follows an outage: the messages that were pending
+    /// when it started (a snapshot, so nothing queued afterwards is in it).
+    /// Taken on the first `Connected` and re-delivered.
+    pub(crate) requeue_pending: Arc<std::sync::Mutex<Option<Vec<wa_store::PendingRow>>>>,
     /// Contact / group info lookups of this generation.
     pub(crate) info: Arc<crate::info::InfoCache>,
     /// Last known contact presence and subscription pacing.
@@ -110,6 +114,7 @@ impl Shared {
             pending: Arc::new(PendingActions::default()),
             tasks: Arc::new(GenTasks::default()),
             proxied: false,
+            requeue_pending: Arc::new(std::sync::Mutex::new(None)),
             info: Arc::new(crate::info::InfoCache::default()),
             presence: Arc::new(crate::presence::PresenceState::default()),
             appstate_resyncs: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -216,14 +221,29 @@ pub async fn handle(sh: Shared, event: Arc<Event>, client: Arc<Client>) {
                 commands::enforce_presence_off(&sh, &client);
             }
             groups::spawn_initial_fetch(sh.clone(), client.clone());
+            // Once per generation, and only after an outage: a normal library
+            // reconnect leaves the live sender tasks in charge of their messages.
+            let snapshot = media::lock(&sh.requeue_pending).take();
+            if let Some(rows) = snapshot {
+                sh.tasks.spawn(crate::pending::requeue_outgoing(sh.clone(), client.clone(), rows));
+            }
         }
         // The library sends `available` by itself after a push-name sync or
         // change; undo that when presence is off.
         Event::SelfPushNameUpdated(_) => commands::enforce_presence_off(&sh, &client),
         Event::Disconnected(d) => {
-            log::info!("disconnected: {}", d.reason);
-            sh.emit(UiEvent::Connection(ConnState::Disconnected {
-                reason: d.reason.to_string(),
+            // The library reconnects by itself (and the supervisor's watchdog
+            // rebuilds the generation if that drags on), so this is "Connecting",
+            // not a dead end with a manual button. Details stay at debug.
+            let class = crate::runtime::classify_disconnect(&d.reason);
+            log::warn!("connection lost ({}), reconnecting", class.label());
+            log::debug!("disconnect detail: {}", d.reason);
+            // Only a paired session is watched and rebuilt; while pairing the
+            // old behaviour (state with reason, manual button) stays.
+            sh.emit(UiEvent::Connection(if client.pn().is_some() {
+                ConnState::Connecting
+            } else {
+                ConnState::Disconnected { reason: d.reason.to_string() }
             }));
         }
         Event::LoggedOut(lo) => {

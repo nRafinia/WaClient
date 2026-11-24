@@ -72,6 +72,9 @@ export global Mentions {
     // Home / End in a right-to-left paragraph: (text, anchor, cursor, home,
     // shift) -> true when handled; the selection is left in nav-anchor/nav-cursor.
     callback line-nav(string, int, int, bool, bool) -> bool;
+    // Left / Right arrow in a right-to-left paragraph: (text, anchor, cursor,
+    // left, word, shift) -> true when handled; result in nav-anchor/nav-cursor.
+    callback arrow-nav(string, int, int, bool, bool, bool) -> bool;
     in-out property <int> nav-anchor;
     in-out property <int> nav-cursor;
 }
@@ -2149,6 +2152,14 @@ export component ChatView inherits Rectangle {
                             if ((e.text == Key.Home || e.text == Key.End) && !e.modifiers.control && !e.modifiers.alt && !e.modifiers.meta
                                 && Mentions.line-nav(input.text, input.anchor-position-byte-offset, input.cursor-position-byte-offset,
                                     e.text == Key.Home, e.modifiers.shift)) {
+                                input.set-selection-offsets(Mentions.nav-anchor, Mentions.nav-cursor);
+                                return accept;
+                            }
+                            // Left / Right: in a right-to-left paragraph the cursor follows
+                            // the arrow on screen (Slint moves by logical order).
+                            if ((e.text == Key.LeftArrow || e.text == Key.RightArrow) && !e.modifiers.alt && !e.modifiers.meta
+                                && Mentions.arrow-nav(input.text, input.anchor-position-byte-offset, input.cursor-position-byte-offset,
+                                    e.text == Key.LeftArrow, e.modifiers.control, e.modifiers.shift)) {
                                 input.set-selection-offsets(Mentions.nav-anchor, Mentions.nav-cursor);
                                 return accept;
                             }

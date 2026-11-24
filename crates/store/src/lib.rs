@@ -27,6 +27,7 @@ pub use model::{
     NewMessage, PollView, ReceiptKind, ReceiptRow, StatusGroup, StatusPurge, STATUS_JID,
     VIEW_ONCE_PREVIEW, VIEW_ONCE_TEXT,
 };
+pub use queries::PendingRow;
 pub use storage::{is_cache_file, plan_deletion, DeletionPlan, Doomed, MediaClass, MediaFile, MediaFilter};
 pub use export::ExportCursor;
 pub use search::{GlobalFilter, SearchCursor, SearchKind, SenderFilter, SenderRow};

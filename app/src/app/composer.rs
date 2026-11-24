@@ -417,6 +417,19 @@ pub(super) fn wire(win: &MainWindow) {
         m.set_nav_cursor(i32::try_from(c).unwrap_or(i32::MAX));
         true
     });
+    // Left / Right arrows follow the screen in right-to-left paragraphs (textdir.rs).
+    let weak = win.as_weak();
+    m.on_arrow_nav(move |text, anchor, cursor, left, word, shift| {
+        let off = |v: i32| usize::try_from(v).unwrap_or(0);
+        let Some((a, c)) = undo::rtl_arrow(text.as_str(), off(anchor), off(cursor), left, word, shift) else {
+            return false;
+        };
+        let Some(win) = weak.upgrade() else { return false };
+        let m = win.global::<Mentions>();
+        m.set_nav_anchor(i32::try_from(a).unwrap_or(i32::MAX));
+        m.set_nav_cursor(i32::try_from(c).unwrap_or(i32::MAX));
+        true
+    });
 }
 
 /// Whether we may send to a chat, and if not why.

@@ -497,6 +497,22 @@ fn chats_missing_name_lists_unnamed_groups() {
 }
 
 #[test]
+fn pending_outgoing_lists_only_own_unsent_messages_oldest_first() {
+    let s = Store::open_in_memory().unwrap();
+    s.insert_message(&msg(A, "2", 20, true), false).unwrap();
+    s.insert_message(&msg(A, "1", 10, true), false).unwrap();
+    s.insert_message(&msg(A, "3", 30, true), false).unwrap();
+    s.update_status(A, "3", MessageStatus::Sent).unwrap();
+    s.insert_message(&msg(A, "4", 40, false), false).unwrap();
+    s.set_raw(A, "1", b"abc").unwrap();
+    let rows = s.pending_outgoing().unwrap();
+    let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, ["1", "2"]);
+    assert_eq!(rows[0].raw.as_deref(), Some(&b"abc"[..]));
+    assert_eq!(rows[1].raw, None);
+}
+
+#[test]
 fn fail_stale_pending_only_touches_outgoing_pending() {
     let s = Store::open_in_memory().unwrap();
     let b = "222@s.whatsapp.net";
