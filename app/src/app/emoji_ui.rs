@@ -103,6 +103,10 @@ impl App {
 
     /// Inserts at the composer's cursor; the picker stays open.
     pub(super) fn emoji_insert(&self, e: &str) {
+        // Also the path of typing redirected from a selected message text.
+        if !crate::format::insertable_text(e) {
+            return;
+        }
         let Some(win) = self.win() else { return };
         let text = win.invoke_composer_text().to_string();
         let mut at = usize::try_from(win.invoke_composer_cursor()).unwrap_or(text.len()).min(text.len());

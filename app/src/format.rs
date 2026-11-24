@@ -338,6 +338,13 @@ fn mono_ranges(text: &str) -> Vec<(usize, usize)> {
     out
 }
 
+/// Whether a key's text may be put into the composer as typed text: not empty, no
+/// control characters and nothing from the private-use range (Slint sends its special
+/// keys, such as the function keys, as characters of that range).
+pub fn insertable_text(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| !c.is_control() && !('\u{e000}'..='\u{f8ff}').contains(&c))
+}
+
 /// Splits a message into paragraphs on line breaks (CRLF, CR and LF); a ``` block
 /// stays in one paragraph. A paragraph without a letter (digits, emoji, ...)
 /// takes the direction of the one before it (the first one: of the next).
@@ -516,6 +523,19 @@ fn apply_quote(text: &str, start: usize, end: usize) -> Edit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_text_is_plain_characters_only() {
+        assert!(insertable_text("a"));
+        assert!(insertable_text("ز"));
+        assert!(insertable_text(" "));
+        assert!(insertable_text("\u{1F44D}\u{1F3FD}"));
+        assert!(!insertable_text(""));
+        assert!(!insertable_text("\u{8}"));
+        assert!(!insertable_text("\u{1b}"));
+        assert!(!insertable_text("\u{f704}"));
+        assert!(!insertable_text("a\u{f700}"));
+    }
 
     fn paras(s: &str) -> Vec<(String, bool, bool)> {
         paragraphs(s).into_iter().map(|p| (p.text, p.rtl, p.blank)).collect()

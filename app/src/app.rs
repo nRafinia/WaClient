@@ -683,7 +683,15 @@ impl App {
         win.on_profile_at(|i| with_app(|a| a.activate_at(i)));
         win.on_rename_profile(|id, name| with_app(|a| a.rename_profile(id.as_str(), name.as_str())));
         win.on_remove_profile(|id| with_app(|a| a.request_remove(id.as_str())));
-        win.on_settings_opened(|| with_app(App::open_settings));
+        win.on_settings_opened(|| {
+            with_app(|a| {
+                // The proxy shield opens Settings on Network; the menu must not.
+                if let Some(w) = a.win() {
+                    w.set_settings_start_category(0);
+                }
+                a.open_settings();
+            })
+        });
         win.on_settings_changed(|m| {
             with_app(|a| {
                 a.settings_changed(m);
@@ -972,6 +980,7 @@ impl App {
             win.set_active_profile(active.clone());
         }
         sync_rows(&self.rail_model, items, |a, b| a.id == b.id);
+        self.proxy_badge_push();
         self.refresh_title();
         win.set_can_add_profile(can_add);
         let tip = if can_add {
@@ -3300,6 +3309,7 @@ impl App {
             "locked" => self.demo_lock(),
             "lock-damaged" => self.demo_lock_damaged(),
             "proxy-blocked" => self.demo_proxy_blocked(),
+            "proxy-badge" => self.demo_proxy_badge(),
             "login-proxy" | "login-proxy-hint" => self.demo_login_proxy(what == "login-proxy-hint"),
             "settings-storage" | "settings-storage-dialog" => {
                 self.demo_storage();
@@ -3439,6 +3449,16 @@ impl App {
                 self.search_input(q);
             }
             "esc" => self.demo_esc(),
+            "theme-light" => self.demo_appearance("theme-light"),
+            a if a.starts_with("type:") => self.demo_type(a.trim_start_matches("type:")),
+            // `drag:x1,y1,x2,y2`: a mouse drag (selects text in a bubble).
+            a if a.starts_with("drag:") => {
+                let n: Vec<i32> = a.trim_start_matches("drag:").split(',').filter_map(|v| v.parse().ok()).collect();
+                match n.as_slice() {
+                    [x1, y1, x2, y2] => self.demo_drag((*x1, *y1), (*x2, *y2)),
+                    _ => log::warn!("demo: expected drag:X1,Y1,X2,Y2"),
+                }
+            }
             // Scrolls the message list to its very top (history paging demo).
             "scroll-top" => win.invoke_restore_scroll(1.0e9, 0.0),
             "jump-date" => self.demo_jump_date(),

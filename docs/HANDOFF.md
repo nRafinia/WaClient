@@ -1,4 +1,4 @@
-# WaClient — handoff notes (state as of 2026-11-24, v0.12.0)
+# WaClient — handoff notes (state as of 2026-11-24, v0.13.0)
 
 Read this first in a new session. It records what exists, what was decided and why,
 what is untested, and how to work on the project safely. README.md is the user-facing
@@ -23,7 +23,7 @@ client to look as much like the official one as possible.
 | What | Command |
 |---|---|
 | Build (debug) | `cargo build -p waclient` |
-| Test all | `cargo test --workspace` (1231+ passing at v0.12.0, 4 ignored) |
+| Test all | `cargo test --workspace` (1238 passing at v0.13.0, 4 ignored) |
 | Test one area | `cargo test -p wa_engine <filter>` / `cargo test -p waclient <filter>` |
 | Engine+store only | `cargo build -p wa_engine -p wa_store` |
 | Store perf smoke | `cargo test -p wa_store --test perf -- --ignored` |
@@ -186,8 +186,20 @@ client to look as much like the official one as possible.
 - Taskbar badge: `app/src/taskbar.rs` (ITaskbarList3 overlay, 32 px, built-in 5×7 font), driven only by
   `refresh_title` (0 while locked). Not re-applied after an Explorer restart until the count changes.
 
+- Message text selection (0.13.0): plain text/paragraphs/translations render as `SelText` (read-only
+  TextInput in a TouchArea; right-click passes through), formatted text keeps `StyledText` with
+  `selectable`. `TextSel` global (focus count, recomputed on `content-y` change; `owner` = bubble
+  whose text holds the selection). A FocusScope around the message ListView forwards printable keys
+  to the composer (`format::insertable_text` guard); Esc → `text-esc()` only when no viewer/attach/
+  lock layer is open. Double-click on text = word select; reply stays on bubble padding.
+- Proxy shield (0.13.0): `proxy_ui::proxy_badge(in_use, pending_restart, conn)` → Hidden/Connected/
+  Connecting/Failed/Pending, pushed from `refresh_rail` (borrow-safe, deferred on conflict); tooltip
+  never shows host/port/login. Demo: `WACLIENT_DEMO_UI=proxy-badge WACLIENT_DEMO_PROXY=...`.
+
 ## 6. Untested on a real account / real hardware (ask the user to verify)
 
+- 0.13.0: proxy shield tooltip/click/keyboard live; text selection with Persian-layout Ctrl+C,
+  scrolling performance in long chats.
 - 0.12.0: automatic recovery after a real proxy drop / proxy restart and re-delivery of pending
   messages; the taskbar badge's look; RTL arrow keys by hand; the profile menu staying open.
 - 0.6.0: incoming calls — the action sequence on caller hang-up (Terminate

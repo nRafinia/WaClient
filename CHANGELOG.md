@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.13.0
+
+### Added
+
+- Select part of a message: drag over the text of a sent or received bubble (also in pop-out windows)
+  to select it, in left-to-right, right-to-left and mixed-direction messages. Ctrl+C copies only the
+  selection, and the message menu's "Copy selection" does the same (without a selection "Copy" still
+  copies the whole message). A double-click on the text selects a word and a triple-click a
+  paragraph; double-click on the bubble's padding still replies. Selecting inside a message that
+  mixes directions works one line at a time. Typing while a message text is selected goes to the
+  composer, and Esc clears the selection.
+- Proxy status indicator: while a proxy is on, a small shield sits at the bottom-left of the chat
+  list. It is green with a check when connected, grey with moving dots while connecting,
+  orange-red with "!" when not connected, and grey with "!" when a newly enabled proxy needs a
+  restart. Hovering shows the state and the proxy type (never the
+  address or login); clicking opens Settings > Network. It follows the proxy switch at once and is
+  hidden while the app lock is on and in pop-out windows.
+
 ## 0.12.0
 
 ### Added

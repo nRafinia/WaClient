@@ -351,6 +351,7 @@ mod demo {
     #[link(name = "user32")]
     unsafe extern "system" {
         fn PostMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> i32;
+        fn MapVirtualKeyW(code: u32, map_type: u32) -> u32;
     }
 
     const WM_MOUSEMOVE: u32 = 0x0200;
@@ -386,6 +387,53 @@ mod demo {
             unsafe {
                 PostMessageW(hwnd, WM_KEYDOWN, VK_ESCAPE, 0x0001_0001);
                 PostMessageW(hwnd, WM_KEYUP, VK_ESCAPE, 0xC001_0001u32 as isize);
+            }
+        }
+
+        /// Types ASCII letters as real key messages (needs a letter layout).
+        pub(in crate::app) fn demo_type(&self, letters: &str) {
+            let Some(win) = self.win() else { return };
+            let handle = win.window().window_handle();
+            let Some(hwnd) = handle.window_handle().ok().and_then(|h| match h.as_raw() {
+                RawWindowHandle::Win32(h) => Some(h.hwnd.get()),
+                _ => None,
+            }) else {
+                log::warn!("demo: no window handle");
+                return;
+            };
+            for c in letters.chars().filter(char::is_ascii_alphabetic) {
+                let vk = c.to_ascii_uppercase() as usize;
+                // SAFETY: plain value calls; `hwnd` is this process's own window.
+                unsafe {
+                    let scan = MapVirtualKeyW(vk as u32, 0) as isize;
+                    PostMessageW(hwnd, WM_KEYDOWN, vk, 1 | (scan << 16));
+                    PostMessageW(hwnd, WM_KEYUP, vk, 1 | (scan << 16) | 0xC000_0000);
+                }
+            }
+        }
+
+        /// Presses at client pixel (x1, y1), drags to (x2, y2) in a few steps and
+        /// releases, as real input messages (text selection with the mouse).
+        pub(in crate::app) fn demo_drag(&self, (x1, y1): (i32, i32), (x2, y2): (i32, i32)) {
+            let Some(win) = self.win() else { return };
+            let handle = win.window().window_handle();
+            let Some(hwnd) = handle.window_handle().ok().and_then(|h| match h.as_raw() {
+                RawWindowHandle::Win32(h) => Some(h.hwnd.get()),
+                _ => None,
+            }) else {
+                log::warn!("demo: no window handle");
+                return;
+            };
+            let at = |x: i32, y: i32| ((y as isize & 0xffff) << 16) | (x as isize & 0xffff);
+            // SAFETY: `hwnd` is this process's own window; the messages carry no pointers.
+            unsafe {
+                PostMessageW(hwnd, WM_MOUSEMOVE, 0, at(x1, y1));
+                PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, at(x1, y1));
+                for i in 1..=8 {
+                    let (x, y) = (x1 + (x2 - x1) * i / 8, y1 + (y2 - y1) * i / 8);
+                    PostMessageW(hwnd, WM_MOUSEMOVE, MK_LBUTTON, at(x, y));
+                }
+                PostMessageW(hwnd, WM_LBUTTONUP, 0, at(x2, y2));
             }
         }
 
